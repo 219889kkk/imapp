@@ -34,8 +34,8 @@ class LoginPage extends StatelessWidget {
                 children: [
                   88.verticalSpace,
                   ImageRes.loginLogo.toImage
-                    ..width = 64.w
-                    ..height = 64.h,
+                    ..width = 96.w
+                    ..height = 96.h,
                   StrRes.welcome.toText..style = Styles.ts_0089FF_17sp_semibold,
                   51.verticalSpace,
                   Padding(
@@ -54,22 +54,18 @@ class LoginPage extends StatelessWidget {
                     ]),
                   ),
                   100.verticalSpace,
-                  Obx(
-                    () => Visibility(
-                      visible: logic.loginType.value != LoginType.account,
-                      child: RichText(
-                        text: TextSpan(
-                          text: StrRes.noAccountYet,
-                          style: Styles.ts_8E9AB0_12sp,
-                          children: [
-                            TextSpan(
-                              text: StrRes.registerNow,
-                              style: Styles.ts_0089FF_12sp,
-                              recognizer: TapGestureRecognizer()..onTap = _showRegisterBottomSheet,
-                            )
-                          ],
-                        ),
-                      ),
+                  RichText(
+                    text: TextSpan(
+                      text: StrRes.noAccountYet,
+                      style: Styles.ts_8E9AB0_12sp,
+                      children: [
+                        TextSpan(
+                          text: StrRes.registerNow,
+                          style: Styles.ts_0089FF_12sp,
+                          recognizer: TapGestureRecognizer()
+                            ..onTap = logic.registerNow,
+                        )
+                      ],
                     ),
                   ),
                   32.verticalSpace,
@@ -194,40 +190,6 @@ class LoginPage extends StatelessWidget {
           focusNode: logic.pwdFocus,
         ),
       ],
-    );
-  }
-
-  void _showRegisterBottomSheet() {
-    showCupertinoModalPopup(
-      context: Get.context!,
-      builder: (BuildContext context) {
-        return CupertinoActionSheet(
-          actions: [
-            CupertinoActionSheetAction(
-              onPressed: () {
-                Navigator.pop(context);
-                logic.operateType = LoginType.email;
-                logic.registerNow();
-              },
-              child: Text('${StrRes.email} ${StrRes.registerNow}'),
-            ),
-            CupertinoActionSheetAction(
-              onPressed: () {
-                Navigator.pop(context);
-                logic.operateType = LoginType.phone;
-                logic.registerNow();
-              },
-              child: Text('${StrRes.phoneNumber} ${StrRes.registerNow}'),
-            ),
-          ],
-          cancelButton: CupertinoActionSheetAction(
-            onPressed: () {
-              Navigator.pop(context);
-            },
-            child: Text(StrRes.cancel),
-          ),
-        );
-      },
     );
   }
 

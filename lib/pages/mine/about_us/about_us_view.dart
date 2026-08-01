@@ -31,8 +31,8 @@ class AboutUsPage extends StatelessWidget {
               children: [
                 23.verticalSpace,
                 ImageRes.splashLogo.toImage
-                  ..width = 55.w
-                  ..height = 78.h,
+                  ..width = 100.w
+                  ..height = 100.h,
                 10.verticalSpace,
                 Obx(() => '${logic.displayVersion}'.toText
                   ..style = Styles.ts_0C1C33_14sp

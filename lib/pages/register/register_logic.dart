@@ -1,93 +1,102 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
-import 'package:openim/pages/login/login_logic.dart';
-import 'package:openim/routes/app_navigator.dart';
 import 'package:openim_common/openim_common.dart';
 
-import '../../core/controller/app_controller.dart';
+import '../../core/controller/im_controller.dart';
+import '../../routes/app_navigator.dart';
 
 class RegisterLogic extends GetxController {
-  final appLogic = Get.find<AppController>();
-  final phoneCtrl = TextEditingController();
-  final invitationCodeCtrl = TextEditingController();
-  final areaCode = "+86".obs;
+  final imLogic = Get.find<IMController>();
+  final accountCtrl = TextEditingController();
+  final emailCtrl = TextEditingController();
+  final nicknameCtrl = TextEditingController();
+  final pwdCtrl = TextEditingController();
+  final pwdAgainCtrl = TextEditingController();
   final enabled = false.obs;
-  final loginController = Get.find<LoginLogic>();
-  String? get email => loginController.operateType == LoginType.email
-      ? phoneCtrl.text.trim()
-      : null;
-  String? get phone => (loginController.operateType == LoginType.phone ||
-          loginController.operateType == LoginType.account)
-      ? phoneCtrl.text.trim()
-      : null;
 
   @override
   void onClose() {
-    phoneCtrl.dispose();
-    invitationCodeCtrl.dispose();
+    accountCtrl.dispose();
+    emailCtrl.dispose();
+    nicknameCtrl.dispose();
+    pwdCtrl.dispose();
+    pwdAgainCtrl.dispose();
     super.onClose();
   }
 
   @override
   void onInit() {
-    phoneCtrl.addListener(_onChanged);
-    invitationCodeCtrl.addListener(_onChanged);
+    accountCtrl.addListener(_onChanged);
+    emailCtrl.addListener(_onChanged);
+    nicknameCtrl.addListener(_onChanged);
+    pwdCtrl.addListener(_onChanged);
+    pwdAgainCtrl.addListener(_onChanged);
     super.onInit();
   }
 
   void _onChanged() {
-    enabled.value = needInvitationCodeRegister
-        ? phoneCtrl.text.trim().isNotEmpty &&
-            invitationCodeCtrl.text.trim().isNotEmpty
-        : phoneCtrl.text.trim().isNotEmpty;
+    enabled.value = accountCtrl.text.trim().isNotEmpty &&
+        emailCtrl.text.trim().isNotEmpty &&
+        nicknameCtrl.text.trim().isNotEmpty &&
+        pwdCtrl.text.trim().isNotEmpty &&
+        pwdAgainCtrl.text.trim().isNotEmpty;
   }
 
-  bool get needInvitationCodeRegister {
-    final value = appLogic.clientConfigMap['needInvitationCodeRegister'];
-    return value != null &&
-        value.toString() != '0' &&
-        value.toString().toLowerCase() != 'false';
-  }
-
-  String? get invitationCode => IMUtils.emptyStrToNull(invitationCodeCtrl.text);
-
-  void openCountryCodePicker() async {
-    String? code = await IMViews.showCountryCodePicker();
-    if (null != code) areaCode.value = code;
-  }
-
-  Future<bool> requestVerificationCode() => Apis.requestVerificationCode(
-        areaCode: areaCode.value,
-        phoneNumber: phone,
-        email: email,
-        usedFor: 1,
-        invitationCode: invitationCode,
-      );
-
-  void next() async {
-    if ((loginController.operateType == LoginType.phone ||
-            loginController.operateType == LoginType.account) &&
-        !IMUtils.isMobile(areaCode.value, phoneCtrl.text)) {
-      IMViews.showToast(StrRes.plsEnterRightPhone);
-      return;
+  bool _checkingInput() {
+    if (accountCtrl.text.trim().isEmpty) {
+      IMViews.showToast(StrRes.plsEnterAccount);
+      return false;
     }
-
-    if (loginController.operateType == LoginType.email &&
-        !phoneCtrl.text.isEmail) {
+    if (!emailCtrl.text.trim().isEmail) {
       IMViews.showToast(StrRes.plsEnterRightEmail);
-      return;
+      return false;
     }
-    final success = await LoadingView.singleton.wrap(
-      asyncFunction: () => requestVerificationCode(),
-    );
-    if (success) {
-      AppNavigator.startVerifyPhone(
-        areaCode: areaCode.value,
-        phoneNumber: phone,
+    if (nicknameCtrl.text.trim().isEmpty) {
+      IMViews.showToast(StrRes.plsEnterYourNickname);
+      return false;
+    }
+    if (!IMUtils.isValidPassword(pwdCtrl.text)) {
+      IMViews.showToast(StrRes.wrongPasswordFormat);
+      return false;
+    }
+    if (pwdCtrl.text != pwdAgainCtrl.text) {
+      IMViews.showToast(StrRes.twicePwdNoSame);
+      return false;
+    }
+    return true;
+  }
+
+  void register() async {
+    if (!_checkingInput()) return;
+
+    final account = accountCtrl.text.trim();
+    final email = emailCtrl.text.trim();
+    final nickname = nicknameCtrl.text.trim();
+
+    await LoadingView.singleton.wrap(asyncFunction: () async {
+      final data = await Apis.register(
+        nickname: nickname,
         email: email,
-        usedFor: 1,
-        invitationCode: invitationCode,
+        account: account,
+        password: pwdCtrl.text,
+        // Server demo often accepts a fixed code; no SMS is sent.
+        verificationCode: '666666',
       );
-    }
+      if (null == IMUtils.emptyStrToNull(data.imToken) ||
+          null == IMUtils.emptyStrToNull(data.chatToken)) {
+        AppNavigator.startLogin();
+        return;
+      }
+      await DataSp.putLoginCertificate(data);
+      await DataSp.putLoginAccount({
+        'account': account,
+        'email': email,
+        'loginType': 2,
+      });
+      DataSp.putLoginType(2);
+      await imLogic.login(data.userID, data.imToken);
+      PushController.login(data.userID);
+    });
+    AppNavigator.startMain();
   }
 }

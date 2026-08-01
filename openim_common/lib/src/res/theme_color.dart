@@ -30,7 +30,7 @@ class ThemeAccentColors {
 class ThemeColorPresets {
   ThemeColorPresets._();
 
-  static const defaultBlue = Color(0xFF0089FF);
+  static const defaultBlue = Color(0xFF5BA8D9);
   static const wechatGreen = Color(0xFF95EC69);
   static const orange = Color(0xFFFF9500);
   static const pink = Color(0xFFFF2D55);

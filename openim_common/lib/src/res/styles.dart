@@ -286,7 +286,7 @@ class _StylePalette {
   final Color noticeBanner;
 
   static const lightBase = _StylePalette(
-    primary: Color(0xFF0089FF),
+    primary: Color(0xFF5BA8D9),
     textPrimary: Color(0xFF0C1C33),
     textSecondary: Color(0xFF8E9AB0),
     textTertiary: Color(0xFF8E9AB0),
@@ -295,9 +295,9 @@ class _StylePalette {
     surface: Color(0xFFFFFFFF),
     success: Color(0xFF18E875),
     input: Color(0xFFF0F2F6),
-    disabledBlue: Color(0xFF92B3E0),
-    primaryWeak: Color(0xFFF2F8FF),
-    primaryContainer: Color(0xFFF2F8FF),
+    disabledBlue: Color(0xFFA8D0EA),
+    primaryWeak: Color(0xFFEAF5FB),
+    primaryContainer: Color(0xFFEAF5FB),
     page: Color(0xFFF8F9FA),
     insetBackground: Color(0xFFF8F9FA),
     groupedSeparator: Color(0xFFF8F9FA),

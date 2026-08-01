@@ -67,11 +67,11 @@ class LoginLogic extends GetxController with GetTickerProviderStateMixin {
   final areaCode = "+86".obs;
   final isPasswordLogin = true.obs;
   final versionInfo = ''.obs;
-  final loginType = LoginType.phone.obs;
+  final loginType = LoginType.account.obs;
   String? get email => loginType.value == LoginType.email ? phoneCtrl.text.trim() : null;
   String? get phone => loginType.value == LoginType.phone ? phoneCtrl.text.trim() : null;
   String? get account => loginType.value == LoginType.account ? phoneCtrl.text.trim() : null;
-  LoginType operateType = LoginType.phone;
+  LoginType operateType = LoginType.account;
 
   FocusNode? accountFocus = FocusNode();
   FocusNode? pwdFocus = FocusNode();

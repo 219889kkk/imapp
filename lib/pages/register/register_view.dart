@@ -1,9 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:get/get.dart';
-import 'package:openim/pages/login/login_logic.dart';
 import 'package:openim_common/openim_common.dart';
-import 'package:sprintf/sprintf.dart';
 
 import '../../widgets/register_page_bg.dart';
 import 'register_logic.dart';
@@ -18,28 +16,44 @@ class RegisterPage extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            StrRes.newUserRegister.toText..style = Styles.ts_0089FF_22sp_semibold,
-            29.verticalSpace,
-            Obx(() => InputBox.account(
-                  label: logic.loginController.operateType.name,
-                  hintText: logic.loginController.operateType.hintText,
-                  code: logic.areaCode.value,
-                  onAreaCode: logic.loginController.operateType == LoginType.email ? null : logic.openCountryCodePicker,
-                  controller: logic.phoneCtrl,
-                )),
+            StrRes.newUserRegister.toText
+              ..style = Styles.ts_0089FF_22sp_semibold,
+            24.verticalSpace,
+            InputBox(
+              label: StrRes.account,
+              hintText: StrRes.plsEnterAccount,
+              controller: logic.accountCtrl,
+            ),
             16.verticalSpace,
-            if (logic.needInvitationCodeRegister)
-              InputBox.invitationCode(
-                label: StrRes.invitationCode,
-                hintText: sprintf(
-                    StrRes.plsEnterInvitationCode, [logic.needInvitationCodeRegister ? '' : '（${StrRes.optional}）']),
-                controller: logic.invitationCodeCtrl,
-              ),
-            130.verticalSpace,
+            InputBox(
+              label: StrRes.email,
+              hintText: StrRes.plsEnterEmail,
+              controller: logic.emailCtrl,
+              keyBoardType: TextInputType.emailAddress,
+            ),
+            16.verticalSpace,
+            InputBox(
+              label: StrRes.nickname,
+              hintText: StrRes.plsEnterYourNickname,
+              controller: logic.nicknameCtrl,
+            ),
+            16.verticalSpace,
+            InputBox.password(
+              label: StrRes.password,
+              hintText: StrRes.plsEnterPassword,
+              controller: logic.pwdCtrl,
+            ),
+            16.verticalSpace,
+            InputBox.password(
+              label: StrRes.confirmPassword,
+              hintText: StrRes.plsConfirmPasswordAgain,
+              controller: logic.pwdAgainCtrl,
+            ),
+            40.verticalSpace,
             Obx(() => Button(
-                  text: StrRes.nextStep,
+                  text: StrRes.registerNow,
                   enabled: logic.enabled.value,
-                  onTap: logic.next,
+                  onTap: logic.register,
                 )),
           ],
         ),
