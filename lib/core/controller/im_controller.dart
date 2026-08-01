@@ -73,7 +73,6 @@ class IMController extends GetxController with IMCallback, OpenIMLive {
           onUserStatusChanged: userStausChanged))
       ..messageManager.setAdvancedMsgListener(OnAdvancedMsgListener(
         onRecvC2CReadReceipt: recvC2CMessageReadReceipt,
-        onRecvGroupReadReceipt: recvGroupReadReceipt,
         onRecvNewMessage: recvNewMessage,
         onNewRecvMessageRevoked: recvMessageRevoked,
         onRecvOfflineNewMessage: recvOfflineMessage,

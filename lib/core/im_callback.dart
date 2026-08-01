@@ -84,8 +84,6 @@ mixin IMCallback {
 
   Function(List<ReadReceiptInfo> list)? onRecvC2CReadReceipt;
 
-  Function(GroupMessageReceiptInfo info)? onRecvGroupReadReceipt;
-
   Function(Message msg)? onRecvNewMessage;
 
   Function(Message msg)? onRecvOfflineMessage;
@@ -180,10 +178,6 @@ mixin IMCallback {
 
   void recvC2CMessageReadReceipt(List<ReadReceiptInfo> list) {
     onRecvC2CReadReceipt?.call(list);
-  }
-
-  void recvGroupReadReceipt(GroupMessageReceiptInfo info) {
-    onRecvGroupReadReceipt?.call(info);
   }
 
   void recvNewMessage(Message msg) {
