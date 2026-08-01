@@ -33,6 +33,16 @@ subprojects {
     project.evaluationDependsOn(":app")
 }
 
+subprojects { subproject ->
+    subproject.pluginManager.withPlugin("com.android.library") {
+        subproject.android {
+            if (namespace == null) {
+                namespace = subproject.group
+            }
+        }
+    }
+}
+
 configurations.all {
     resolutionStrategy {
         force 'androidx.core:core-ktx:1.12.0'

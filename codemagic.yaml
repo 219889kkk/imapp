@@ -19,12 +19,10 @@ workflows:
           flutter pub get
       - name: CocoaPods install
         script: |
-          PODSPEC=".symlinks/plugins/livekit_client/ios/livekit_client.podspec"
-          if [ -f "$PODSPEC" ]; then
+          PODSPEC=$(find "$HOME/.pub-cache" -path "*/livekit_client-*/ios/livekit_client.podspec" | head -1)
+          if [ -n "$PODSPEC" ]; then
             sed -i '' "s/137.7151.03/137.7151.04/g" "$PODSPEC"
           fi
-          cd ios
-          pod install --repo-update
       - name: Build unsigned IPA
         script: |
           set -e
@@ -57,6 +55,16 @@ workflows:
       - name: Flutter pub get
         script: |
           flutter pub get
+      - name: Patch Android plugins missing namespace
+        script: |
+          find "$HOME/.pub-cache/hosted/pub.dev" -path "*/android/build.gradle" | while read -r file; do
+            if grep -q "com.android.library" "$file" && ! grep -q "namespace" "$file"; then
+              group=$(grep "^group " "$file" | sed -n "s/group '\(.*\)'/\1/p" | head -1)
+              [ -n "$group" ] || continue
+              sed -i "/^android {/a\\    namespace '$group'" "$file"
+              echo "Patched namespace in $file"
+            fi
+          done
       - name: Build release APK
         script: |
           flutter build apk --release

@@ -40,20 +40,15 @@ jobs:
       - name: Patch livekit WebRTC pod version
         run: |
           set -e
-          PODSPEC=".symlinks/plugins/livekit_client/ios/livekit_client.podspec"
-          if [ ! -f "$PODSPEC" ]; then
-            echo "Podspec not found, searching..."
-            find . -name livekit_client.podspec
+          PODSPEC=$(find "$PUB_CACHE" -path "*/livekit_client-*/ios/livekit_client.podspec" | head -1)
+          if [ -z "$PODSPEC" ]; then
+            echo "livekit_client podspec not found in pub cache"
+            find "$PUB_CACHE" -name livekit_client.podspec || true
             exit 1
           fi
           sed -i '' "s/137.7151.03/137.7151.04/g" "$PODSPEC"
+          echo "Patched $PODSPEC"
           grep WebRTC-SDK "$PODSPEC"
-        working-directory: ios
-
-      - name: Pod install
-        run: |
-          cd ios
-          pod install --repo-update
 
       - name: Build unsigned IPA
         run: |

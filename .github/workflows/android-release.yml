@@ -43,6 +43,17 @@ jobs:
       - name: Pub get
         run: flutter pub get
 
+      - name: Patch Android plugins missing namespace
+        run: |
+          find "$PUB_CACHE/hosted/pub.dev" -path "*/android/build.gradle" | while read -r file; do
+            if grep -q "com.android.library" "$file" && ! grep -q "namespace" "$file"; then
+              group=$(grep "^group " "$file" | sed -n "s/group '\(.*\)'/\1/p" | head -1)
+              [ -n "$group" ] || continue
+              sed -i "/^android {/a\\    namespace '$group'" "$file"
+              echo "Patched namespace in $file"
+            fi
+          done
+
       - name: Build release APK
         run: flutter build apk --release
 
