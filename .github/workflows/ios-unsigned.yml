@@ -37,10 +37,23 @@ jobs:
       - name: Pub get
         run: flutter pub get
 
+      - name: Patch livekit WebRTC pod version
+        run: |
+          set -e
+          PODSPEC=".symlinks/plugins/livekit_client/ios/livekit_client.podspec"
+          if [ ! -f "$PODSPEC" ]; then
+            echo "Podspec not found, searching..."
+            find . -name livekit_client.podspec
+            exit 1
+          fi
+          sed -i '' "s/137.7151.03/137.7151.04/g" "$PODSPEC"
+          grep WebRTC-SDK "$PODSPEC"
+        working-directory: ios
+
       - name: Pod install
         run: |
           cd ios
-          pod install
+          pod install --repo-update
 
       - name: Build unsigned IPA
         run: |

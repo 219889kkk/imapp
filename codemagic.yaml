@@ -19,8 +19,12 @@ workflows:
           flutter pub get
       - name: CocoaPods install
         script: |
+          PODSPEC=".symlinks/plugins/livekit_client/ios/livekit_client.podspec"
+          if [ -f "$PODSPEC" ]; then
+            sed -i '' "s/137.7151.03/137.7151.04/g" "$PODSPEC"
+          fi
           cd ios
-          pod install
+          pod install --repo-update
       - name: Build unsigned IPA
         script: |
           set -e
