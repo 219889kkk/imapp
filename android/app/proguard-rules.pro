@@ -196,7 +196,28 @@
 
 -keep public class com.tencent.bugly.**{*;}
 
-# OpenIM
+# OpenIM / Flutter / native
 -keep class io.openim.**{*;}
 -keep class open_im_sdk.**{*;}
 -keep class open_im_sdk_callback.**{*;}
+
+# Flutter
+-keep class io.flutter.app.** { *; }
+-keep class io.flutter.plugin.** { *; }
+-keep class io.flutter.util.** { *; }
+-keep class io.flutter.view.** { *; }
+-keep class io.flutter.** { *; }
+-keep class io.flutter.plugins.** { *; }
+
+# Gson / JSON
+-keepattributes Signature
+-keepattributes *Annotation*
+-keep class com.google.gson.** { *; }
+-keep class * implements com.google.gson.TypeAdapterFactory
+-keep class * implements com.google.gson.JsonSerializer
+-keep class * implements com.google.gson.JsonDeserializer
+
+# Keep model classes used by reflection
+-keepclassmembers class * {
+    @com.google.gson.annotations.SerializedName <fields>;
+}
