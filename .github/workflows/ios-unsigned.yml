@@ -6,15 +6,18 @@ name: iOS Unsigned
 
 on:
   workflow_dispatch:
+  workflow_call:
   push:
     branches: [master]
     paths:
       - ".github/workflows/ios-unsigned.yml"
+      - ".github/workflows/build-all.yml"
       - "pubspec.yaml"
       - "ios/**"
       - "lib/**"
       - "openim_common/**"
       - "openim_live/**"
+      - "local_plugin/**"
 
 jobs:
   build:

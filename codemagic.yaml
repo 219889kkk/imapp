@@ -41,3 +41,21 @@ workflows:
     artifacts:
       - build/ios/ipa/*.ipa
       - build/ios/iphoneos/Runner.app
+
+  android-release:
+    name: Android Release APK
+    max_build_duration: 60
+    instance_type: linux_x2
+    environment:
+      flutter: 3.32.8
+      java: 17
+    scripts:
+      - name: Flutter pub get
+        script: |
+          flutter pub get
+      - name: Build release APK
+        script: |
+          flutter build apk --release
+          ls -la build/app/outputs/flutter-apk/
+    artifacts:
+      - build/app/outputs/flutter-apk/app-release.apk
