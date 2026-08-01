@@ -1,0 +1,58 @@
+# GitHub Actions 未签名 iOS 云打包（备用）
+# 推到 GitHub 后：Actions → iOS Unsigned → Run workflow
+# 构建完成后在 Artifacts 下载 openim-ios-unsigned
+
+name: iOS Unsigned
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.32.8"
+          channel: stable
+          cache: true
+
+      - name: Pub get
+        run: flutter pub get
+
+      - name: Pod install
+        run: |
+          cd ios
+          pod install
+
+      - name: Build unsigned IPA
+        run: |
+          set -e
+          flutter build ipa --release --no-codesign
+          mkdir -p build/ios/ipa
+          if ! ls build/ios/ipa/*.ipa >/dev/null 2>&1; then
+            rm -rf build/ios/ipa/Payload
+            mkdir -p build/ios/ipa/Payload
+            cp -R build/ios/iphoneos/Runner.app build/ios/ipa/Payload/
+            (
+              cd build/ios/ipa
+              zip -qry openim-unsigned.ipa Payload
+              rm -rf Payload
+            )
+          fi
+          ls -la build/ios/ipa/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: openim-ios-unsigned
+          path: |
+            build/ios/ipa/*.ipa
+            build/ios/iphoneos/Runner.app
+          if-no-files-found: error
+          retention-days: 14

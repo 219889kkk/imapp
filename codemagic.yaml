@@ -1,0 +1,43 @@
+# Codemagic 未签名 iOS 云打包
+# 1. 把本目录推到 GitHub/GitLab
+# 2. 打开 https://codemagic.io 用 Git 账号登录并导入仓库
+# 3. 选择工作流 ios-unsigned → Start new build
+# 4. 构建完成后下载 IPA，交给对方用他们的证书重签
+
+workflows:
+  ios-unsigned:
+    name: iOS Unsigned IPA
+    max_build_duration: 120
+    instance_type: mac_mini_m2
+    environment:
+      flutter: 3.32.8
+      xcode: latest
+      cocoapods: default
+    scripts:
+      - name: Flutter pub get
+        script: |
+          flutter pub get
+      - name: CocoaPods install
+        script: |
+          cd ios
+          pod install
+      - name: Build unsigned IPA
+        script: |
+          set -e
+          flutter build ipa --release --no-codesign
+          mkdir -p build/ios/ipa
+          if ! ls build/ios/ipa/*.ipa >/dev/null 2>&1; then
+            rm -rf build/ios/ipa/Payload
+            mkdir -p build/ios/ipa/Payload
+            cp -R build/ios/iphoneos/Runner.app build/ios/ipa/Payload/
+            (
+              cd build/ios/ipa
+              zip -qry "openim-unsigned.ipa" Payload
+              rm -rf Payload
+            )
+          fi
+          echo "Artifacts:"
+          ls -la build/ios/ipa/ || true
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - build/ios/iphoneos/Runner.app
