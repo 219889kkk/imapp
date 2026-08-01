@@ -135,35 +135,18 @@ class LoginPage extends StatelessWidget {
           keyBoardType: type == LoginType.phone ? TextInputType.phone : TextInputType.text,
         ),
         8.verticalSpace,
-        Offstage(
-          offstage: !logic.isPasswordLogin.value,
-          child: InputBox.password(
-            label: '',
-            hintText: StrRes.plsEnterPassword,
-            controller: logic.pwdCtrl,
-            focusNode: logic.pwdFocus,
-          ),
-        ),
-        Offstage(
-          offstage: logic.isPasswordLogin.value,
-          child: InputBox.verificationCode(
-            label: StrRes.verificationCode,
-            hintText: StrRes.plsEnterVerificationCode,
-            controller: logic.verificationCodeCtrl,
-            onSendVerificationCode: logic.getVerificationCode,
-          ),
+        InputBox.password(
+          label: '',
+          hintText: StrRes.plsEnterPassword,
+          controller: logic.pwdCtrl,
+          focusNode: logic.pwdFocus,
         ),
         10.verticalSpace,
-        Row(
-          children: [
-            StrRes.forgetPassword.toText
-              ..style = Styles.ts_8E9AB0_12sp
-              ..onTap = logic.forgetPassword,
-            const Spacer(),
-            (logic.isPasswordLogin.value ? StrRes.verificationCodeLogin : StrRes.passwordLogin).toText
-              ..style = Styles.ts_0089FF_12sp
-              ..onTap = logic.togglePasswordType,
-          ],
+        Align(
+          alignment: Alignment.centerLeft,
+          child: StrRes.forgetPassword.toText
+            ..style = Styles.ts_8E9AB0_12sp
+            ..onTap = logic.forgetPassword,
         ),
       ],
     );

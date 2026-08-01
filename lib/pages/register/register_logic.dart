@@ -79,8 +79,6 @@ class RegisterLogic extends GetxController {
         email: email,
         account: account,
         password: pwdCtrl.text,
-        // Server demo often accepts a fixed code; no SMS is sent.
-        verificationCode: '666666',
       );
       if (null == IMUtils.emptyStrToNull(data.imToken) ||
           null == IMUtils.emptyStrToNull(data.chatToken)) {

@@ -77,7 +77,6 @@ class SetPasswordLogic extends GetxController {
         email: email,
         account: operateType == LoginType.account ? phoneNumber : null,
         password: pwdCtrl.text,
-        verificationCode: verificationCode,
         invitationCode: invitationCode,
       );
       if (null == IMUtils.emptyStrToNull(data.imToken) || null == IMUtils.emptyStrToNull(data.chatToken)) {

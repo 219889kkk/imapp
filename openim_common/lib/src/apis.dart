@@ -62,13 +62,11 @@ class Apis {
     String? account,
     int birth = 0,
     int gender = 1,
-    required String verificationCode, // pass '' or demo code when SMS is disabled
     String? invitationCode,
   }) async {
     try {
       var data = await HttpUtil.post(Urls.register, data: {
         'deviceID': DataSp.getDeviceID(),
-        'verifyCode': verificationCode.isEmpty ? '666666' : verificationCode,
         'platform': IMUtils.getPlatform(),
         'invitationCode': invitationCode,
         'autoLogin': true,

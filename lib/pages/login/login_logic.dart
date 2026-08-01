@@ -61,11 +61,9 @@ class LoginLogic extends GetxController with GetTickerProviderStateMixin {
   final imLogic = Get.find<IMController>();
   final phoneCtrl = TextEditingController();
   final pwdCtrl = TextEditingController();
-  final verificationCodeCtrl = TextEditingController();
   final obscureText = true.obs;
   final enabled = false.obs;
   final areaCode = "+86".obs;
-  final isPasswordLogin = true.obs;
   final versionInfo = ''.obs;
   final loginType = LoginType.account.obs;
   String? get email => loginType.value == LoginType.email ? phoneCtrl.text.trim() : null;
@@ -101,10 +99,8 @@ class LoginLogic extends GetxController with GetTickerProviderStateMixin {
   void onClose() {
     phoneCtrl.removeListener(_onChanged);
     pwdCtrl.removeListener(_onChanged);
-    verificationCodeCtrl.removeListener(_onChanged);
     phoneCtrl.dispose();
     pwdCtrl.dispose();
-    verificationCodeCtrl.dispose();
     accountFocus?.dispose();
     pwdFocus?.dispose();
     tabController.dispose();
@@ -117,7 +113,6 @@ class LoginLogic extends GetxController with GetTickerProviderStateMixin {
     _initData();
     phoneCtrl.addListener(_onChanged);
     pwdCtrl.addListener(_onChanged);
-    verificationCodeCtrl.addListener(_onChanged);
     super.onInit();
   }
 
@@ -128,12 +123,8 @@ class LoginLogic extends GetxController with GetTickerProviderStateMixin {
   }
 
   _onChanged() {
-    if (loginType.value == LoginType.account) {
-      enabled.value = phoneCtrl.text.trim().isNotEmpty && pwdCtrl.text.trim().isNotEmpty;
-    } else {
-      enabled.value = isPasswordLogin.value && phoneCtrl.text.trim().isNotEmpty && pwdCtrl.text.trim().isNotEmpty ||
-          !isPasswordLogin.value && phoneCtrl.text.trim().isNotEmpty && verificationCodeCtrl.text.trim().isNotEmpty;
-    }
+    enabled.value =
+        phoneCtrl.text.trim().isNotEmpty && pwdCtrl.text.trim().isNotEmpty;
   }
 
   login() {
@@ -168,14 +159,12 @@ class LoginLogic extends GetxController with GetTickerProviderStateMixin {
         }
       }
       final password = IMUtils.emptyStrToNull(pwdCtrl.text);
-      final code = IMUtils.emptyStrToNull(verificationCodeCtrl.text);
       final data = await Apis.login(
         areaCode: areaCode.value,
         phoneNumber: phone,
         account: this.account,
         email: email,
-        password: isPasswordLogin.value ? password : null,
-        verificationCode: isPasswordLogin.value ? null : code,
+        password: password,
       );
       final account = {
         "areaCode": areaCode.value,
@@ -201,42 +190,6 @@ class LoginLogic extends GetxController with GetTickerProviderStateMixin {
     }
     return false;
   }
-
-  void togglePasswordType() {
-    isPasswordLogin.value = !isPasswordLogin.value;
-  }
-
-  void toggleLoginType() {
-    if (loginType.value == LoginType.phone) {
-      loginType.value = LoginType.email;
-    } else {
-      loginType.value = LoginType.phone;
-    }
-
-    phoneCtrl.text = '';
-  }
-
-  Future<bool> getVerificationCode() async {
-    if (phone?.isNotEmpty == true && !IMUtils.isMobile(areaCode.value, phoneCtrl.text)) {
-      IMViews.showToast(StrRes.plsEnterRightPhone);
-      return false;
-    }
-
-    if (email?.isNotEmpty == true && !phoneCtrl.text.isEmail) {
-      IMViews.showToast(StrRes.plsEnterRightEmail);
-      return false;
-    }
-
-    return sendVerificationCode();
-  }
-
-  Future<bool> sendVerificationCode() => LoadingView.singleton.wrap(
-      asyncFunction: () => Apis.requestVerificationCode(
-            areaCode: areaCode.value,
-            phoneNumber: phone,
-            email: email,
-            usedFor: 3,
-          ));
 
   void openCountryCodePicker() async {
     String? code = await IMViews.showCountryCodePicker();
