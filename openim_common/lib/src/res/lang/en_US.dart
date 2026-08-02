@@ -1,5 +1,5 @@
 const Map<String, String> en_US = {
-  "welcome": "Welcome to China Aerospace",
+  "welcome": "Welcome to HangXun",
   "userID": "user id",
   "phoneNumber": "Phone Number",
   "plsEnterPhoneNumber": "Please enter your phone number",

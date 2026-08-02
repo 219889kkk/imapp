@@ -152,7 +152,7 @@ class AppController extends GetxController
   Future<void> _showMessageNotification(im.Message message) async {
     if (!DataSp.getEnableMsgNotification()) return;
 
-    String title = '中国航天';
+    String title = '航讯';
     String body = StrRes.newMessageHint;
     if (DataSp.getShowNotificationDetail()) {
       final senderNickname = message.senderNickname ?? '';
@@ -184,7 +184,7 @@ class AppController extends GetxController
         ? StrRes.videoCallInviteHint
         : StrRes.voiceCallInviteHint;
 
-    String title = '中国航天';
+    String title = '航讯';
     String body = StrRes.newMessageHint;
     if (DataSp.getShowNotificationDetail()) {
       String nickname = invitation?.inviterUserID ?? '';
@@ -235,7 +235,7 @@ class AppController extends GetxController
     final androidDetails = AndroidNotificationDetails(
       beepOn ? 'chat_v2' : 'chat_silent',
       beepOn ? 'Chat Messages' : 'Chat Messages (Silent)',
-      channelDescription: '中国航天消息通知',
+      channelDescription: '航讯消息通知',
       importance: Importance.max,
       priority: Priority.high,
       ticker: 'ticker',

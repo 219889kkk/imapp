@@ -1,5 +1,5 @@
 const Map<String, String> zh_CN = {
-  "welcome": "欢迎使用中国航天",
+  "welcome": "欢迎使用航讯",
   "userID": "用户ID",
   "phoneNumber": "手机号",
   "plsEnterPhoneNumber": "请输入您的手机号",
