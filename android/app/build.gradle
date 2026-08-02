@@ -45,8 +45,10 @@ android {
         profile { signingConfig signingConfigs.release }
         release {
             signingConfig signingConfigs.release
-            minifyEnabled true
-            shrinkResources true
+            // R8 minify broke CI release builds (OpenIM / native plugins).
+            // Keep arm64-only + Dart obfuscation for size instead.
+            minifyEnabled false
+            shrinkResources false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
