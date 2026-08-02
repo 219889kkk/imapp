@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
-import 'package:openim/widgets/theme_aware.dart';
 import 'package:openim_common/openim_common.dart';
 
 import '../contacts/contacts_view.dart';
@@ -19,14 +18,10 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   static const _tabIconSlotSize = 36.0;
 
-  late final List<Widget> _pages;
+  List<Widget>? _pages;
 
-  @override
-  void initState() {
-    super.initState();
-    // Create tab pages once. Rebuilding tab children on unread-count changes
-    // caused a blank home after login.
-    _pages = [
+  List<Widget> _ensurePages() {
+    return _pages ??= [
       ConversationPage(),
       ContactsPage(),
       MomentsFeedPage(),
@@ -37,23 +32,15 @@ class _HomePageState extends State<HomePage> {
   @override
   Widget build(BuildContext context) {
     final logic = Get.find<HomeLogic>();
-    return ThemeAware(
-      builder: (_) => ColoredBox(
-        color: Styles.pageBackground,
-        child: Column(
-          children: [
-            Expanded(
-              child: Obx(
-                () => IndexedStack(
-                  index: logic.index.value,
-                  children: _pages,
-                ),
-              ),
-            ),
-            Obx(() => _buildBottomBar(logic)),
-          ],
+    return Scaffold(
+      backgroundColor: Styles.pageBackground,
+      body: Obx(
+        () => IndexedStack(
+          index: logic.index.value,
+          children: _ensurePages(),
         ),
       ),
+      bottomNavigationBar: Obx(() => _buildBottomBar(logic)),
     );
   }
 

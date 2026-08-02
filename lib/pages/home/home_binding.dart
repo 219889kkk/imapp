@@ -10,23 +10,24 @@ import 'home_logic.dart';
 class HomeBinding extends Bindings {
   @override
   void dependencies() {
-    if (!Get.isRegistered<HomeLogic>()) {
-      Get.put(HomeLogic());
-    }
-    if (!Get.isRegistered<ConversationLogic>()) {
-      Get.put(ConversationLogic());
-    }
-    if (!Get.isRegistered<ConversationCategoryController>()) {
-      Get.put(ConversationCategoryController());
-    }
-    if (!Get.isRegistered<ContactsLogic>()) {
-      Get.put(ContactsLogic());
-    }
-    if (!Get.isRegistered<MomentsFeedLogic>()) {
-      Get.put(MomentsFeedLogic());
-    }
-    if (!Get.isRegistered<MineLogic>()) {
-      Get.put(MineLogic());
+    _deleteIfRegistered<HomeLogic>();
+    _deleteIfRegistered<ConversationLogic>();
+    _deleteIfRegistered<ConversationCategoryController>();
+    _deleteIfRegistered<ContactsLogic>();
+    _deleteIfRegistered<MomentsFeedLogic>();
+    _deleteIfRegistered<MineLogic>();
+
+    Get.put(HomeLogic());
+    Get.put(ConversationLogic());
+    Get.put(ConversationCategoryController());
+    Get.put(ContactsLogic());
+    Get.put(MomentsFeedLogic());
+    Get.put(MineLogic());
+  }
+
+  void _deleteIfRegistered<T>() {
+    if (Get.isRegistered<T>()) {
+      Get.delete<T>(force: true);
     }
   }
 }

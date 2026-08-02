@@ -5,12 +5,11 @@ import 'package:openim/core/controller/conversation_category_controller.dart';
 import 'package:openim_common/openim_common.dart';
 
 class ConversationCategoryTabs extends StatelessWidget {
-  final logic = Get.find<ConversationCategoryController>();
-
   ConversationCategoryTabs({super.key});
 
   @override
   Widget build(BuildContext context) {
+    final logic = Get.find<ConversationCategoryController>();
     return Obx(() {
       if (!logic.showTabs) return const SizedBox.shrink();
       return Container(

@@ -52,10 +52,15 @@ class LoadingView {
     _overlayState?.insert(_overlayEntry!);
   }
 
-  dismiss() async {
-    if (!_isVisible && !isProgressVisible) return;
-    _overlayEntry?.remove();
-    _progressOverlayEntry?.remove();
+  void dismiss() {
+    try {
+      _overlayEntry?.remove();
+      _progressOverlayEntry?.remove();
+    } catch (_) {}
+    _overlayEntry = null;
+    _progressOverlayEntry = null;
+    _overlayState = null;
+    _progressOverlayState = null;
     _isVisible = false;
     isProgressVisible = false;
   }

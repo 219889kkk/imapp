@@ -8,12 +8,11 @@ import 'package:pull_to_refresh_new/pull_to_refresh.dart';
 import 'contacts_logic.dart';
 
 class ContactsPage extends StatelessWidget {
-  final logic = Get.find<ContactsLogic>();
-
   ContactsPage({super.key});
 
   @override
   Widget build(BuildContext context) {
+    final logic = Get.find<ContactsLogic>();
     return ThemeAware(
       builder: (context) => Scaffold(
         appBar: TitleBar.contacts(

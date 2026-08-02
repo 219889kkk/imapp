@@ -12,13 +12,12 @@ import 'conversation_logic.dart';
 import 'widgets/conversation_category_tabs.dart';
 
 class ConversationPage extends StatelessWidget {
-  final logic = Get.find<ConversationLogic>();
-  final im = Get.find<IMController>();
-
   ConversationPage({super.key});
 
   @override
   Widget build(BuildContext context) {
+    final logic = Get.find<ConversationLogic>();
+    final im = Get.find<IMController>();
     return ThemeAware(
       builder: (context) => Scaffold(
         backgroundColor: Styles.pageBackground,
@@ -82,7 +81,7 @@ class ConversationPage extends StatelessWidget {
                       padding: EdgeInsets.only(
                         bottom: MediaQuery.paddingOf(context).bottom,
                       ),
-                      itemBuilder: (_, index) => _buildItemView(items[index]),
+                      itemBuilder: (_, index) => _buildItemView(logic, items[index]),
                       itemCount: items.length,
                     ),
                   );
@@ -95,7 +94,7 @@ class ConversationPage extends StatelessWidget {
     );
   }
 
-  Widget _buildItemView(ConversationInfo info) => Ink(
+  Widget _buildItemView(ConversationLogic logic, ConversationInfo info) => Ink(
         color: info.isPinned == true ? Styles.c_F0F2F6 : Styles.c_FFFFFF,
         child: InkWell(
           onTap: () => logic.toChat(conversationInfo: info),

@@ -51,7 +51,7 @@ class AppView extends StatelessWidget {
     );
 
     EasyLoading.instance
-      ..userInteractions = false
+      ..userInteractions = true
       ..indicatorSize = 50
       ..progressWidth = 6.0
       ..loadingStyle = EasyLoadingStyle.custom

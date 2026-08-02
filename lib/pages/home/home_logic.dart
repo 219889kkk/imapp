@@ -75,7 +75,12 @@ class HomeLogic extends SuperController {
   @override
   void onInit() {
     _isAutoLogin = Get.arguments != null ? Get.arguments['isAutoLogin'] : false;
+    LoadingView.singleton.dismiss();
     EasyLoading.dismiss();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      LoadingView.singleton.dismiss();
+      EasyLoading.dismiss();
+    });
     if (_isAutoLogin == true) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _showLockScreenPwd());
     }

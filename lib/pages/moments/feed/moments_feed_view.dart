@@ -8,12 +8,11 @@ import 'package:pull_to_refresh_new/pull_to_refresh.dart';
 import 'moments_feed_logic.dart';
 
 class MomentsFeedPage extends StatelessWidget {
-  final logic = Get.find<MomentsFeedLogic>();
-
   MomentsFeedPage({super.key});
 
   @override
   Widget build(BuildContext context) {
+    final logic = Get.find<MomentsFeedLogic>();
     return ThemeAware(
       builder: (context) => Scaffold(
         backgroundColor: Styles.c_FFFFFF,

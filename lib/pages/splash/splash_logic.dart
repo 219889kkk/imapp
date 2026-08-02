@@ -57,9 +57,11 @@ class SplashLogic extends GetxController {
       final result = await ConversationLogic.getConversationFirstPage()
           .timeout(const Duration(seconds: 15));
 
-      LoadingView.singleton.dismiss();
-      EasyLoading.dismiss();
       AppNavigator.startSplashToMain(isAutoLogin: true, conversations: result);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        LoadingView.singleton.dismiss();
+        EasyLoading.dismiss();
+      });
     } catch (e, s) {
       Logger.print('splash auto login failed: $e $s');
       IMViews.showToast('$e');

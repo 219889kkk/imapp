@@ -130,19 +130,15 @@ class LoginLogic extends GetxController {
   void login() {
     DataSp.putLoginType(LoginType.account.rawValue);
     LoadingView.singleton.wrap(asyncFunction: () async {
-      try {
-        final suc = await _login();
-        if (suc) {
-          final result = await ConversationLogic.getConversationFirstPage();
-          Get.find<CacheController>().resetCache();
-          LoadingView.singleton.dismiss();
-          EasyLoading.dismiss();
-          AppNavigator.startMain(conversations: result);
-        }
-      } finally {
+      final suc = await _login();
+      if (!suc) return;
+      final result = await ConversationLogic.getConversationFirstPage();
+      Get.find<CacheController>().resetCache();
+      AppNavigator.startMain(conversations: result);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
         LoadingView.singleton.dismiss();
         EasyLoading.dismiss();
-      }
+      });
     });
   }
 

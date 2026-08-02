@@ -23,12 +23,11 @@ class _MineMenuItem {
 }
 
 class MinePage extends StatelessWidget {
-  final logic = Get.find<MineLogic>();
-
   MinePage({super.key});
 
   @override
   Widget build(BuildContext context) {
+    final logic = Get.find<MineLogic>();
     final content = Column(
       children: [
         Stack(
@@ -39,7 +38,7 @@ class MinePage extends StatelessWidget {
               color: Styles.c_0089FF,
               child: ImageRes.mineHeaderBg.toImage,
             ),
-            Obx(() => _buildMyInfoView()),
+            Obx(() => _buildMyInfoView(logic)),
           ],
         ),
         10.verticalSpace,
@@ -114,7 +113,7 @@ class MinePage extends StatelessWidget {
     );
   }
 
-  Widget _buildMyInfoView() => Container(
+  Widget _buildMyInfoView(MineLogic logic) => Container(
         height: 98.h,
         margin: EdgeInsets.only(left: 16.w, right: 16.w, top: 90.h),
         padding: EdgeInsets.symmetric(horizontal: 16.w),
