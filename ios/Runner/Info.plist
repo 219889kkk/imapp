@@ -16,9 +16,9 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleDisplayName</key>
-	<string>中国航天</string>
+	<string>AstroIm</string>
 	<key>CFBundleName</key>
-	<string>中国航天</string>
+	<string>AstroIm</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
