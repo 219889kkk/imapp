@@ -78,8 +78,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: openim-ios-unsigned
-          path: |
-            build/ios/ipa/*.ipa
-            build/ios/archive/Runner.xcarchive
+          # IPA only — uploading the full xcarchive is large and often times out.
+          path: build/ios/ipa/*.ipa
           if-no-files-found: error
           retention-days: 14
+          compression-level: 0
