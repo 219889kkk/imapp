@@ -8,6 +8,7 @@ class ImageRes {
   static const voiceBlackAnim = "assets/anim/voice_black.json";
 
   static const splashLogo = "$_dir/ic_splash_logo.webp";
+  static const splashFullscreen = "$_dir/ic_splash_fullscreen.webp";
   static const loginLogo = "$_dir/ic_login_logo.webp";
   static const eyeOpen = "$_dir/ic_eye_open.webp";
   static const eyeClose = "$_dir/ic_eye_close.webp";

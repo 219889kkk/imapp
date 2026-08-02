@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:get/get.dart';
 import 'package:openim_common/openim_common.dart';
 
@@ -12,26 +11,14 @@ class SplashPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: Styles.isDark
-              ? [Styles.c_0089FF_opacity20, Styles.c_FFFFFF_opacity0]
-              : [Styles.c_0089FF_opacity10, Styles.c_FFFFFF_opacity0],
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
+    return Scaffold(
+      body: SizedBox.expand(
+        child: Image.asset(
+          ImageRes.splashFullscreen,
+          package: 'openim_common',
+          fit: BoxFit.cover,
+          alignment: Alignment.center,
         ),
-      ),
-      child: Stack(
-        alignment: Alignment.center,
-        children: [
-          Positioned(
-            bottom: 130.h,
-            child: ImageRes.splashLogo.toImage
-              ..width = 120.w
-              ..height = 120.h,
-          ),
-        ],
       ),
     );
   }
