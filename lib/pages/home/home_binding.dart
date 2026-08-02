@@ -10,19 +10,22 @@ import 'home_logic.dart';
 class HomeBinding extends Bindings {
   @override
   void dependencies() {
-    // Recreate home-scoped controllers for a clean post-login state.
-    _reput(() => HomeLogic());
-    _reput(() => ConversationLogic());
-    _reput(() => ConversationCategoryController());
-    _reput(() => ContactsLogic());
-    _reput(() => MomentsFeedLogic());
-    _reput(() => MineLogic());
+    // Order matters: ConversationLogic finds ConversationCategoryController
+    // in its field initializers. Wrong order caused release blank screen
+    // (obfuscated as "npb" not found).
+    _reput<HomeLogic>(() => HomeLogic());
+    _reput<ConversationCategoryController>(
+        () => ConversationCategoryController());
+    _reput<ConversationLogic>(() => ConversationLogic());
+    _reput<ContactsLogic>(() => ContactsLogic());
+    _reput<MomentsFeedLogic>(() => MomentsFeedLogic());
+    _reput<MineLogic>(() => MineLogic());
   }
 
-  void _reput<T>(T Function() builder) {
+  void _reput<T extends GetxController>(T Function() builder) {
     if (Get.isRegistered<T>()) {
       Get.delete<T>(force: true);
     }
-    Get.put<T>(builder());
+    Get.put<T>(builder(), permanent: false);
   }
 }
