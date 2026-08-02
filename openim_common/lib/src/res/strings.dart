@@ -1231,6 +1231,7 @@ class StrRes {
   static String get logLevel => 'logLevel'.tr;
   static String get callFail => 'callFail'.tr;
   static String get searchByPhoneAndUid => 'search_by_phone_and_uid'.tr;
+  static String get lastOnlineTime => 'lastOnlineTime'.tr;
   static String get specialMessage => 'special_message'.tr;
   static String get editGroupName => 'edit_group_name'.tr;
   static String get editGroupTips => 'edit_group_tips'.tr;

@@ -165,6 +165,9 @@ mixin IMCallback {
   }
 
   void userStausChanged(UserStatusInfo u) {
+    if (u.userID != null && (u.status == null || u.status == 0)) {
+      LastOnlineCache.markOfflineNow(u.userID!);
+    }
     userStatusChangedSubject.addSafely(u);
   }
 

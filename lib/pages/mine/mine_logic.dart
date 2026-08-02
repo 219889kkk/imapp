@@ -19,7 +19,21 @@ class MineLogic extends GetxController {
   void viewMyInfo() => AppNavigator.startMyInfo();
 
   void copyID() {
-    IMUtils.copy(text: imLogic.userInfo.value.userID!);
+    final account = imLogic.userInfo.value.account?.trim();
+    IMUtils.copy(
+      text: (account != null && account.isNotEmpty)
+          ? account
+          : imLogic.userInfo.value.userID!,
+    );
+  }
+
+  String get idLineText {
+    final account = imLogic.userInfo.value.account?.trim();
+    final userID = imLogic.userInfo.value.userID ?? '';
+    if (account != null && account.isNotEmpty) {
+      return '${StrRes.account}:$account';
+    }
+    return '${StrRes.userID}:$userID';
   }
 
   void chatNotificationSetup() => AppNavigator.startChatNotificationSetup();
@@ -93,6 +107,7 @@ class MineLogic extends GetxController {
           val?.birth = data.birth;
           val?.gender = data.gender;
           val?.signature = data.signature;
+          val?.account = data.account;
         });
       }
       refreshController.refreshCompleted();

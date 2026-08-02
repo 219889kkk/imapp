@@ -1,11 +1,9 @@
-import 'package:flutter/material.dart';
 import 'package:flutter_openim_sdk/flutter_openim_sdk.dart';
 import 'package:get/get.dart';
 import 'package:openim/pages/contacts/group_profile_panel/group_profile_panel_logic.dart';
 import 'package:openim/routes/app_navigator.dart';
 import 'package:openim_common/openim_common.dart';
 import 'package:pull_to_refresh_new/pull_to_refresh.dart';
-import 'package:sprintf/sprintf.dart';
 
 enum SearchType {
   user,
@@ -18,6 +16,7 @@ class AddContactsBySearchLogic extends GetxController {
   final focusNode = FocusNode();
   final userInfoList = <UserFullInfo>[].obs;
   final groupInfoList = <GroupInfo>[].obs;
+  final hasSearched = false.obs;
   late SearchType searchType;
   int pageNo = 0;
 
@@ -36,6 +35,7 @@ class AddContactsBySearchLogic extends GetxController {
         focusNode.requestFocus();
         userInfoList.clear();
         groupInfoList.clear();
+        hasSearched.value = false;
       }
     });
     super.onInit();
@@ -45,9 +45,11 @@ class AddContactsBySearchLogic extends GetxController {
 
   String get searchKey => searchCtrl.text.trim();
 
-  bool get isNotFoundUser => userInfoList.isEmpty && searchKey.isNotEmpty;
+  bool get isNotFoundUser =>
+      hasSearched.value && userInfoList.isEmpty && searchKey.isNotEmpty;
 
-  bool get isNotFoundGroup => groupInfoList.isEmpty && searchKey.isNotEmpty;
+  bool get isNotFoundGroup =>
+      hasSearched.value && groupInfoList.isEmpty && searchKey.isNotEmpty;
 
   void search() {
     if (searchKey.isEmpty) return;
@@ -60,32 +62,52 @@ class AddContactsBySearchLogic extends GetxController {
 
   void searchUser() async {
     var list = await LoadingView.singleton.wrap(
-      asyncFunction: () => Apis.searchUserFullInfo(
-        content: searchKey,
-        pageNumber: pageNo = 1,
-        showNumber: 20,
-      ),
+      asyncFunction: () => _searchUserWithFallback(pageNo = 1),
     );
-    userInfoList.assignAll(list ?? []);
+    hasSearched.value = true;
+    userInfoList.assignAll(list);
     refreshCtrl.refreshCompleted();
-    if (null == list || list.isEmpty || list.length < 20) {
+    if (list.isEmpty || list.length < 20) {
       refreshCtrl.loadNoData();
     } else {
       refreshCtrl.loadComplete();
     }
   }
 
+  Future<List<UserFullInfo>> _searchUserWithFallback(int page) async {
+    final keyword = searchKey;
+    final result = await Apis.searchUserFullInfo(
+      content: keyword,
+      pageNumber: page,
+      showNumber: 20,
+    );
+    if (result != null && result.isNotEmpty) return result;
+    if (page != 1 || keyword.isEmpty) return result ?? [];
+
+    // Fallback: exact match by userID when full-text search misses.
+    final byId = await Apis.getUserFullInfo(userIDList: [keyword]);
+    if (byId != null && byId.isNotEmpty) return byId;
+
+    try {
+      final users = await OpenIM.iMManager.userManager.getUsersInfo(
+        userIDList: [keyword],
+      );
+      if (users.isNotEmpty) {
+        return users
+            .map((u) => UserFullInfo.fromJson(u.toJson()))
+            .toList();
+      }
+    } catch (_) {}
+    return [];
+  }
+
   void loadMoreUser() async {
     var list = await LoadingView.singleton.wrap(
-      asyncFunction: () => Apis.searchUserFullInfo(
-        content: searchKey,
-        pageNumber: ++pageNo,
-        showNumber: 20,
-      ),
+      asyncFunction: () => _searchUserWithFallback(++pageNo),
     );
-    userInfoList.addAll(list ?? []);
+    userInfoList.addAll(list);
     refreshCtrl.refreshCompleted();
-    if (null == list || list.isEmpty || list.length < 20) {
+    if (list.isEmpty || list.length < 20) {
       refreshCtrl.loadNoData();
     } else {
       refreshCtrl.loadComplete();
@@ -96,12 +118,8 @@ class AddContactsBySearchLogic extends GetxController {
     var list = await OpenIM.iMManager.groupManager.getGroupsInfo(
       groupIDList: [searchKey],
     );
+    hasSearched.value = true;
     groupInfoList.assignAll(list);
-  }
-
-  String getMatchContent(UserFullInfo userInfo) {
-
-    return sprintf(StrRes.searchNicknameIs, [userInfo.nickname]);
   }
 
   String? getShowName(dynamic info) {
@@ -133,20 +151,54 @@ class AddContactsBySearchLogic extends GetxController {
       return sprintf(StrRes.searchGroupNicknameIs, [getShowName(info)]);
     }
 
-    UserFullInfo userFullInfo = info;
-    String? tips, content;
-    if (int.tryParse(searchKey) != null) {
-      if (searchKey.length == 11) {
-        tips = StrRes.phoneNumber;
-        content = userFullInfo.phoneNumber ?? searchKey;
-      } else {
-        tips = StrRes.userID;
-        content = userFullInfo.userID;
-      }
-    } else {
-      tips = StrRes.searchNicknameIs;
-      content = getShowName(info);
+    final user = info as UserFullInfo;
+    final nickname = user.nickname?.trim();
+    final account = user.account?.trim();
+    final userID = user.userID?.trim();
+    final phone = user.phoneNumber?.trim();
+    final email = user.email?.trim();
+    final key = searchKey;
+
+    if (account != null &&
+        account.isNotEmpty &&
+        account.toLowerCase() == key.toLowerCase()) {
+      return '${StrRes.account}:$account';
     }
-    return "$tips:$content";
+    if (userID != null && userID == key) {
+      return '${StrRes.userID}:$userID';
+    }
+    if (phone != null && phone.isNotEmpty && phone == key) {
+      return '${StrRes.phoneNumber}:$phone';
+    }
+    if (email != null && email.isNotEmpty && email.toLowerCase() == key.toLowerCase()) {
+      return '${StrRes.email}:$email';
+    }
+    if (nickname != null && nickname.isNotEmpty) {
+      final secondary = (account?.isNotEmpty == true)
+          ? '${StrRes.account}:$account'
+          : '${StrRes.userID}:${userID ?? ''}';
+      return '$nickname ($secondary)';
+    }
+    if (account?.isNotEmpty == true) {
+      return '${StrRes.account}:$account';
+    }
+    return '${StrRes.userID}:${userID ?? key}';
+  }
+
+  String getShowSubtitle(UserFullInfo user) {
+    final parts = <String>[];
+    if (user.account?.isNotEmpty == true) {
+      parts.add('${StrRes.account}:${user.account}');
+    }
+    if (user.userID?.isNotEmpty == true) {
+      parts.add('${StrRes.userID}:${user.userID}');
+    }
+    if (user.phoneNumber?.isNotEmpty == true) {
+      parts.add('${StrRes.phoneNumber}:${user.phoneNumber}');
+    }
+    if (user.email?.isNotEmpty == true) {
+      parts.add('${StrRes.email}:${user.email}');
+    }
+    return parts.join('  ');
   }
 }

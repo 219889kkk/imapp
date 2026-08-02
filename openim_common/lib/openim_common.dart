@@ -32,6 +32,7 @@ export 'src/utils/chat_emoji_text_editing_controller.dart';
 export 'src/utils/data_sp.dart';
 export 'src/utils/http_util.dart';
 export 'src/utils/image_util.dart';
+export 'src/utils/last_online_cache.dart';
 export 'src/utils/logger.dart';
 export 'src/utils/permissions.dart';
 export 'src/utils/sp_util.dart';

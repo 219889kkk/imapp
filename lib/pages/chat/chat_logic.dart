@@ -118,6 +118,7 @@ class ChatLogic extends SuperController {
   String get memberStr => isSingleChat ? "" : "($memberCount)";
 
   final typingStatus = ''.obs;
+  final onlineStatusDesc = ''.obs;
 
   String? get senderName => isSingleChat
       ? OpenIM.iMManager.userInfo.nickname
@@ -165,11 +166,47 @@ class ChatLogic extends SuperController {
     _resetGroupAtType();
     _clearUnreadCount();
     _initChatConfigAfterFirstFrame();
+    _subscribePeerOnlineStatus();
 
     scrollController.addListener(() {
       focusNode.unfocus();
     });
     super.onReady();
+  }
+
+  void _subscribePeerOnlineStatus() async {
+    if (!isSingleChat || userID == null || userID!.isEmpty) return;
+
+    userStatusChangedSub?.cancel();
+    userStatusChangedSub = imLogic.userStatusChangedSubject.listen((u) {
+      if (u.userID == userID) {
+        _updateOnlineStatusDesc(u.status == 1);
+      }
+    });
+
+    try {
+      final list =
+          await OpenIM.iMManager.userManager.subscribeUsersStatus([userID!]);
+      final info = list.firstWhereOrNull((e) => e.userID == userID);
+      if (info != null) {
+        _updateOnlineStatusDesc(info.status == 1);
+        return;
+      }
+    } catch (_) {}
+
+    final list = await Apis.getUsersOnlineStatus(userIDList: [userID!]);
+    _updateOnlineStatusDesc(list.firstOrNull?.isOnline == true);
+  }
+
+  void _updateOnlineStatusDesc(bool isOnline) {
+    if (isOnline) {
+      onlineStatusDesc.value = StrRes.online;
+      return;
+    }
+    final last = LastOnlineCache.format(userID!);
+    onlineStatusDesc.value = last == null
+        ? StrRes.offline
+        : sprintf(StrRes.lastOnlineTime, [last]);
   }
 
   @override
@@ -1400,6 +1437,9 @@ class ChatLogic extends SuperController {
     joinedGroupAddedSub.cancel();
     joinedGroupDeletedSub.cancel();
     connectionSub.cancel();
+    if (isSingleChat && userID != null && userID!.isNotEmpty) {
+      OpenIM.iMManager.userManager.unsubscribeUsersStatus([userID!]);
+    }
     imLogic.onRecvMessageRevoked = null;
     imLogic.onRecvNewMessage = null;
     imLogic.onRecvC2CReadReceipt = null;

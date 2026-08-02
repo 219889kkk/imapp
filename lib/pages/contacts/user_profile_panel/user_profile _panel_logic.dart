@@ -41,6 +41,7 @@ class UserProfilePanelLogic extends GetxController {
   late StreamSubscription _friendDeletedSub;
   late StreamSubscription _friendInfoChangedSub;
   late StreamSubscription _memberInfoChangedSub;
+  StreamSubscription? _userStatusSub;
 
   @override
   void onClose() {
@@ -48,6 +49,11 @@ class UserProfilePanelLogic extends GetxController {
     _friendInfoChangedSub.cancel();
     _memberInfoChangedSub.cancel();
     _friendDeletedSub.cancel();
+    _userStatusSub?.cancel();
+    final uid = userInfo.value.userID;
+    if (uid != null && uid.isNotEmpty && !isMyself) {
+      OpenIM.iMManager.userManager.unsubscribeUsersStatus([uid]);
+    }
     super.onClose();
   }
 
@@ -125,19 +131,51 @@ class UserProfilePanelLogic extends GetxController {
 
   void _queryOnlineStatus() async {
     final userID = userInfo.value.userID;
-    if (userID == null || userID.isEmpty) return;
+    if (userID == null || userID.isEmpty || isMyself) return;
+
+    _userStatusSub?.cancel();
+    _userStatusSub = imLogic.userStatusChangedSubject.listen((u) {
+      if (u.userID == userID) {
+        _applyUserStatus(u.status == 1, userID);
+      }
+    });
+
+    try {
+      final list =
+          await OpenIM.iMManager.userManager.subscribeUsersStatus([userID]);
+      final info = list.firstWhereOrNull((e) => e.userID == userID);
+      if (info != null) {
+        _applyUserStatus(info.status == 1, userID);
+        return;
+      }
+    } catch (_) {}
+
     final list = await Apis.getUsersOnlineStatus(userIDList: [userID]);
     final status = list.firstOrNull;
-    final isOnline = status?.status?.toLowerCase() == 'online';
-    onlineStatus.value = isOnline;
+    final isOnline = status?.isOnline == true;
     final platformDesc = (status?.detailPlatformStatus ?? [])
         .where((e) => e.status?.toLowerCase() == 'online')
         .map((e) => e.platform ?? '')
         .where((e) => e.isNotEmpty)
         .join('、');
-    onlineStatusDesc.value = platformDesc.isEmpty
-        ? (isOnline ? StrRes.online : StrRes.offline)
-        : '${StrRes.online} $platformDesc';
+    if (isOnline && platformDesc.isNotEmpty) {
+      onlineStatus.value = true;
+      onlineStatusDesc.value = '${StrRes.online} $platformDesc';
+    } else {
+      _applyUserStatus(isOnline, userID);
+    }
+  }
+
+  void _applyUserStatus(bool isOnline, String userID) {
+    onlineStatus.value = isOnline;
+    if (isOnline) {
+      onlineStatusDesc.value = StrRes.online;
+      return;
+    }
+    final last = LastOnlineCache.format(userID);
+    onlineStatusDesc.value = last == null
+        ? StrRes.offline
+        : sprintf(StrRes.lastOnlineTime, [last]);
   }
 
   void _getUsersInfo() async {
@@ -155,6 +193,7 @@ class UserProfilePanelLogic extends GetxController {
         val?.email = existUser.email;
         val?.gender = existUser.gender;
         val?.mobile = existUser.mobile;
+        val?.account = existUser.account;
       });
     }
 
@@ -224,6 +263,7 @@ class UserProfilePanelLogic extends GetxController {
         val?.mobile = fullInfo.mobile;
         val?.nickname = fullInfo.nickname;
         val?.faceURL = fullInfo.faceURL;
+        val?.account = fullInfo.account;
         val?.remark = friendInfo?.remark;
         val?.isBlacklist = isBlack;
         val?.isFriendship = isFriendship;
@@ -231,6 +271,15 @@ class UserProfilePanelLogic extends GetxController {
 
       UserCacheManager().addOrUpdateUserInfo(userID, userInfo.value);
     }
+  }
+
+  String get idLineText {
+    final account = userInfo.value.account?.trim();
+    final userID = userInfo.value.userID ?? '';
+    if (account != null && account.isNotEmpty) {
+      return '${StrRes.account}:$account';
+    }
+    return '${StrRes.userID}:$userID';
   }
 
   void _resetAvatar(String url) async {
@@ -363,7 +412,12 @@ class UserProfilePanelLogic extends GetxController {
   }
 
   void copyID() {
-    IMUtils.copy(text: userInfo.value.userID!);
+    final account = userInfo.value.account?.trim();
+    IMUtils.copy(
+      text: (account != null && account.isNotEmpty)
+          ? account
+          : userInfo.value.userID!,
+    );
   }
 
   void addFriend() => AppNavigator.startSendVerificationApplication(

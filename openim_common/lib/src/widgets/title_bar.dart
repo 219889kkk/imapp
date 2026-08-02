@@ -145,6 +145,7 @@ class TitleBar extends StatelessWidget implements PreferredSizeWidget {
     super.key,
     String? title,
     String? member,
+    String? subtitle,
     bool isMultiModel = false,
     bool showCallBtn = true,
     bool isMuted = false,
@@ -181,6 +182,12 @@ class TitleBar extends StatelessWidget implements PreferredSizeWidget {
                               ..maxLines = 1))
                 ],
               ),
+            if (subtitle != null && subtitle.trim().isNotEmpty)
+              subtitle.trim().toText
+                ..style = Styles.ts_8E9AB0_10sp
+                ..maxLines = 1
+                ..overflow = TextOverflow.ellipsis
+                ..textAlign = TextAlign.center,
           ],
         )),
         left = SizedBox(

@@ -295,6 +295,11 @@ class ChatPage extends StatelessWidget {
                   member: logic.typingStatus.value.isEmpty
                       ? logic.memberStr
                       : ' ${logic.typingStatus.value}',
+                  subtitle: logic.typingStatus.value.isEmpty
+                      ? (logic.isSingleChat
+                          ? logic.onlineStatusDesc.value
+                          : null)
+                      : null,
                   isMultiModel: logic.isMultiSelectMode.value,
                   onCloseMultiModel: logic.exitMultiSelectMode,
                   onClickMoreBtn: logic.chatSetup,

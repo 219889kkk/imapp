@@ -90,7 +90,7 @@ class UserProfilePanelPage extends StatelessWidget {
                           !logic.notAllowAddGroupMemberFriend.value)
                     Padding(
                       padding: EdgeInsets.only(top: 4.h),
-                      child: (logic.userInfo.value.userID ?? '').toText
+                      child: logic.idLineText.toText
                         ..style = Styles.ts_8E9AB0_14sp
                         ..onTap = logic.copyID,
                     ),

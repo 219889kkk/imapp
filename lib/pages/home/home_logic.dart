@@ -111,7 +111,31 @@ class HomeLogic extends SuperController {
     getUnhandledFriendApplicationCount();
     getUnhandledGroupApplicationCount();
     cacheLogic.initCallRecords();
+    _subscribeFriendsOnlineStatus();
     super.onReady();
+  }
+
+  /// Subscribe friends' online status so last-online timestamps can be cached
+  /// when they go offline after this session starts.
+  void _subscribeFriendsOnlineStatus() async {
+    try {
+      final friends =
+          await OpenIM.iMManager.friendshipManager.getFriendListMap();
+      final ids = <String>[];
+      for (final item in friends) {
+        if (item is Map && item['userID'] != null) {
+          ids.add(item['userID'].toString());
+        } else if (item is FriendInfo && item.userID != null) {
+          ids.add(item.userID!);
+        }
+      }
+      if (ids.isEmpty) return;
+      // SDK subscription limit is 3000; keep a safe batch.
+      await OpenIM.iMManager.userManager
+          .subscribeUsersStatus(ids.take(500).toList());
+    } catch (e, s) {
+      Logger.print('subscribe friends status failed: $e $s');
+    }
   }
 
   @override

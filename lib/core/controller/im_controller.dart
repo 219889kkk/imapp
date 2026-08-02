@@ -208,6 +208,7 @@ class IMController extends GetxController with IMCallback, OpenIMLive {
         val?.birth = data.birth;
         val?.gender = data.gender;
         val?.signature = data.signature;
+        val?.account = data.account;
       });
     }
   }

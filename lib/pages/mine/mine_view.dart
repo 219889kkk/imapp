@@ -134,7 +134,7 @@ class MinePage extends StatelessWidget {
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        (logic.imLogic.userInfo.value.userID ?? '').toText
+                        logic.idLineText.toText
                           ..style = Styles.ts_8E9AB0_14sp,
                         ImageRes.mineCopy.toImage
                           ..width = 16.w

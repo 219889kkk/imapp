@@ -255,12 +255,7 @@ class Apis {
         },
         options: chatTokenOptions,
       );
-      if (data['users'] is List) {
-        return (data['users'] as List)
-            .map((e) => UserFullInfo.fromJson(e))
-            .toList();
-      }
-      return null;
+      return _parseUserFullInfoList(data);
     } catch (e, s) {
       _catchErrorHelper(e, s);
 
@@ -282,17 +277,39 @@ class Apis {
         },
         options: chatTokenOptions,
       );
-      if (data['users'] is List) {
-        return (data['users'] as List)
-            .map((e) => UserFullInfo.fromJson(e))
-            .toList();
-      }
-      return null;
+      return _parseUserFullInfoList(data);
     } catch (e, s) {
       _catchErrorHelper(e, s);
 
       return [];
     }
+  }
+
+  static List<UserFullInfo>? _parseUserFullInfoList(dynamic data) {
+    if (data is List) {
+      return data
+          .whereType<Map>()
+          .map((e) => UserFullInfo.fromJson(Map<String, dynamic>.from(e)))
+          .toList();
+    }
+    if (data is Map) {
+      for (final key in [
+        'users',
+        'userFullInfoList',
+        'userList',
+        'list',
+        'data',
+      ]) {
+        final list = data[key];
+        if (list is List) {
+          return list
+              .whereType<Map>()
+              .map((e) => UserFullInfo.fromJson(Map<String, dynamic>.from(e)))
+              .toList();
+        }
+      }
+    }
+    return null;
   }
 
   static Future<UserFullInfo?> queryMyFullInfo() async {
@@ -492,10 +509,18 @@ class Apis {
         options: imTokenOptions,
         showErrorToast: false,
       );
+      List? list;
       if (data is List) {
-        return data.map((e) => OnlineStatus.fromJson(e)).toList();
+        list = data;
+      } else if (data is Map && data['users'] is List) {
+        list = data['users'] as List;
       }
-      return [];
+      if (list == null) return [];
+      return list
+          .whereType<Map>()
+          .map((e) =>
+              OnlineStatus.fromJson(Map<String, dynamic>.from(e)))
+          .toList();
     } catch (e, s) {
       Logger.print('getUsersOnlineStatus error: e:$e s:$s');
       return [];

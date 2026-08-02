@@ -23,7 +23,9 @@ class AddContactsBySearchPage extends StatelessWidget {
           SearchBox(
             focusNode: logic.focusNode,
             controller: logic.searchCtrl,
-            hintText: logic.isSearchUser ? StrRes.searchByPhoneAndUid : StrRes.searchIDAddGroup,
+            hintText: logic.isSearchUser
+                ? StrRes.searchByPhoneAndUid
+                : StrRes.searchIDAddGroup,
             enabled: true,
             autofocus: true,
             margin: EdgeInsets.symmetric(horizontal: 17.w, vertical: 10.h),
@@ -32,11 +34,15 @@ class AddContactsBySearchPage extends StatelessWidget {
           Divider(color: Styles.c_E8EAEF, height: 1.h),
           Obx(() => Expanded(
                 child: logic.isSearchUser
-                    ? (logic.isNotFoundUser ? _buildNotFoundView() : _buildUserListView())
+                    ? (logic.isNotFoundUser
+                        ? _buildNotFoundView()
+                        : _buildUserListView())
                     : (logic.isNotFoundGroup
                         ? _buildNotFoundView()
                         : (Column(
-                            children: logic.groupInfoList.map((e) => _buildItemView(e)).toList(),
+                            children: logic.groupInfoList
+                                .map((e) => _buildItemView(e))
+                                .toList(),
                           ))),
               ))
         ],
@@ -54,8 +60,50 @@ class AddContactsBySearchPage extends StatelessWidget {
           itemCount: logic.userInfoList.length,
           itemBuilder: (_, index) {
             final userInfo = logic.userInfoList.elementAt(index);
-            return _buildItemView(userInfo);
+            return _buildUserItemView(userInfo);
           },
+        ),
+      );
+
+  Widget _buildUserItemView(UserFullInfo userInfo) => InkWell(
+        onTap: () => logic.viewInfo(userInfo),
+        child: Container(
+          padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 10.h),
+          decoration: BoxDecoration(
+            border: BorderDirectional(
+              bottom: BorderSide(color: Styles.c_E8EAEF, width: 1.h),
+            ),
+          ),
+          child: Row(
+            children: [
+              AvatarView(
+                url: userInfo.faceURL,
+                text: userInfo.nickname,
+                width: 42.w,
+                height: 42.h,
+              ),
+              12.horizontalSpace,
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    (userInfo.nickname?.isNotEmpty == true
+                            ? userInfo.nickname!
+                            : (userInfo.account ?? userInfo.userID ?? ''))
+                        .toText
+                      ..style = Styles.ts_0C1C33_17sp
+                      ..maxLines = 1
+                      ..overflow = TextOverflow.ellipsis,
+                    4.verticalSpace,
+                    logic.getShowSubtitle(userInfo).toText
+                      ..style = Styles.ts_8E9AB0_12sp
+                      ..maxLines = 1
+                      ..overflow = TextOverflow.ellipsis,
+                  ],
+                ),
+              ),
+            ],
+          ),
         ),
       );
 
@@ -71,7 +119,7 @@ class AddContactsBySearchPage extends StatelessWidget {
           height: 49.h,
           child: Row(
             children: [
-              (logic.isSearchUser ? ImageRes.searchPersonIcon : ImageRes.searchGroupIcon).toImage
+              ImageRes.searchGroupIcon.toImage
                 ..width = 24.w
                 ..height = 24.h,
               12.horizontalSpace,
@@ -86,6 +134,8 @@ class AddContactsBySearchPage extends StatelessWidget {
 
   Widget _buildNotFoundView() => Container(
         padding: EdgeInsets.symmetric(vertical: 12.h),
-        child: (logic.isSearchUser ? StrRes.noFoundUser : StrRes.noFoundGroup).toText..style = Styles.ts_8E9AB0_17sp,
+        child: (logic.isSearchUser ? StrRes.noFoundUser : StrRes.noFoundGroup)
+            .toText
+          ..style = Styles.ts_8E9AB0_17sp,
       );
 }
