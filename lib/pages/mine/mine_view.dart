@@ -88,7 +88,6 @@ class MinePage extends StatelessWidget {
 
     return ThemeAware(
       builder: (context) => Scaffold(
-        primary: false,
         backgroundColor: Styles.pageBackground,
         body: Platform.isIOS
             ? SingleChildScrollView(

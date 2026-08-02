@@ -16,7 +16,6 @@ class ContactsPage extends StatelessWidget {
   Widget build(BuildContext context) {
     return ThemeAware(
       builder: (context) => Scaffold(
-        primary: false,
         appBar: TitleBar.contacts(
           onClickAddContacts: logic.addContacts,
         ),

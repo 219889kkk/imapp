@@ -24,13 +24,13 @@ class _HomePageState extends State<HomePage> {
   @override
   void initState() {
     super.initState();
-    // Create tab pages once. Rebuilding PersistentTabView (or IndexedStack
-    // children) on every unread-count change caused a blank home after login.
+    // Create tab pages once. Rebuilding tab children on unread-count changes
+    // caused a blank home after login.
     _pages = [
-      SizedBox.expand(child: ConversationPage()),
-      SizedBox.expand(child: ContactsPage()),
-      SizedBox.expand(child: MomentsFeedPage()),
-      SizedBox.expand(child: MinePage()),
+      ConversationPage(),
+      ContactsPage(),
+      MomentsFeedPage(),
+      MinePage(),
     ];
   }
 
@@ -38,52 +38,57 @@ class _HomePageState extends State<HomePage> {
   Widget build(BuildContext context) {
     final logic = Get.find<HomeLogic>();
     return ThemeAware(
-      builder: (_) => Scaffold(
-        backgroundColor: Styles.pageBackground,
-        body: Obx(
-          () => IndexedStack(
-            index: logic.index.value,
-            children: _pages,
-          ),
-        ),
-        bottomNavigationBar: Obx(
-          () => BottomNavigationBar(
-            type: BottomNavigationBarType.fixed,
-            backgroundColor: Styles.c_FFFFFF,
-            selectedItemColor: Styles.c_0089FF,
-            unselectedItemColor: Styles.c_8E9AB0,
-            selectedFontSize: 10,
-            unselectedFontSize: 10,
-            currentIndex: logic.index.value,
-            onTap: logic.switchTab,
-            items: [
-              BottomNavigationBarItem(
-                icon: _tabIcon(ImageRes.homeTab1Nor, logic.unreadMsgCount.value),
-                activeIcon:
-                    _tabIcon(ImageRes.homeTab1Sel, logic.unreadMsgCount.value),
-                label: StrRes.home,
+      builder: (_) => ColoredBox(
+        color: Styles.pageBackground,
+        child: Column(
+          children: [
+            Expanded(
+              child: Obx(
+                () => IndexedStack(
+                  index: logic.index.value,
+                  children: _pages,
+                ),
               ),
-              BottomNavigationBarItem(
-                icon:
-                    _tabIcon(ImageRes.homeTab2Nor, logic.unhandledCount.value),
-                activeIcon:
-                    _tabIcon(ImageRes.homeTab2Sel, logic.unhandledCount.value),
-                label: StrRes.contacts,
-              ),
-              BottomNavigationBarItem(
-                icon: _tabIcon(ImageRes.homeTab3Nor, 0),
-                activeIcon: _tabIcon(ImageRes.homeTab3Sel, 0),
-                label: StrRes.workingCircle,
-              ),
-              BottomNavigationBarItem(
-                icon: _tabIcon(ImageRes.homeTab4Nor, 0),
-                activeIcon: _tabIcon(ImageRes.homeTab4Sel, 0),
-                label: StrRes.mine,
-              ),
-            ],
-          ),
+            ),
+            Obx(() => _buildBottomBar(logic)),
+          ],
         ),
       ),
+    );
+  }
+
+  Widget _buildBottomBar(HomeLogic logic) {
+    return BottomNavigationBar(
+      type: BottomNavigationBarType.fixed,
+      backgroundColor: Styles.c_FFFFFF,
+      selectedItemColor: Styles.c_0089FF,
+      unselectedItemColor: Styles.c_8E9AB0,
+      selectedFontSize: 10,
+      unselectedFontSize: 10,
+      currentIndex: logic.index.value,
+      onTap: logic.switchTab,
+      items: [
+        BottomNavigationBarItem(
+          icon: _tabIcon(ImageRes.homeTab1Nor, logic.unreadMsgCount.value),
+          activeIcon: _tabIcon(ImageRes.homeTab1Sel, logic.unreadMsgCount.value),
+          label: StrRes.home,
+        ),
+        BottomNavigationBarItem(
+          icon: _tabIcon(ImageRes.homeTab2Nor, logic.unhandledCount.value),
+          activeIcon: _tabIcon(ImageRes.homeTab2Sel, logic.unhandledCount.value),
+          label: StrRes.contacts,
+        ),
+        BottomNavigationBarItem(
+          icon: _tabIcon(ImageRes.homeTab3Nor, 0),
+          activeIcon: _tabIcon(ImageRes.homeTab3Sel, 0),
+          label: StrRes.workingCircle,
+        ),
+        BottomNavigationBarItem(
+          icon: _tabIcon(ImageRes.homeTab4Nor, 0),
+          activeIcon: _tabIcon(ImageRes.homeTab4Sel, 0),
+          label: StrRes.mine,
+        ),
+      ],
     );
   }
 
