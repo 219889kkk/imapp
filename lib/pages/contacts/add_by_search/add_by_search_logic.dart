@@ -1,9 +1,11 @@
+import 'package:flutter/material.dart';
 import 'package:flutter_openim_sdk/flutter_openim_sdk.dart';
 import 'package:get/get.dart';
 import 'package:openim/pages/contacts/group_profile_panel/group_profile_panel_logic.dart';
 import 'package:openim/routes/app_navigator.dart';
 import 'package:openim_common/openim_common.dart';
 import 'package:pull_to_refresh_new/pull_to_refresh.dart';
+import 'package:sprintf/sprintf.dart';
 
 enum SearchType {
   user,
