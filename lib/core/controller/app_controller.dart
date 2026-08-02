@@ -62,8 +62,10 @@ class AppController extends GetxController
   Future<void> runningBackground(bool run) async {
     Logger.print('-----App running background : $run-------------');
 
-    if (isRunningBackground && !run) {}
     isRunningBackground = run;
+    if (Get.isRegistered<IMController>()) {
+      Get.find<IMController>().backgroundSubject.add(run);
+    }
     if (!run) {
       _cancelAllNotifications();
     }
@@ -185,7 +187,7 @@ class AppController extends GetxController
         : StrRes.voiceCallInviteHint;
 
     String title = '航讯';
-    String body = StrRes.newMessageHint;
+    String body = StrRes.offlineCallMessage;
     if (DataSp.getShowNotificationDetail()) {
       String nickname = invitation?.inviterUserID ?? '';
       try {
@@ -202,10 +204,33 @@ class AppController extends GetxController
       body = '$nickname$hint';
     }
 
-    await _showLocalNotification(
-      id: _fallbackNotificationID,
-      title: title,
-      body: body,
+    final beepOn = _isAllowBeep;
+    final androidDetails = AndroidNotificationDetails(
+      beepOn ? 'call_v1' : 'call_silent',
+      beepOn ? 'Incoming Calls' : 'Incoming Calls (Silent)',
+      channelDescription: '航讯来电通知',
+      importance: Importance.max,
+      priority: Priority.max,
+      category: AndroidNotificationCategory.call,
+      fullScreenIntent: true,
+      playSound: beepOn,
+      sound: beepOn
+          ? const RawResourceAndroidNotificationSound('notification_ring')
+          : null,
+      ongoing: true,
+      autoCancel: false,
+    );
+    final iosDetails = DarwinNotificationDetails(
+      presentAlert: true,
+      presentBadge: true,
+      presentSound: beepOn,
+      interruptionLevel: InterruptionLevel.timeSensitive,
+    );
+    await flutterLocalNotificationsPlugin.show(
+      _fallbackNotificationID,
+      title,
+      body,
+      NotificationDetails(android: androidDetails, iOS: iosDetails),
     );
   }
 

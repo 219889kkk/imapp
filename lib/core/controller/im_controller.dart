@@ -73,45 +73,17 @@ class IMController extends GetxController with IMCallback, OpenIMLive {
           onUserStatusChanged: userStausChanged))
       ..messageManager.setAdvancedMsgListener(OnAdvancedMsgListener(
         onRecvC2CReadReceipt: recvC2CMessageReadReceipt,
-        onRecvNewMessage: recvNewMessage,
+        onRecvNewMessage: (msg) {
+          if (_dispatchCallingMessage(msg)) return;
+          recvNewMessage(msg);
+        },
         onNewRecvMessageRevoked: recvMessageRevoked,
-        onRecvOfflineNewMessage: recvOfflineMessage,
+        onRecvOfflineNewMessage: (msg) {
+          if (_dispatchCallingMessage(msg)) return;
+          recvOfflineMessage(msg);
+        },
         onRecvOnlineOnlyMessage: (msg) {
-          if (msg.isCustomType) {
-            final data = msg.customElem!.data;
-            final map = jsonDecode(data!);
-            final customType = map['customType'];
-            if (customType == CustomMessageType.callingInvite ||
-                customType == CustomMessageType.callingAccept ||
-                customType == CustomMessageType.callingReject ||
-                customType == CustomMessageType.callingCancel ||
-                customType == CustomMessageType.callingHungup) {
-              final signaling = SignalingInfo(
-                  invitation: InvitationInfo.fromJson(map['data']));
-              signaling.userID = signaling.invitation?.inviterUserID;
-
-              switch (customType) {
-                case CustomMessageType.callingInvite:
-                  receiveNewInvitation(signaling);
-                  if (Get.isRegistered<AppController>()) {
-                    Get.find<AppController>().showCallNotification(signaling);
-                  }
-                  break;
-                case CustomMessageType.callingAccept:
-                  inviteeAccepted(signaling);
-                  break;
-                case CustomMessageType.callingReject:
-                  inviteeRejected(signaling);
-                  break;
-                case CustomMessageType.callingCancel:
-                  invitationCancelled(signaling);
-                  break;
-                case CustomMessageType.callingHungup:
-                  beHangup(signaling);
-                  break;
-              }
-            }
-          }
+          _dispatchCallingMessage(msg);
         },
       ))
       ..messageManager.setMsgSendProgressListener(OnMsgSendProgressListener(
@@ -183,6 +155,63 @@ class IMController extends GetxController with IMCallback, OpenIMLive {
       await _handleLoginRepeatError(e);
 
       return Future.error(e, s);
+    }
+  }
+
+  /// Returns true when the message is a calling signaling payload.
+  bool _dispatchCallingMessage(Message msg) {
+    if (!msg.isCustomType) return false;
+    final raw = msg.customElem?.data;
+    if (raw == null || raw.isEmpty) return false;
+    try {
+      final map = jsonDecode(raw);
+      if (map is! Map) return false;
+      final customType = map['customType'];
+      if (customType != CustomMessageType.callingInvite &&
+          customType != CustomMessageType.callingAccept &&
+          customType != CustomMessageType.callingReject &&
+          customType != CustomMessageType.callingCancel &&
+          customType != CustomMessageType.callingHungup) {
+        return false;
+      }
+
+      final data = map['data'];
+      if (data is! Map) return false;
+      final signaling = SignalingInfo(
+        invitation: InvitationInfo.fromJson(Map<String, dynamic>.from(data)),
+      );
+      signaling.userID = signaling.invitation?.inviterUserID;
+
+      switch (customType) {
+        case CustomMessageType.callingInvite:
+          final sendTime = msg.sendTime ?? 0;
+          final now = DateTime.now().millisecondsSinceEpoch;
+          // Ignore stale invites after sync (already timed out).
+          if (sendTime > 0 && now - sendTime > 60 * 1000) {
+            return true;
+          }
+          receiveNewInvitation(signaling);
+          if (Get.isRegistered<AppController>()) {
+            Get.find<AppController>().showCallNotification(signaling);
+          }
+          break;
+        case CustomMessageType.callingAccept:
+          inviteeAccepted(signaling);
+          break;
+        case CustomMessageType.callingReject:
+          inviteeRejected(signaling);
+          break;
+        case CustomMessageType.callingCancel:
+          invitationCancelled(signaling);
+          break;
+        case CustomMessageType.callingHungup:
+          beHangup(signaling);
+          break;
+      }
+      return true;
+    } catch (e, s) {
+      Logger.print('dispatch calling message error: $e $s');
+      return false;
     }
   }
 

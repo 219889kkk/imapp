@@ -4,10 +4,12 @@ import 'dart:io';
 
 import 'package:collection/collection.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_openim_live_alert/flutter_openim_live_alert.dart';
 import 'package:flutter_openim_sdk/flutter_openim_sdk.dart';
 import 'package:get/get.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:openim_common/openim_common.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:rxdart/rxdart.dart';
 import 'package:uuid/uuid.dart';
 
@@ -71,11 +73,15 @@ mixin OpenIMLive {
   onInitLive() async {
     _signalingListener();
     _insertSignalingMessageListener();
+    _bindLiveAlertButtons();
     backgroundSubject.listen((background) {
       _isRunningBackground = background;
       if (!_isRunningBackground) {
+        FlutterOpenimLiveAlert.closeLiveAlert();
         if (_beCalledEvent != null) {
-          signalingSubject.add(_beCalledEvent!);
+          final pending = _beCalledEvent!;
+          _beCalledEvent = null;
+          signalingSubject.add(pending);
         }
       }
     });
@@ -87,12 +93,33 @@ mixin OpenIMLive {
     });
   }
 
+  void _bindLiveAlertButtons() {
+    FlutterOpenimLiveAlert.buttonEvent(
+      activityName: 'io.openim.MainActivity',
+      onAccept: () {
+        // Keep pending invite; returning to foreground will present the call UI.
+        _autoPickup = true;
+      },
+      onReject: () {
+        final pending = _beCalledEvent;
+        _beCalledEvent = null;
+        _stopSound();
+        if (pending != null) {
+          onTapReject(pending.data..userID = OpenIM.iMManager.userID);
+        }
+      },
+    );
+  }
+
   Stream<CallEvent> get _stream => signalingSubject
       .stream /*.where((event) => LiveClient.dispatchSignaling(event))*/;
 
   _signalingListener() => _stream.listen(
         (event) async {
-          _beCalledEvent = null;
+          if (event.state != CallState.beCalled) {
+            _beCalledEvent = null;
+            FlutterOpenimLiveAlert.closeLiveAlert();
+          }
           if (event.state == CallState.beCalled) {
             _playSound();
             final mediaType = event.data.invitation!.mediaType;
@@ -103,15 +130,32 @@ mixin OpenIMLive {
                 ? CallObj.single
                 : CallObj.group;
 
-            if (Platform.isAndroid && _isRunningBackground) {
+            if (_isRunningBackground) {
               _beCalledEvent = event;
-              if (await Permissions.checkSystemAlertWindow()) {
-                return;
+              if (Platform.isAndroid) {
+                final hasOverlay = await Permissions.checkSystemAlertWindow();
+                if (!hasOverlay) {
+                  await Permissions.request([Permission.systemAlertWindow]);
+                }
+                await FlutterOpenimLiveAlert.showLiveAlert(
+                  title: callType == CallType.video
+                      ? StrRes.videoCallInviteHint
+                      : StrRes.voiceCallInviteHint,
+                  rejectText: StrRes.reject,
+                  acceptText: StrRes.pickUp,
+                );
               }
+              // iOS / no-overlay: keep pending invite and show UI when app returns.
+              return;
             }
             _beCalledEvent = null;
+            final overlayContext = Get.overlayContext;
+            if (overlayContext == null) {
+              _beCalledEvent = event;
+              return;
+            }
             OpenIMLiveClient().start(
-              Get.overlayContext!,
+              overlayContext,
               callEventSubject: signalingSubject,
               roomID: event.data.invitation!.roomID!,
               inviteeUserIDList: event.data.invitation!.inviteeUserIDList!,
@@ -258,11 +302,14 @@ mixin OpenIMLive {
     };
     final message = await OpenIM.iMManager.messageManager.createCustomMessage(
         data: jsonEncode(data), extension: '', description: '');
+    final isVideo = signaling.invitation!.mediaType == 'video';
     OpenIM.iMManager.messageManager.sendMessage(
-        message: message,
-        offlinePushInfo: OfflinePushInfo(),
-        userID: signaling.invitation!.inviteeUserIDList!.first,
-        isOnlineOnly: true);
+      message: message,
+      offlinePushInfo: Config.offlineCallPushInfo(isVideo: isVideo),
+      userID: signaling.invitation!.inviteeUserIDList!.first,
+      // Keep WS delivery when online; also allow offline push when away.
+      isOnlineOnly: false,
+    );
     final certificate = await Apis.getTokenForRTC(
         signaling.invitation!.roomID!, OpenIM.iMManager.userID);
 
@@ -276,12 +323,13 @@ mixin OpenIMLive {
     };
     final message = await OpenIM.iMManager.messageManager.createCustomMessage(
         data: jsonEncode(data), extension: '', description: '');
+    final isVideo = signaling.invitation!.mediaType == 'video';
     for (final userID in signaling.invitation!.inviteeUserIDList!) {
       OpenIM.iMManager.messageManager.sendMessage(
         message: message,
-        offlinePushInfo: OfflinePushInfo(),
+        offlinePushInfo: Config.offlineCallPushInfo(isVideo: isVideo),
         userID: userID,
-        isOnlineOnly: true,
+        isOnlineOnly: false,
       );
     }
     final certificate = await Apis.getTokenForRTC(

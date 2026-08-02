@@ -66,6 +66,17 @@ class Config {
         iOSPushSound: 'default',
       );
 
+  static OfflinePushInfo offlineCallPushInfo({required bool isVideo}) =>
+      OfflinePushInfo(
+        title: _appName,
+        desc: isVideo
+            ? StrRes.videoCallInviteHint
+            : StrRes.voiceCallInviteHint,
+        iOSBadgeCount: true,
+        iOSPushSound: 'default',
+        ex: 'callingInvite',
+      );
+
   static const friendScheme = "io.openim.app/addFriend/";
   static const groupScheme = "io.openim.app/joinGroup/";
 
