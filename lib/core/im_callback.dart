@@ -227,6 +227,8 @@ mixin IMCallback {
 
   void friendApplicationAdded(FriendApplicationInfo u) {
     friendApplicationChangedSubject.addSafely(u);
+    final nickname = u.fromNickname ?? u.fromUserID ?? '';
+    initLogic.showFriendApplicationNotification(nickname: nickname);
   }
 
   void friendApplicationDeleted(FriendApplicationInfo u) {

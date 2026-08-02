@@ -67,10 +67,10 @@ class ConversationLogic extends GetxController {
       } else if (status == IMSdkStatus.syncEnded ||
           status == IMSdkStatus.syncFailed) {
         EasyLoading.dismiss();
-        if (reInstall) {
+        if (status == IMSdkStatus.syncEnded) {
           onRefresh();
-          reInstall = false;
         }
+        reInstall = false;
       }
     });
     super.onInit();
@@ -92,6 +92,7 @@ class ConversationLogic extends GetxController {
     for (var newValue in newList) {
       Logger.print(
           '======== conversation changed: ${newValue.toJson()} ========');
+      ChatMessagePrefetchCache.invalidate(newValue);
       list.removeWhere((e) => e.conversationID == newValue.conversationID);
     }
 
@@ -427,9 +428,14 @@ class ConversationLogic extends GetxController {
   }
 
   void getFirstPage() async {
-    final result = homeLogic.conversationsAtFirstPage;
-
-    list.assignAll(result);
+    try {
+      final result = await getConversationFirstPage();
+      list.assignAll(result);
+      homeLogic.conversationsAtFirstPage = List.of(result);
+    } catch (e, s) {
+      Logger.print('getFirstPage error: $e $s');
+      list.assignAll(homeLogic.conversationsAtFirstPage);
+    }
     _sortConversationList();
     _schedulePrefetchFirstPages();
   }

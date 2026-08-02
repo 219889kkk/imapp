@@ -769,6 +769,20 @@ class IMUtils {
                 content = '[${StrRes.unsupportedMessage}]';
               }
               break;
+            case CustomMessageType.callingInvite:
+            case CustomMessageType.callingAccept:
+            case CustomMessageType.callingReject:
+            case CustomMessageType.callingCancel:
+            case CustomMessageType.callingHungup:
+              {
+                final data = map['data'];
+                final mediaType =
+                    data is Map ? data['mediaType']?.toString() : null;
+                content = mediaType == 'video'
+                    ? '[${StrRes.callVideo}]'
+                    : '[${StrRes.callVoice}]';
+              }
+              break;
             default:
               content = '[${StrRes.unsupportedMessage}]';
               break;

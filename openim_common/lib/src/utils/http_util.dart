@@ -305,14 +305,22 @@ class HttpUtil {
         {'operationID': currentOperationID, 'fileType': fileType, 'file': mf});
 
     try {
+      final longTimeout = fileType == 2 || fileType == 4;
       var resp = await dio.post<Map<String, dynamic>>(
         '/third/minio_upload',
         data: formData,
-        options: Options(headers: {
-          'token': token,
-          'operationID': currentOperationID,
-          'X-Request-Api': Config.imApiUrl,
-        }),
+        options: Options(
+          headers: {
+            'token': token,
+            'operationID': currentOperationID,
+            'X-Request-Api': Config.imApiUrl,
+          },
+          sendTimeout:
+              longTimeout ? const Duration(minutes: 5) : dio.options.sendTimeout,
+          receiveTimeout: longTimeout
+              ? const Duration(minutes: 5)
+              : dio.options.receiveTimeout,
+        ),
       );
       final body = resp.data;
       final errCode = body?['errCode'];

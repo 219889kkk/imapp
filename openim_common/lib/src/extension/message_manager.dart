@@ -93,6 +93,23 @@ extension MessageExt on Message {
 
   bool get isCustomType => contentType == MessageType.custom;
 
+  /// RTC signaling messages (invite/accept/reject/cancel/hangup).
+  /// They should not render as normal chat bubbles.
+  bool get isCallingSignalingType {
+    if (!isCustomType) return false;
+    try {
+      final map = json.decode(customElem!.data!);
+      final customType = map['customType'];
+      return customType == CustomMessageType.callingInvite ||
+          customType == CustomMessageType.callingAccept ||
+          customType == CustomMessageType.callingReject ||
+          customType == CustomMessageType.callingCancel ||
+          customType == CustomMessageType.callingHungup;
+    } catch (_) {
+      return false;
+    }
+  }
+
   bool get isRevokeType => contentType == MessageType.revokeMessageNotification;
 
   bool get isNotificationType => contentType! >= 1000;

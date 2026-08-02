@@ -218,7 +218,7 @@ class ChatPage extends StatelessWidget {
       onSend: (v) => logic.sendTextMsg(),
       toolbox: ChatToolBox(
         onTapAlbum: logic.onTapAlbum,
-        onTapCall: logic.call,
+        onTapCall: logic.callVideo,
         onTapFile: logic.onTapFile,
         onTapCard: logic.onTapCarte,
         onTapCamera: logic.onTapCamera,
@@ -304,7 +304,7 @@ class ChatPage extends StatelessWidget {
                   onCloseMultiModel: logic.exitMultiSelectMode,
                   onClickMoreBtn: logic.chatSetup,
                   onClickCallBtn:
-                      logic.isMultiSelectMode.value ? null : logic.call,
+                      logic.isMultiSelectMode.value ? null : logic.callVoice,
                 )),
           ),
           body: SafeArea(

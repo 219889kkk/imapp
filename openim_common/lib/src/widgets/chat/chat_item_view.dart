@@ -198,6 +198,9 @@ class _ChatItemViewState extends State<ChatItemView> {
     bool isBubbleBg = false;
 
     if (_message.isCustomType) {
+      if (_message.isCallingSignalingType) {
+        return const SizedBox.shrink();
+      }
       final customInfo = widget.customTypeBuilder?.call(context, _message);
       if (customInfo != null) {
         if (!customInfo.needChatItemContainer) {

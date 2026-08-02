@@ -31,11 +31,6 @@ class PrivacySecuritySetupPage extends StatelessWidget {
                 isTopRadius: true,
               ),
               MineSettingItem(
-                label: StrRes.qrcode,
-                onTap: logic.myQrcode,
-                showRightArrow: true,
-              ),
-              MineSettingItem(
                 label: StrRes.blacklist,
                 onTap: logic.blacklist,
                 showRightArrow: true,

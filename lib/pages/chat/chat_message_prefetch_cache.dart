@@ -32,12 +32,22 @@ class ChatMessagePrefetchCache {
     return value;
   }
 
+  static void invalidate(ConversationInfo conversationInfo) {
+    _cache.remove(_key(conversationInfo));
+  }
+
   static Future<PrefetchedChatMessages> prefetch(
     ConversationInfo conversationInfo,
   ) {
     final key = _key(conversationInfo);
     final cached = peek(conversationInfo);
-    if (cached != null) return Future.value(cached);
+    // Skip empty cache so a race during sync cannot stick forever.
+    if (cached != null && cached.messages.isNotEmpty) {
+      return Future.value(cached);
+    }
+    if (cached != null && cached.messages.isEmpty && cached.isEnd) {
+      return Future.value(cached);
+    }
 
     final running = _inFlight[key];
     if (running != null) return running;
@@ -53,7 +63,10 @@ class ChatMessagePrefetchCache {
         messages: List<Message>.of(result.messageList ?? const []),
         isEnd: result.isEnd == true,
       );
-      _put(key, value);
+      // Only cache non-empty or confirmed end results.
+      if (value.messages.isNotEmpty || value.isEnd) {
+        _put(key, value);
+      }
       return value;
     }).catchError((Object error, StackTrace stackTrace) {
       Logger.print('prefetch chat messages failed: $key, $error');

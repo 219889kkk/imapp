@@ -9,7 +9,6 @@ import 'package:openim_common/openim_common.dart';
 
 import '../contacts/contacts_view.dart';
 import '../conversation/conversation_view.dart';
-import '../earn/earn_view.dart';
 import '../mine/mine_view.dart';
 import '../moments/feed/moments_feed_view.dart';
 import 'home_logic.dart';
@@ -34,13 +33,6 @@ class HomePage extends StatelessWidget {
           item: ItemConfig(
             icon: ImageRes.homeTab2Sel.toImage,
             title: StrRes.contacts,
-          ),
-        ),
-        PersistentTabConfig(
-          screen: EarnPage(),
-          item: ItemConfig(
-            icon: ImageRes.homeTabEarnSel.toImage,
-            title: StrRes.earnMoney,
           ),
         ),
         PersistentTabConfig(
@@ -71,11 +63,6 @@ class HomePage extends StatelessWidget {
           activeIcon:
               _tabIcon(ImageRes.homeTab2Sel, logic.unhandledCount.value),
           label: StrRes.contacts,
-        ),
-        GlassTab(
-          icon: _tabIcon(ImageRes.homeTabEarnNor, 0, size: 36),
-          activeIcon: _tabIcon(ImageRes.homeTabEarnSel, 0, size: 36),
-          label: StrRes.earnMoney,
         ),
         GlassTab(
           icon: _tabIcon(ImageRes.homeTab3Nor, 0),

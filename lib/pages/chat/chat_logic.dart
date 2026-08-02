@@ -26,6 +26,7 @@ import '../../core/im_callback.dart';
 import '../../routes/app_navigator.dart';
 import '../contacts/select_contacts/select_contacts_logic.dart';
 import '../conversation/conversation_logic.dart';
+import 'chat_message_prefetch_cache.dart';
 import 'group_setup/group_member_list/group_member_list_logic.dart';
 
 class ChatLogic extends SuperController {
@@ -220,6 +221,7 @@ class ChatLogic extends SuperController {
     );
     nickname.value = conversationInfo.showName ?? '';
     faceUrl.value = conversationInfo.faceURL ?? '';
+    appLogic.viewingConversationID = conversationInfo.conversationID;
     _setSdkSyncDataListener();
 
     conversationSub = imLogic.conversationChangedSubject.listen((value) {
@@ -240,7 +242,7 @@ class ChatLogic extends SuperController {
             final nickname = _resolveTypingNickname(message.sendID);
             _showTypingStatus(nickname: nickname);
           }
-        } else {
+        } else if (!message.isCallingSignalingType) {
           if (!messageList.contains(message) &&
               !scrollingCacheMessageList.contains(message)) {
             _isReceivedMessageWhenSyncing = true;
@@ -541,18 +543,64 @@ class ChatLogic extends SuperController {
     required String snapshotPath,
     bool sendNow = true,
   }) async {
-    final message =
-        await OpenIM.iMManager.messageManager.createVideoMessageFromFullPath(
-      videoPath: videoPath,
-      videoType: videoType,
-      duration: duration,
-      snapshotPath: snapshotPath,
-    );
-    if (sendNow) {
-      await _sendMessage(message);
-    } else {
-      messageList.add(message);
-      tempMessages.add(message);
+    try {
+      final videoFile = File(videoPath);
+      if (!await videoFile.exists() || await videoFile.length() == 0) {
+        IMViews.showToast(StrRes.networkError);
+        return;
+      }
+      final snapshotFile = File(snapshotPath);
+      if (!await snapshotFile.exists()) {
+        IMViews.showToast(StrRes.networkError);
+        return;
+      }
+
+      final videoName = videoPath.substring(videoPath.lastIndexOf('/') + 1);
+      final snapshotName =
+          snapshotPath.substring(snapshotPath.lastIndexOf('/') + 1);
+      final videoUrl = await HttpUtil.uploadFileForMinio(
+        path: videoPath,
+        fileName: videoName,
+        fileType: 2,
+      );
+      final snapshotUrl = await HttpUtil.uploadFileForMinio(
+        path: snapshotPath,
+        fileName: snapshotName,
+        fileType: 1,
+      );
+
+      final message =
+          await OpenIM.iMManager.messageManager.createVideoMessageByURL(
+        videoElem: VideoElem(
+          videoPath: videoPath,
+          videoUUID: videoName,
+          videoUrl: videoUrl,
+          videoType: videoType,
+          videoSize: await videoFile.length(),
+          duration: duration,
+          snapshotPath: snapshotPath,
+          snapshotUUID: snapshotName,
+          snapshotUrl: snapshotUrl,
+          snapshotSize: await snapshotFile.length(),
+        ),
+      );
+      if (sendNow) {
+        await _sendMessage(message, sendNotOss: true);
+      } else {
+        messageList.add(message);
+        tempMessages.add(message);
+      }
+    } catch (e, s) {
+      Logger.print('sendVideo error: $e $s');
+      final detail = '$e';
+      final message = detail.contains('minio_upload') ||
+              detail.contains('token') ||
+              detail.contains('Connection')
+          ? detail
+          : '${StrRes.networkError} ($detail)';
+      IMViews.showToast(
+        message.length > 120 ? message.substring(0, 120) : message,
+      );
     }
   }
 
@@ -1420,6 +1468,10 @@ class ChatLogic extends SuperController {
   void onClose() {
     sendTypingMsg();
     _clearUnreadCount();
+    if (appLogic.viewingConversationID == conversationInfo.conversationID) {
+      appLogic.viewingConversationID = null;
+    }
+    ChatMessagePrefetchCache.invalidate(conversationInfo);
     inputCtrl.dispose();
     focusNode.dispose();
     forceCloseToolbox.close();
@@ -1646,7 +1698,9 @@ class ChatLogic extends SuperController {
     return null;
   }
 
-  void call() async {
+  void call() => callVoice();
+
+  void callVoice() async {
     if (rtcIsBusy) {
       IMViews.showToast(StrRes.callingBusy);
       return;
@@ -1654,14 +1708,35 @@ class ChatLogic extends SuperController {
 
     closeToolbox();
 
-    IMViews.openIMCallSheet(nickname.value, (index) {
+    await Permissions.cameraAndMicrophone(() async {
       if (isGroupChat) {
-        _groupCall(index == 0 ? CallType.audio : CallType.video);
+        await _groupCall(CallType.audio);
         return;
       }
       imLogic.call(
         callObj: CallObj.single,
-        callType: index == 0 ? CallType.audio : CallType.video,
+        callType: CallType.audio,
+        inviteeUserIDList: [if (isSingleChat) userID!],
+      );
+    });
+  }
+
+  void callVideo() async {
+    if (rtcIsBusy) {
+      IMViews.showToast(StrRes.callingBusy);
+      return;
+    }
+
+    closeToolbox();
+
+    await Permissions.cameraAndMicrophone(() async {
+      if (isGroupChat) {
+        await _groupCall(CallType.video);
+        return;
+      }
+      imLogic.call(
+        callObj: CallObj.single,
+        callType: CallType.video,
         inviteeUserIDList: [if (isSingleChat) userID!],
       );
     });
@@ -1770,7 +1845,9 @@ class ChatLogic extends SuperController {
 
       return false;
     }
-    list = result.messageList!;
+    list = result.messageList!
+        .where((e) => !e.isCallingSignalingType)
+        .toList();
     if (_isFirstLoad) {
       _isFirstLoad = false;
       // remove the message that has been timed down
@@ -1794,7 +1871,9 @@ class ChatLogic extends SuperController {
       startMsg: null,
     );
     if (result.messageList == null || result.messageList!.isEmpty) return;
-    final list = result.messageList!;
+    final list = result.messageList!
+        .where((e) => !e.isCallingSignalingType)
+        .toList();
 
     final offset = scrollController.offset;
     messageList.assignAll(list);
@@ -1813,17 +1892,18 @@ class ChatLogic extends SuperController {
   void _applyPrefetchedMessages(Object? value, bool isEnd) {
     if (value is! List<Message>) return;
 
-    shouldAutoLoadInitialMessages = false;
     hasMoreHistory = !isEnd;
-    if (value.isEmpty) {
-      if (isEnd) _isFirstLoad = false;
+    final visible = value.where((e) => !e.isCallingSignalingType).toList();
+    if (visible.isEmpty) {
+      // Keep auto-load so we fetch from SDK instead of sticking on empty cache.
       return;
     }
 
+    shouldAutoLoadInitialMessages = false;
     _isFirstLoad = false;
-    messageList.assignAll(value);
+    messageList.assignAll(visible);
     scrollBottom();
-    _deferGroupPostMessageWork(value);
+    _deferGroupPostMessageWork(visible);
   }
 
   void _deferGroupPostMessageWork(Iterable<Message> messages) {

@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:get/get.dart';
@@ -27,77 +29,87 @@ class MinePage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final content = Column(
+      children: [
+        Stack(
+          children: [
+            Container(
+              height: 138.h,
+              width: 1.sw,
+              color: Styles.c_0089FF,
+              child: ImageRes.mineHeaderBg.toImage,
+            ),
+            Obx(() => _buildMyInfoView()),
+          ],
+        ),
+        10.verticalSpace,
+        _buildMenuGroup([
+          _MineMenuItem(
+            iconType: MineMenuIconType.myInfo,
+            label: StrRes.myInfo,
+            onTap: logic.viewMyInfo,
+          ),
+          _MineMenuItem(
+            iconType: MineMenuIconType.chatNotification,
+            label: StrRes.chatNotificationSetup,
+            onTap: logic.chatNotificationSetup,
+          ),
+          _MineMenuItem(
+            iconType: MineMenuIconType.privacySecurity,
+            label: StrRes.privacySecuritySetup,
+            onTap: logic.privacySecuritySetup,
+          ),
+          _MineMenuItem(
+            iconType: MineMenuIconType.appearanceLanguage,
+            label: StrRes.appearanceLanguageSetup,
+            onTap: logic.appearanceLanguageSetup,
+          ),
+          _MineMenuItem(
+            iconType: MineMenuIconType.discover,
+            label: StrRes.workbench,
+            onTap: logic.workbench,
+          ),
+          _MineMenuItem(
+            iconType: MineMenuIconType.aboutUs,
+            label: StrRes.aboutUs,
+            onTap: logic.aboutUs,
+          ),
+        ]),
+        10.verticalSpace,
+        _buildMenuGroup([
+          _MineMenuItem(
+            iconType: MineMenuIconType.logout,
+            label: StrRes.logout,
+            onTap: logic.logout,
+          ),
+        ]),
+      ],
+    );
+
     return ThemeAware(
       builder: (context) => Scaffold(
         backgroundColor: Styles.pageBackground,
-        body: SmartRefresher(
-          controller: logic.refreshController,
-          onRefresh: logic.onRefresh,
-          header: IMViews.buildHeader(),
-          enablePullUp: false,
-          child: SingleChildScrollView(
-            physics: const AlwaysScrollableScrollPhysics(),
-            padding: EdgeInsets.only(
-              bottom: MediaQuery.paddingOf(context).bottom,
-            ),
-            child: Column(
-              children: [
-                Stack(
-                  children: [
-                    Container(
-                      height: 138.h,
-                      width: 1.sw,
-                      color: Styles.c_0089FF,
-                      child: ImageRes.mineHeaderBg.toImage,
-                    ),
-                    Obx(() => _buildMyInfoView()),
-                  ],
+        body: Platform.isIOS
+            ? SingleChildScrollView(
+                physics: const NeverScrollableScrollPhysics(),
+                padding: EdgeInsets.only(
+                  bottom: MediaQuery.paddingOf(context).bottom,
                 ),
-                10.verticalSpace,
-                _buildMenuGroup([
-                  _MineMenuItem(
-                    iconType: MineMenuIconType.myInfo,
-                    label: StrRes.myInfo,
-                    onTap: logic.viewMyInfo,
+                child: content,
+              )
+            : SmartRefresher(
+                controller: logic.refreshController,
+                onRefresh: logic.onRefresh,
+                header: IMViews.buildHeader(),
+                enablePullUp: false,
+                child: SingleChildScrollView(
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  padding: EdgeInsets.only(
+                    bottom: MediaQuery.paddingOf(context).bottom,
                   ),
-                  _MineMenuItem(
-                    iconType: MineMenuIconType.chatNotification,
-                    label: StrRes.chatNotificationSetup,
-                    onTap: logic.chatNotificationSetup,
-                  ),
-                  _MineMenuItem(
-                    iconType: MineMenuIconType.privacySecurity,
-                    label: StrRes.privacySecuritySetup,
-                    onTap: logic.privacySecuritySetup,
-                  ),
-                  _MineMenuItem(
-                    iconType: MineMenuIconType.appearanceLanguage,
-                    label: StrRes.appearanceLanguageSetup,
-                    onTap: logic.appearanceLanguageSetup,
-                  ),
-                  _MineMenuItem(
-                    iconType: MineMenuIconType.discover,
-                    label: StrRes.workbench,
-                    onTap: logic.workbench,
-                  ),
-                  _MineMenuItem(
-                    iconType: MineMenuIconType.aboutUs,
-                    label: StrRes.aboutUs,
-                    onTap: logic.aboutUs,
-                  ),
-                ]),
-                10.verticalSpace,
-                _buildMenuGroup([
-                  _MineMenuItem(
-                    iconType: MineMenuIconType.logout,
-                    label: StrRes.logout,
-                    onTap: logic.logout,
-                  ),
-                ]),
-              ],
-            ),
-          ),
-        ),
+                  child: content,
+                ),
+              ),
       ),
     );
   }
@@ -125,8 +137,25 @@ class MinePage extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  (logic.imLogic.userInfo.value.nickname ?? '').toText
-                    ..style = Styles.ts_0C1C33_17sp_medium,
+                  Row(
+                    children: [
+                      Flexible(
+                        child: (logic.imLogic.userInfo.value.nickname ?? '')
+                            .toText
+                          ..style = Styles.ts_0C1C33_17sp_medium
+                          ..maxLines = 1
+                          ..overflow = TextOverflow.ellipsis,
+                      ),
+                      8.horizontalSpace,
+                      GestureDetector(
+                        behavior: HitTestBehavior.translucent,
+                        onTap: logic.myQrcode,
+                        child: ImageRes.mineQr.toImage
+                          ..width = 20.w
+                          ..height = 20.h,
+                      ),
+                    ],
+                  ),
                   4.verticalSpace,
                   GestureDetector(
                     behavior: HitTestBehavior.translucent,
@@ -134,8 +163,7 @@ class MinePage extends StatelessWidget {
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        logic.idLineText.toText
-                          ..style = Styles.ts_8E9AB0_14sp,
+                        logic.idLineText.toText..style = Styles.ts_8E9AB0_14sp,
                         ImageRes.mineCopy.toImage
                           ..width = 16.w
                           ..height = 16.h,

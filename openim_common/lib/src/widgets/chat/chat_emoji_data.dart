@@ -30,6 +30,13 @@ List<ChatEmojiItem> _items(String emojis) =>
 
 final chatEmojiCategories = <ChatEmojiCategory>[
   ChatEmojiCategory(
+    label: '常用',
+    icon: Icons.access_time,
+    items: _items(
+      '😀 😂 🤣 😊 😍 🥰 😘 😭 😅 👍 👎 👏 🙏 ❤️ 🔥 ✅ ❌ 🤔 😴 😎 🤩 😢 😡 🤗 👌 ✌️ 🤝 💪 🎉 💯',
+    ),
+  ),
+  ChatEmojiCategory(
     label: 'Smileys',
     icon: Icons.emoji_emotions_outlined,
     items: _items(

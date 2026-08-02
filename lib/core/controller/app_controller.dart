@@ -114,6 +114,7 @@ class AppController extends GetxController
         message.attachedInfoElem?.notSenderNotificationPush == true ||
         message.contentType == im.MessageType.typing ||
         message.sendID == OpenIM.iMManager.userID ||
+        message.isCallingSignalingType ||
         (message.contentType! >= 1000 && message.contentType != 1400)) return;
 
     var sourceID = message.sessionType == ConversationType.single
@@ -132,16 +133,57 @@ class AppController extends GetxController
     }
   }
 
+  /// Conversation currently open in chat UI; skip banner for that session.
+  String? viewingConversationID;
+
   Future<void> promptSoundOrNotification(im.Message message) async {
-    if (Get.find<IMController>().imSdkStatusSubject.values.lastOrNull?.status !=
-        IMSdkStatus.syncEnded) {
+    final status =
+        Get.find<IMController>().imSdkStatusSubject.values.lastOrNull?.status;
+    // Skip beep storms during sync while app is in foreground.
+    if (!isRunningBackground && status != IMSdkStatus.syncEnded) {
       return;
     }
     if (!isRunningBackground) {
       _playMessageSound();
-    } else {
+    }
+    // System banner when backgrounded, or when not viewing this chat.
+    final inThisChat = viewingConversationID != null &&
+        _messageMatchesViewingChat(message, viewingConversationID!);
+    if (isRunningBackground || !inThisChat) {
       await _showMessageNotification(message);
     }
+  }
+
+  bool _messageMatchesViewingChat(im.Message message, String conversationID) {
+    if (message.sessionType == ConversationType.single) {
+      return conversationID.contains(message.sendID ?? '') ||
+          conversationID.contains(message.recvID ?? '');
+    }
+    if (message.groupID != null && message.groupID!.isNotEmpty) {
+      return conversationID.contains(message.groupID!);
+    }
+    return false;
+  }
+
+  Future<void> showFriendApplicationNotification({
+    required String nickname,
+  }) async {
+    if (_isGlobalNotDisturb()) return;
+    if (!DataSp.getEnableMsgNotification()) return;
+
+    final title = '航讯';
+    final body = DataSp.getShowNotificationDetail() && nickname.isNotEmpty
+        ? '$nickname ${StrRes.newFriend}'
+        : StrRes.newFriend;
+
+    if (!isRunningBackground) {
+      _playMessageSound();
+    }
+    await _showLocalNotification(
+      id: _fallbackNotificationID,
+      title: title,
+      body: body,
+    );
   }
 
   bool get _isAllowBeep {
@@ -178,7 +220,6 @@ class AppController extends GetxController
   }
 
   Future<void> showCallNotification(SignalingInfo info) async {
-    if (!isRunningBackground) return;
     if (!DataSp.getEnableCallNotification()) return;
 
     final invitation = info.invitation;
@@ -202,6 +243,10 @@ class AppController extends GetxController
       }
       title = nickname.isEmpty ? title : nickname;
       body = '$nickname$hint';
+    }
+
+    if (!isRunningBackground) {
+      _playMessageSound();
     }
 
     final beepOn = _isAllowBeep;

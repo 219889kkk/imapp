@@ -46,6 +46,8 @@ class MineLogic extends GetxController {
 
   void aboutUs() => AppNavigator.startAboutUs();
 
+  void myQrcode() => AppNavigator.startMyQrcode();
+
   void logout() async {
     var confirm = await Get.dialog(CustomDialog(title: StrRes.logoutHint));
     if (confirm == true) {
