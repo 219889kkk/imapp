@@ -17,7 +17,7 @@ class ChatApp extends StatelessWidget {
     return AppView(
       builder: (locale, themeMode, builder) => GetMaterialApp(
         debugShowCheckedModeBanner: false,
-        enableLog: true,
+        enableLog: false,
         builder: builder,
         translations: TranslationService(),
         localizationsDelegates: const [

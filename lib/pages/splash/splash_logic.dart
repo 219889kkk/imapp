@@ -44,9 +44,7 @@ class SplashLogic extends GetxController {
 
   _login() async {
     try {
-      Logger.print('---------login---------- userID: $userID, token: $token');
       await imLogic.login(userID!, token!).timeout(const Duration(seconds: 15));
-      Logger.print('---------im login success-------');
       PushController.login(
         userID!,
         onTokenRefresh: (token) {
@@ -54,7 +52,6 @@ class SplashLogic extends GetxController {
               fcmToken: token, expireTime: DateTime.now().add(Duration(days: 90)).millisecondsSinceEpoch);
         },
       );
-      Logger.print('---------push login success----');
       final result = await ConversationLogic.getConversationFirstPage()
           .timeout(const Duration(seconds: 15));
 

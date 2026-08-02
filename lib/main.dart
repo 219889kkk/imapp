@@ -2,7 +2,9 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_easyloading/flutter_easyloading.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
+import 'package:openim/core/home_debug.dart';
 import 'package:openim/core/liquid_glass_runtime.dart';
 import 'package:openim_common/openim_common.dart';
 
@@ -12,13 +14,30 @@ void main() {
   runZonedGuarded(() async {
     FlutterError.onError = (FlutterErrorDetails details) {
       FlutterError.presentError(details);
-      Logger.print('FlutterError: ${details.exception.toString()}, ${details.stack.toString()}');
+      homeDebugError.value =
+          '${details.exceptionAsString()}\n${details.stack}';
+      Logger.print('FlutterError: ${details.exception}');
+    };
+
+    ErrorWidget.builder = (FlutterErrorDetails details) {
+      homeDebugError.value = details.exceptionAsString();
+      return Material(
+        color: Colors.white,
+        child: SafeArea(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(16),
+            child: Text(
+              '界面渲染错误（请截图发我）:\n\n${details.exceptionAsString()}',
+              style: const TextStyle(color: Colors.red, fontSize: 14),
+            ),
+          ),
+        ),
+      );
     };
 
     WidgetsFlutterBinding.ensureInitialized();
     if (!Platform.isIOS) {
       try {
-        // 预热液态玻璃 shader,避免底部 Dock 首帧白闪
         await LiquidGlassWidgets.initialize();
         LiquidGlassRuntime.enabled = true;
       } catch (e, s) {
@@ -30,6 +49,9 @@ void main() {
     }
     Config.init(() => runApp(const ChatApp()));
   }, (error, stackTrace) {
-    Logger.print('FlutterError: ${error.toString()}, ${stackTrace.toString()}', onlyConsole: true);
+    homeDebugError.value = '$error\n$stackTrace';
+    Logger.print('Uncaught error: $error', onlyConsole: true);
+    EasyLoading.dismiss();
+    LoadingView.singleton.dismiss();
   });
 }

@@ -60,8 +60,6 @@ class AppController extends GetxController
   final clientConfigMap = <String, dynamic>{}.obs;
 
   Future<void> runningBackground(bool run) async {
-    Logger.print('-----App running background : $run-------------');
-
     isRunningBackground = run;
     if (Get.isRegistered<IMController>()) {
       Get.find<IMController>().backgroundSubject.add(run);

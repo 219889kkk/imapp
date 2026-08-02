@@ -10,24 +10,19 @@ import 'home_logic.dart';
 class HomeBinding extends Bindings {
   @override
   void dependencies() {
-    _deleteIfRegistered<HomeLogic>();
-    _deleteIfRegistered<ConversationLogic>();
-    _deleteIfRegistered<ConversationCategoryController>();
-    _deleteIfRegistered<ContactsLogic>();
-    _deleteIfRegistered<MomentsFeedLogic>();
-    _deleteIfRegistered<MineLogic>();
-
-    Get.put(HomeLogic());
-    Get.put(ConversationLogic());
-    Get.put(ConversationCategoryController());
-    Get.put(ContactsLogic());
-    Get.put(MomentsFeedLogic());
-    Get.put(MineLogic());
+    // Recreate home-scoped controllers for a clean post-login state.
+    _reput(() => HomeLogic());
+    _reput(() => ConversationLogic());
+    _reput(() => ConversationCategoryController());
+    _reput(() => ContactsLogic());
+    _reput(() => MomentsFeedLogic());
+    _reput(() => MineLogic());
   }
 
-  void _deleteIfRegistered<T>() {
+  void _reput<T>(T Function() builder) {
     if (Get.isRegistered<T>()) {
       Get.delete<T>(force: true);
     }
+    Get.put<T>(builder());
   }
 }

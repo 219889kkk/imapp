@@ -1,4 +1,3 @@
-import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_easyloading/flutter_easyloading.dart';
 import 'package:flutter_openim_sdk/flutter_openim_sdk.dart';
@@ -129,17 +128,29 @@ class LoginLogic extends GetxController {
 
   void login() {
     DataSp.putLoginType(LoginType.account.rawValue);
-    LoadingView.singleton.wrap(asyncFunction: () async {
-      final suc = await _login();
-      if (!suc) return;
-      final result = await ConversationLogic.getConversationFirstPage();
-      Get.find<CacheController>().resetCache();
-      AppNavigator.startMain(conversations: result);
-      WidgetsBinding.instance.addPostFrameCallback((_) {
+    // Prefer EasyLoading over Overlay LoadingView to avoid stuck blank masks.
+    EasyLoading.show(status: '登录中...', dismissOnTap: false);
+    () async {
+      try {
+        final suc = await _login();
+        if (!suc) return;
+        final result = await ConversationLogic.getConversationFirstPage();
+        Get.find<CacheController>().resetCache();
+        await EasyLoading.dismiss();
         LoadingView.singleton.dismiss();
-        EasyLoading.dismiss();
-      });
-    });
+        AppNavigator.startMain(conversations: result);
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          EasyLoading.dismiss();
+          LoadingView.singleton.dismiss();
+        });
+      } catch (e, s) {
+        Logger.print('login flow e: $e $s');
+        IMViews.showToast('$e');
+      } finally {
+        await EasyLoading.dismiss();
+        LoadingView.singleton.dismiss();
+      }
+    }();
   }
 
   Future<bool> _login() async {
@@ -158,9 +169,7 @@ class LoginLogic extends GetxController {
         'account': account,
         'loginType': LoginType.account.rawValue,
       });
-      Logger.print('login : ${data.userID}, token: ${data.imToken}');
       await imLogic.login(data.userID, data.imToken);
-      Logger.print('im login success');
       PushController.login(
         data.userID,
         onTokenRefresh: (token) {
@@ -172,7 +181,6 @@ class LoginLogic extends GetxController {
           );
         },
       );
-      Logger.print('push login success');
       return true;
     } catch (e, s) {
       Logger.print('login e: $e $s');
