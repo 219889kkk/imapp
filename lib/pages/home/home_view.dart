@@ -27,10 +27,10 @@ class _HomePageState extends State<HomePage> {
     // Create tab pages once. Rebuilding PersistentTabView (or IndexedStack
     // children) on every unread-count change caused a blank home after login.
     _pages = [
-      ConversationPage(),
-      ContactsPage(),
-      MomentsFeedPage(),
-      MinePage(),
+      SizedBox.expand(child: ConversationPage()),
+      SizedBox.expand(child: ContactsPage()),
+      SizedBox.expand(child: MomentsFeedPage()),
+      SizedBox.expand(child: MinePage()),
     ];
   }
 

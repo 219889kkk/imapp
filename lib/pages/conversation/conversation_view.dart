@@ -21,6 +21,7 @@ class ConversationPage extends StatelessWidget {
   Widget build(BuildContext context) {
     return ThemeAware(
       builder: (context) => Scaffold(
+        primary: false,
         backgroundColor: Styles.pageBackground,
         appBar: TitleBar.conversation(
             statusStr: logic.imSdkStatus,
