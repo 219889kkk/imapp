@@ -45,21 +45,21 @@ class ConversationPage extends StatelessWidget {
                       url: im.userInfo.value.faceURL,
                     ),
                     10.horizontalSpace,
-                    if (null != im.userInfo.value.nickname)
-                      Flexible(
-                        child: im.userInfo.value.nickname!.toText
-                          ..style = Styles.ts_0C1C33_17sp
-                          ..maxLines = 1
-                          ..overflow = TextOverflow.ellipsis,
-                      ),
+                    Flexible(
+                      child: (im.userInfo.value.nickname ?? StrRes.home).toText
+                        ..style = Styles.ts_0C1C33_17sp
+                        ..maxLines = 1
+                        ..overflow = TextOverflow.ellipsis,
+                    ),
                     10.horizontalSpace,
-                    if (null != logic.imSdkStatus &&
+                    if (logic.imSdkStatus != null &&
                         (!logic.reInstall || logic.isFailedSdkStatus))
                       Flexible(
-                          child: SyncStatusView(
-                        isFailed: logic.isFailedSdkStatus,
-                        statusStr: logic.imSdkStatus!,
-                      )),
+                        child: SyncStatusView(
+                          isFailed: logic.isFailedSdkStatus,
+                          statusStr: logic.imSdkStatus!,
+                        ),
+                      ),
                   ],
                 ),
               ),

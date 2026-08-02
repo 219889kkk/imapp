@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
-import 'package:flutter_easyloading/flutter_easyloading.dart';
 import 'package:flutter_openim_sdk/flutter_openim_sdk.dart';
 import 'package:get/get.dart';
 import 'package:openim_common/openim_common.dart';
@@ -51,22 +50,13 @@ class ConversationLogic extends GetxController {
 
       if (status == IMSdkStatus.syncStart) {
         reInstall = appReInstall;
-        if (reInstall) {
-          EasyLoading.showProgress(0, status: StrRes.synchronizing);
-        }
       }
 
       Logger.print(
           'IM SDK Status: $status, reinstall: $reInstall, progress: $progress');
 
-      if (status == IMSdkStatus.syncProgress && reInstall) {
-        final p = (progress!).toDouble() / 100.0;
-
-        EasyLoading.showProgress(p,
-            status: '${StrRes.synchronizing}(${(p * 100.0).truncate()}%)');
-      } else if (status == IMSdkStatus.syncEnded ||
+      if (status == IMSdkStatus.syncEnded ||
           status == IMSdkStatus.syncFailed) {
-        EasyLoading.dismiss();
         if (status == IMSdkStatus.syncEnded) {
           onRefresh();
         }

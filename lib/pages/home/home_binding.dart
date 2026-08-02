@@ -10,11 +10,23 @@ import 'home_logic.dart';
 class HomeBinding extends Bindings {
   @override
   void dependencies() {
-    Get.lazyPut(() => HomeLogic());
-    Get.lazyPut(() => ConversationLogic());
-    Get.lazyPut(() => ConversationCategoryController());
-    Get.lazyPut(() => ContactsLogic());
-    Get.lazyPut(() => MomentsFeedLogic());
-    Get.lazyPut(() => MineLogic());
+    if (!Get.isRegistered<HomeLogic>()) {
+      Get.put(HomeLogic());
+    }
+    if (!Get.isRegistered<ConversationLogic>()) {
+      Get.put(ConversationLogic());
+    }
+    if (!Get.isRegistered<ConversationCategoryController>()) {
+      Get.put(ConversationCategoryController());
+    }
+    if (!Get.isRegistered<ContactsLogic>()) {
+      Get.put(ContactsLogic());
+    }
+    if (!Get.isRegistered<MomentsFeedLogic>()) {
+      Get.put(MomentsFeedLogic());
+    }
+    if (!Get.isRegistered<MineLogic>()) {
+      Get.put(MineLogic());
+    }
   }
 }

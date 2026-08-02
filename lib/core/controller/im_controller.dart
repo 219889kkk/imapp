@@ -25,6 +25,7 @@ class IMController extends GetxController with IMCallback, OpenIMLive {
 
   @override
   void onInit() async {
+    userInfo = UserFullInfo(userID: DataSp.userID ?? '').obs;
     super.onInit();
     onInitLive();
     WidgetsBinding.instance.addPostFrameCallback((_) => initOpenIM());

@@ -1,5 +1,6 @@
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_easyloading/flutter_easyloading.dart';
 import 'package:flutter_openim_sdk/flutter_openim_sdk.dart';
 import 'package:get/get.dart';
 import 'package:openim_common/openim_common.dart';
@@ -129,11 +130,18 @@ class LoginLogic extends GetxController {
   void login() {
     DataSp.putLoginType(LoginType.account.rawValue);
     LoadingView.singleton.wrap(asyncFunction: () async {
-      final suc = await _login();
-      if (suc) {
-        final result = await ConversationLogic.getConversationFirstPage();
-        Get.find<CacheController>().resetCache();
-        AppNavigator.startMain(conversations: result);
+      try {
+        final suc = await _login();
+        if (suc) {
+          final result = await ConversationLogic.getConversationFirstPage();
+          Get.find<CacheController>().resetCache();
+          LoadingView.singleton.dismiss();
+          EasyLoading.dismiss();
+          AppNavigator.startMain(conversations: result);
+        }
+      } finally {
+        LoadingView.singleton.dismiss();
+        EasyLoading.dismiss();
       }
     });
   }

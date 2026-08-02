@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter_easyloading/flutter_easyloading.dart';
 import 'package:flutter_openim_sdk/flutter_openim_sdk.dart';
 import 'package:get/get.dart';
 import 'package:openim/pages/conversation/conversation_logic.dart';
@@ -56,6 +57,8 @@ class SplashLogic extends GetxController {
       final result = await ConversationLogic.getConversationFirstPage()
           .timeout(const Duration(seconds: 15));
 
+      LoadingView.singleton.dismiss();
+      EasyLoading.dismiss();
       AppNavigator.startSplashToMain(isAutoLogin: true, conversations: result);
     } catch (e, s) {
       Logger.print('splash auto login failed: $e $s');

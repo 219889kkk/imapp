@@ -1,9 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:get/get.dart';
 import 'package:openim/widgets/theme_aware.dart';
 import 'package:openim_common/openim_common.dart';
-import 'package:persistent_bottom_nav_bar_v2/persistent_bottom_nav_bar_v2.dart';
 
 import '../contacts/contacts_view.dart';
 import '../conversation/conversation_view.dart';
@@ -21,45 +19,75 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   static const _tabIconSlotSize = 36.0;
 
-  final logic = Get.find<HomeLogic>();
-  late final List<PersistentTabConfig> _tabs;
+  late final List<Widget> _pages;
 
   @override
   void initState() {
     super.initState();
-    _tabs = [
-      PersistentTabConfig(
-        screen: ConversationPage(),
-        item: ItemConfig(
-          icon: ImageRes.homeTab1Sel.toImage,
-          title: StrRes.home,
-        ),
-      ),
-      PersistentTabConfig(
-        screen: ContactsPage(),
-        item: ItemConfig(
-          icon: ImageRes.homeTab2Sel.toImage,
-          title: StrRes.contacts,
-        ),
-      ),
-      PersistentTabConfig(
-        screen: MomentsFeedPage(),
-        item: ItemConfig(
-          icon: ImageRes.homeTab3Sel.toImage,
-          title: StrRes.workingCircle,
-        ),
-      ),
-      PersistentTabConfig(
-        screen: MinePage(),
-        item: ItemConfig(
-          icon: ImageRes.homeTab4Sel.toImage,
-          title: StrRes.mine,
-        ),
-      ),
+    // Create tab pages once. Rebuilding PersistentTabView (or IndexedStack
+    // children) on every unread-count change caused a blank home after login.
+    _pages = [
+      ConversationPage(),
+      ContactsPage(),
+      MomentsFeedPage(),
+      MinePage(),
     ];
   }
 
-  Widget _tabIcon(String res, int unReadCount, {double size = 24}) {
+  @override
+  Widget build(BuildContext context) {
+    final logic = Get.find<HomeLogic>();
+    return ThemeAware(
+      builder: (_) => Scaffold(
+        backgroundColor: Styles.pageBackground,
+        body: Obx(
+          () => IndexedStack(
+            index: logic.index.value,
+            children: _pages,
+          ),
+        ),
+        bottomNavigationBar: Obx(
+          () => BottomNavigationBar(
+            type: BottomNavigationBarType.fixed,
+            backgroundColor: Styles.c_FFFFFF,
+            selectedItemColor: Styles.c_0089FF,
+            unselectedItemColor: Styles.c_8E9AB0,
+            selectedFontSize: 10,
+            unselectedFontSize: 10,
+            currentIndex: logic.index.value,
+            onTap: logic.switchTab,
+            items: [
+              BottomNavigationBarItem(
+                icon: _tabIcon(ImageRes.homeTab1Nor, logic.unreadMsgCount.value),
+                activeIcon:
+                    _tabIcon(ImageRes.homeTab1Sel, logic.unreadMsgCount.value),
+                label: StrRes.home,
+              ),
+              BottomNavigationBarItem(
+                icon:
+                    _tabIcon(ImageRes.homeTab2Nor, logic.unhandledCount.value),
+                activeIcon:
+                    _tabIcon(ImageRes.homeTab2Sel, logic.unhandledCount.value),
+                label: StrRes.contacts,
+              ),
+              BottomNavigationBarItem(
+                icon: _tabIcon(ImageRes.homeTab3Nor, 0),
+                activeIcon: _tabIcon(ImageRes.homeTab3Sel, 0),
+                label: StrRes.workingCircle,
+              ),
+              BottomNavigationBarItem(
+                icon: _tabIcon(ImageRes.homeTab4Nor, 0),
+                activeIcon: _tabIcon(ImageRes.homeTab4Sel, 0),
+                label: StrRes.mine,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  static Widget _tabIcon(String res, int unReadCount, {double size = 24}) {
     return SizedBox(
       width: _tabIconSlotSize,
       height: _tabIconSlotSize,
@@ -75,63 +103,6 @@ class _HomePageState extends State<HomePage> {
           ),
         ],
       ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return ThemeAware(
-      builder: (_) => Obx(() {
-        logic.unreadMsgCount.value;
-        logic.unhandledCount.value;
-        return PersistentTabView(
-          tabs: _tabs,
-          backgroundColor: Styles.pageBackground,
-          navBarBuilder: (config) => Style1BottomNavBar(
-            navBarConfig: NavBarConfig(
-              selectedIndex: config.selectedIndex,
-              items: [
-                ItemConfig(
-                  icon: _tabIcon(ImageRes.homeTab1Sel, logic.unreadMsgCount.value),
-                  inactiveIcon:
-                      _tabIcon(ImageRes.homeTab1Nor, logic.unreadMsgCount.value),
-                  title: StrRes.home,
-                ),
-                ItemConfig(
-                  icon: _tabIcon(ImageRes.homeTab2Sel, logic.unhandledCount.value),
-                  inactiveIcon:
-                      _tabIcon(ImageRes.homeTab2Nor, logic.unhandledCount.value),
-                  title: StrRes.contacts,
-                ),
-                ItemConfig(
-                  icon: _tabIcon(ImageRes.homeTab3Sel, 0),
-                  inactiveIcon: _tabIcon(ImageRes.homeTab3Nor, 0),
-                  title: StrRes.workingCircle,
-                ),
-                ItemConfig(
-                  icon: _tabIcon(ImageRes.homeTab4Sel, 0),
-                  inactiveIcon: _tabIcon(ImageRes.homeTab4Nor, 0),
-                  title: StrRes.mine,
-                ),
-              ],
-              navBarHeight: config.navBarHeight,
-              onItemSelected: config.onItemSelected,
-            ),
-            navBarDecoration: NavBarDecoration(
-              color: Styles.c_FFFFFF,
-              boxShadow: [
-                BoxShadow(
-                  color: Styles.c_000000_opacity4,
-                  blurRadius: 8,
-                  offset: const Offset(0, -2),
-                ),
-              ],
-            ),
-          ),
-          navBarOverlap: const NavBarOverlap.none(),
-          screenTransitionAnimation: const ScreenTransitionAnimation.none(),
-        );
-      }),
     );
   }
 }
