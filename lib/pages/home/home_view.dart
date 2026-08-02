@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:get/get.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
+import 'package:openim/core/liquid_glass_runtime.dart';
 import 'package:openim/widgets/theme_aware.dart';
 import 'package:openim_common/openim_common.dart';
 
@@ -95,6 +96,25 @@ class HomePage extends StatelessWidget {
     );
   }
 
+  Widget _buildNavBar(NavBarConfig navBarConfig) {
+    if (!LiquidGlassRuntime.enabled) {
+      return Style1BottomNavBar(
+        navBarConfig: navBarConfig,
+        navBarDecoration: NavBarDecoration(
+          color: Styles.c_FFFFFF,
+          boxShadow: [
+            BoxShadow(
+              color: Styles.c_000000_opacity4,
+              blurRadius: 8,
+              offset: const Offset(0, -2),
+            ),
+          ],
+        ),
+      );
+    }
+    return _buildLiquidGlassDock(navBarConfig);
+  }
+
   Widget _buildLiquidGlassDock(NavBarConfig navBarConfig) => SafeArea(
         top: false,
         child: GlassTabBar.bottom(
@@ -113,7 +133,7 @@ class HomePage extends StatelessWidget {
           unselectedIconColor: Styles.c_8E9AB0,
           // Premium 走 Impeller 完整 shader 管线:底栏更通透,
           // 指示器静止时为纯玻璃透镜(无实心灰底),切换时水滴流动
-          quality: GlassQuality.premium,
+          quality: GlassQuality.standard,
           // 沿用包内 iOS 26 预设的折射参数,按主题微调玻璃着色
           settings: LiquidGlassSettings(
             thickness: 30,
@@ -141,8 +161,10 @@ class HomePage extends StatelessWidget {
         body: Obx(
           () => PersistentTabView(
             tabs: _tabs(),
-            navBarBuilder: _buildLiquidGlassDock,
-            navBarOverlap: const NavBarOverlap.full(),
+            navBarBuilder: _buildNavBar,
+            navBarOverlap: LiquidGlassRuntime.enabled
+                ? const NavBarOverlap.full()
+                : const NavBarOverlap.none(),
             screenTransitionAnimation: const ScreenTransitionAnimation.none(),
           ),
         ),

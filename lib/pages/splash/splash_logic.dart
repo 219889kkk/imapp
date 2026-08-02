@@ -17,15 +17,25 @@ class SplashLogic extends GetxController {
   String? get token => DataSp.imToken;
 
   late StreamSubscription initializedSub;
+  Timer? _startupTimeout;
 
   @override
   void onInit() {
-    initializedSub = imLogic.initializedSubject.listen((value) {
+    initializedSub = imLogic.initializedSubject.listen((initialized) {
+      _startupTimeout?.cancel();
+      if (initialized != true) {
+        AppNavigator.startLogin();
+        return;
+      }
       if (null != userID && null != token) {
         _login();
       } else {
         AppNavigator.startLogin();
       }
+    });
+    _startupTimeout = Timer(const Duration(seconds: 12), () {
+      Logger.print('splash startup timeout, fallback to login');
+      AppNavigator.startLogin();
     });
     super.onInit();
   }
@@ -33,7 +43,7 @@ class SplashLogic extends GetxController {
   _login() async {
     try {
       Logger.print('---------login---------- userID: $userID, token: $token');
-      await imLogic.login(userID!, token!);
+      await imLogic.login(userID!, token!).timeout(const Duration(seconds: 15));
       Logger.print('---------im login success-------');
       PushController.login(
         userID!,
@@ -43,11 +53,13 @@ class SplashLogic extends GetxController {
         },
       );
       Logger.print('---------push login success----');
-      final result = await ConversationLogic.getConversationFirstPage();
+      final result = await ConversationLogic.getConversationFirstPage()
+          .timeout(const Duration(seconds: 15));
 
       AppNavigator.startSplashToMain(isAutoLogin: true, conversations: result);
     } catch (e, s) {
-      IMViews.showToast('$e $s');
+      Logger.print('splash auto login failed: $e $s');
+      IMViews.showToast('$e');
       await DataSp.removeLoginCertificate();
       AppNavigator.startLogin();
     }
@@ -55,6 +67,7 @@ class SplashLogic extends GetxController {
 
   @override
   void onClose() {
+    _startupTimeout?.cancel();
     initializedSub.cancel();
     super.onClose();
   }

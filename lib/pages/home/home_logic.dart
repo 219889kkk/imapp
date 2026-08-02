@@ -155,6 +155,8 @@ class HomeLogic extends SuperController {
     if (_isShowScreenLock) return;
     _lockScreenPwd = DataSp.getLockScreenPassword();
     if (null != _lockScreenPwd) {
+      final context = Get.context;
+      if (context == null) return;
       final isEnabledBiometric = DataSp.isEnabledBiometric() == true;
       bool enabled = false;
       if (isEnabledBiometric) {
@@ -164,7 +166,7 @@ class HomeLogic extends SuperController {
       }
       _isShowScreenLock = true;
       screenLock(
-        context: Get.context!,
+        context: context,
         correctString: _lockScreenPwd!,
         maxRetries: 3,
         title: ScreenLockTitle(stream: _errorController.stream),

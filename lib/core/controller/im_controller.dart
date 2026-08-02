@@ -31,30 +31,37 @@ class IMController extends GetxController with IMCallback, OpenIMLive {
   }
 
   void initOpenIM() async {
-    final initialized = await OpenIM.iMManager.initSDK(
-      platformID: IMUtils.getPlatform(),
-      apiAddr: Config.imApiUrl,
-      wsAddr: Config.imWsUrl,
-      dataDir: Config.cachePath,
-      logLevel: Config.logLevel,
-      logFilePath: Config.cachePath,
-      listener: OnConnectListener(
-        onConnecting: () {
-          imSdkStatus(IMSdkStatus.connecting);
-        },
-        onConnectFailed: (code, error) {
-          imSdkStatus(IMSdkStatus.connectionFailed);
-        },
-        onConnectSuccess: () {
-          imSdkStatus(IMSdkStatus.connectionSucceeded);
-        },
-        onKickedOffline: kickedOffline,
-        onUserTokenExpired: kickedOffline,
-        onUserTokenInvalid: userTokenInvalid,
-      ),
-    );
+    var initialized = false;
+    try {
+      initialized = await OpenIM.iMManager.initSDK(
+        platformID: IMUtils.getPlatform(),
+        apiAddr: Config.imApiUrl,
+        wsAddr: Config.imWsUrl,
+        dataDir: Config.cachePath,
+        logLevel: Config.logLevel,
+        logFilePath: Config.cachePath,
+        listener: OnConnectListener(
+          onConnecting: () {
+            imSdkStatus(IMSdkStatus.connecting);
+          },
+          onConnectFailed: (code, error) {
+            imSdkStatus(IMSdkStatus.connectionFailed);
+          },
+          onConnectSuccess: () {
+            imSdkStatus(IMSdkStatus.connectionSucceeded);
+          },
+          onKickedOffline: kickedOffline,
+          onUserTokenExpired: kickedOffline,
+          onUserTokenInvalid: userTokenInvalid,
+        ),
+      );
+    } catch (e, s) {
+      Logger.print('initOpenIM failed: $e $s');
+      initialized = false;
+    }
 
-    OpenIM.iMManager
+    try {
+      OpenIM.iMManager
       ..setUploadLogsListener(
           OnUploadLogsListener(onUploadProgress: uploadLogsProgress))
       ..userManager.setUserListener(OnUserListener(
@@ -135,6 +142,9 @@ class IMController extends GetxController with IMCallback, OpenIMLive {
         onJoinedGroupAdded: joinedGroupAdded,
         onJoinedGroupDeleted: joinedGroupDeleted,
       ));
+    } catch (e, s) {
+      Logger.print('initOpenIM listener setup failed: $e $s');
+    }
 
     Logger().sdkIsInited = initialized;
     initializedSubject.sink.add(initialized);
