@@ -8,7 +8,6 @@ import '../../routes/app_navigator.dart';
 class RegisterLogic extends GetxController {
   final imLogic = Get.find<IMController>();
   final accountCtrl = TextEditingController();
-  final emailCtrl = TextEditingController();
   final nicknameCtrl = TextEditingController();
   final pwdCtrl = TextEditingController();
   final pwdAgainCtrl = TextEditingController();
@@ -17,7 +16,6 @@ class RegisterLogic extends GetxController {
   @override
   void onClose() {
     accountCtrl.dispose();
-    emailCtrl.dispose();
     nicknameCtrl.dispose();
     pwdCtrl.dispose();
     pwdAgainCtrl.dispose();
@@ -27,7 +25,6 @@ class RegisterLogic extends GetxController {
   @override
   void onInit() {
     accountCtrl.addListener(_onChanged);
-    emailCtrl.addListener(_onChanged);
     nicknameCtrl.addListener(_onChanged);
     pwdCtrl.addListener(_onChanged);
     pwdAgainCtrl.addListener(_onChanged);
@@ -36,7 +33,6 @@ class RegisterLogic extends GetxController {
 
   void _onChanged() {
     enabled.value = accountCtrl.text.trim().isNotEmpty &&
-        emailCtrl.text.trim().isNotEmpty &&
         nicknameCtrl.text.trim().isNotEmpty &&
         pwdCtrl.text.trim().isNotEmpty &&
         pwdAgainCtrl.text.trim().isNotEmpty;
@@ -45,10 +41,6 @@ class RegisterLogic extends GetxController {
   bool _checkingInput() {
     if (accountCtrl.text.trim().isEmpty) {
       IMViews.showToast(StrRes.plsEnterAccount);
-      return false;
-    }
-    if (!emailCtrl.text.trim().isEmail) {
-      IMViews.showToast(StrRes.plsEnterRightEmail);
       return false;
     }
     if (nicknameCtrl.text.trim().isEmpty) {
@@ -70,13 +62,11 @@ class RegisterLogic extends GetxController {
     if (!_checkingInput()) return;
 
     final account = accountCtrl.text.trim();
-    final email = emailCtrl.text.trim();
     final nickname = nicknameCtrl.text.trim();
 
     await LoadingView.singleton.wrap(asyncFunction: () async {
       final data = await Apis.register(
         nickname: nickname,
-        email: email,
         account: account,
         password: pwdCtrl.text,
       );
@@ -88,7 +78,6 @@ class RegisterLogic extends GetxController {
       await DataSp.putLoginCertificate(data);
       await DataSp.putLoginAccount({
         'account': account,
-        'email': email,
         'loginType': 2,
       });
       DataSp.putLoginType(2);

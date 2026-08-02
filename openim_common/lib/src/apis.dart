@@ -65,22 +65,26 @@ class Apis {
     String? invitationCode,
   }) async {
     try {
+      final user = <String, dynamic>{
+        'nickname': nickname,
+        'faceURL': faceURL,
+        'birth': birth,
+        'gender': gender,
+        'areaCode': areaCode,
+        'phoneNumber': phoneNumber,
+        'account': account,
+        'password': IMUtils.generateMD5(password),
+      };
+      final emailValue = IMUtils.emptyStrToNull(email);
+      if (emailValue != null) {
+        user['email'] = emailValue;
+      }
       var data = await HttpUtil.post(Urls.register, data: {
         'deviceID': DataSp.getDeviceID(),
         'platform': IMUtils.getPlatform(),
         'invitationCode': invitationCode,
         'autoLogin': true,
-        'user': {
-          "nickname": nickname,
-          "faceURL": faceURL,
-          'birth': birth,
-          'gender': gender,
-          'email': email,
-          "areaCode": areaCode,
-          'phoneNumber': phoneNumber,
-          'account': account,
-          'password': IMUtils.generateMD5(password),
-        },
+        'user': user,
       });
 
       final cert = LoginCertificate.fromJson(data!);

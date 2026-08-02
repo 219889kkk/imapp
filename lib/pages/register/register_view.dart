@@ -26,13 +26,6 @@ class RegisterPage extends StatelessWidget {
             ),
             16.verticalSpace,
             InputBox(
-              label: StrRes.email,
-              hintText: StrRes.plsEnterEmail,
-              controller: logic.emailCtrl,
-              keyBoardType: TextInputType.emailAddress,
-            ),
-            16.verticalSpace,
-            InputBox(
               label: StrRes.nickname,
               hintText: StrRes.plsEnterYourNickname,
               controller: logic.nicknameCtrl,

@@ -1,3 +1,4 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_openim_sdk/flutter_openim_sdk.dart';
 import 'package:get/get.dart';
@@ -18,7 +19,10 @@ enum LoginType {
   const LoginType(this.rawValue);
 
   static LoginType fromRawValue(int rawValue) {
-    return values.firstWhere((e) => e.rawValue == rawValue);
+    return values.firstWhere(
+      (e) => e.rawValue == rawValue,
+      orElse: () => LoginType.account,
+    );
   }
 }
 
@@ -57,7 +61,7 @@ extension LoginTypeExt on LoginType {
   }
 }
 
-class LoginLogic extends GetxController with GetTickerProviderStateMixin {
+class LoginLogic extends GetxController {
   final imLogic = Get.find<IMController>();
   final phoneCtrl = TextEditingController();
   final pwdCtrl = TextEditingController();
@@ -66,33 +70,30 @@ class LoginLogic extends GetxController with GetTickerProviderStateMixin {
   final areaCode = "+86".obs;
   final versionInfo = ''.obs;
   final loginType = LoginType.account.obs;
-  String? get email => loginType.value == LoginType.email ? phoneCtrl.text.trim() : null;
-  String? get phone => loginType.value == LoginType.phone ? phoneCtrl.text.trim() : null;
-  String? get account => loginType.value == LoginType.account ? phoneCtrl.text.trim() : null;
+  String? get account => phoneCtrl.text.trim();
   LoginType operateType = LoginType.account;
 
   FocusNode? accountFocus = FocusNode();
   FocusNode? pwdFocus = FocusNode();
 
-  late TabController tabController;
-
-  _initData() async {
-    var map = DataSp.getLoginAccount();
+  void _initData() {
+    final map = DataSp.getLoginAccount();
     if (map is Map) {
-      String? phoneNumber = map["phoneNumber"];
-      String? areaCode = map["areaCode"];
-
-      if (phoneNumber != null && phoneNumber.isNotEmpty) {
+      final savedAccount = map['account']?.toString();
+      final phoneNumber = map['phoneNumber']?.toString();
+      if (savedAccount != null && savedAccount.isNotEmpty) {
+        phoneCtrl.text = savedAccount;
+      } else if (phoneNumber != null && phoneNumber.isNotEmpty) {
         phoneCtrl.text = phoneNumber;
       }
-      if (areaCode != null && areaCode.isNotEmpty) {
-        this.areaCode.value = areaCode;
+      final area = map['areaCode']?.toString();
+      if (area != null && area.isNotEmpty) {
+        areaCode.value = area;
       }
     }
-
-    loginType.value = LoginType.fromRawValue(DataSp.getLoginType());
-    operateType = loginType.value;
-    tabController.index = loginType.value.rawValue;
+    loginType.value = LoginType.account;
+    operateType = LoginType.account;
+    DataSp.putLoginType(LoginType.account.rawValue);
   }
 
   @override
@@ -103,13 +104,11 @@ class LoginLogic extends GetxController with GetTickerProviderStateMixin {
     pwdCtrl.dispose();
     accountFocus?.dispose();
     pwdFocus?.dispose();
-    tabController.dispose();
     super.onClose();
   }
 
   @override
   void onInit() {
-    tabController = TabController(length: 3, vsync: this);
     _initData();
     phoneCtrl.addListener(_onChanged);
     pwdCtrl.addListener(_onChanged);
@@ -122,18 +121,17 @@ class LoginLogic extends GetxController with GetTickerProviderStateMixin {
     getPackageInfo();
   }
 
-  _onChanged() {
+  void _onChanged() {
     enabled.value =
         phoneCtrl.text.trim().isNotEmpty && pwdCtrl.text.trim().isNotEmpty;
   }
 
-  login() {
-    DataSp.putLoginType(loginType.value.rawValue);
+  void login() {
+    DataSp.putLoginType(LoginType.account.rawValue);
     LoadingView.singleton.wrap(asyncFunction: () async {
-      var suc = await _login();
+      final suc = await _login();
       if (suc) {
         final result = await ConversationLogic.getConversationFirstPage();
-
         Get.find<CacheController>().resetCache();
         AppNavigator.startMain(conversations: result);
       }
@@ -142,37 +140,20 @@ class LoginLogic extends GetxController with GetTickerProviderStateMixin {
 
   Future<bool> _login() async {
     try {
-      if (loginType.value == LoginType.phone) {
-        if (phone?.isNotEmpty == true && !IMUtils.isMobile(areaCode.value, phoneCtrl.text)) {
-          IMViews.showToast(StrRes.plsEnterRightPhone);
-          return false;
-        }
-      } else if (loginType.value == LoginType.email) {
-        if (email?.isNotEmpty == true && !phoneCtrl.text.isEmail) {
-          IMViews.showToast(StrRes.plsEnterRightEmail);
-          return false;
-        }
-      } else if (loginType.value == LoginType.account) {
-        if (this.account?.isNotEmpty != true) {
-          IMViews.showToast(StrRes.plsEnterRightAccount);
-          return false;
-        }
+      if (account?.isNotEmpty != true) {
+        IMViews.showToast(StrRes.plsEnterRightAccount);
+        return false;
       }
       final password = IMUtils.emptyStrToNull(pwdCtrl.text);
       final data = await Apis.login(
-        areaCode: areaCode.value,
-        phoneNumber: phone,
-        account: this.account,
-        email: email,
+        account: account,
         password: password,
       );
-      final account = {
-        "areaCode": areaCode.value,
-        "phoneNumber": phoneCtrl.text,
-        'loginType': loginType.value.rawValue,
-      };
       await DataSp.putLoginCertificate(data);
-      await DataSp.putLoginAccount(account);
+      await DataSp.putLoginAccount({
+        'account': account,
+        'loginType': LoginType.account.rawValue,
+      });
       Logger.print('login : ${data.userID}, token: ${data.imToken}');
       await imLogic.login(data.userID, data.imToken);
       Logger.print('im login success');
@@ -180,7 +161,11 @@ class LoginLogic extends GetxController with GetTickerProviderStateMixin {
         data.userID,
         onTokenRefresh: (token) {
           OpenIM.iMManager.updateFcmToken(
-              fcmToken: token, expireTime: DateTime.now().add(Duration(days: 90)).millisecondsSinceEpoch);
+            fcmToken: token,
+            expireTime: DateTime.now()
+                .add(const Duration(days: 90))
+                .millisecondsSinceEpoch,
+          );
         },
       );
       Logger.print('push login success');
@@ -191,21 +176,13 @@ class LoginLogic extends GetxController with GetTickerProviderStateMixin {
     return false;
   }
 
-  void openCountryCodePicker() async {
-    String? code = await IMViews.showCountryCodePicker();
-    if (null != code) areaCode.value = code;
-  }
-
   void registerNow() => AppNavigator.startRegister();
 
   void forgetPassword() => AppNavigator.startForgetPassword();
 
   void getPackageInfo() async {
-    PackageInfo packageInfo = await PackageInfo.fromPlatform();
-    final version = packageInfo.version;
-    final appName = packageInfo.appName;
-    final buildNumber = packageInfo.buildNumber;
-
-    versionInfo.value = '$appName $version+$buildNumber SDK: ${OpenIM.version}';
+    final packageInfo = await PackageInfo.fromPlatform();
+    versionInfo.value =
+        '${packageInfo.appName} ${packageInfo.version}+${packageInfo.buildNumber} SDK: ${OpenIM.version}';
   }
 }
