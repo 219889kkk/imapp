@@ -1708,7 +1708,7 @@ class ChatLogic extends SuperController {
 
     closeToolbox();
 
-    await Permissions.cameraAndMicrophone(() async {
+    Permissions.cameraAndMicrophone(() async {
       if (isGroupChat) {
         await _groupCall(CallType.audio);
         return;
@@ -1729,7 +1729,7 @@ class ChatLogic extends SuperController {
 
     closeToolbox();
 
-    await Permissions.cameraAndMicrophone(() async {
+    Permissions.cameraAndMicrophone(() async {
       if (isGroupChat) {
         await _groupCall(CallType.video);
         return;
