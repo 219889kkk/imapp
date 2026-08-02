@@ -1,5 +1,6 @@
 
 import 'package:flutter/material.dart';
+import 'package:flutter_easyloading/flutter_easyloading.dart';
 import 'package:flutter_openim_sdk/flutter_openim_sdk.dart';
 import 'package:flutter_screen_lock/flutter_screen_lock.dart';
 import 'package:get/get.dart';
@@ -74,6 +75,7 @@ class HomeLogic extends SuperController {
   @override
   void onInit() {
     _isAutoLogin = Get.arguments != null ? Get.arguments['isAutoLogin'] : false;
+    EasyLoading.dismiss();
     if (_isAutoLogin == true) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _showLockScreenPwd());
     }
@@ -106,6 +108,7 @@ class HomeLogic extends SuperController {
 
   @override
   void onReady() {
+    EasyLoading.dismiss();
     _getRTCInvitationStart();
     _getUnreadMsgCount();
     getUnhandledFriendApplicationCount();
