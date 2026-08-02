@@ -28,7 +28,8 @@ android {
         versionName flutter.versionName
         multiDexEnabled true
 
-        ndk { abiFilters "arm64-v8a" }
+        // Do not set ndk.abiFilters here when building with --split-per-abi;
+        // Gradle rejects having both. ABI is controlled by Flutter build flags.
     }
 
     signingConfigs {
