@@ -92,25 +92,25 @@ class _HomePageState extends State<HomePage> {
               selectedIndex: config.selectedIndex,
               items: [
                 ItemConfig(
-                  icon: _tabIcon(ImageRes.homeTab1Nor, logic.unreadMsgCount.value),
-                  activeIcon:
-                      _tabIcon(ImageRes.homeTab1Sel, logic.unreadMsgCount.value),
+                  icon: _tabIcon(ImageRes.homeTab1Sel, logic.unreadMsgCount.value),
+                  inactiveIcon:
+                      _tabIcon(ImageRes.homeTab1Nor, logic.unreadMsgCount.value),
                   title: StrRes.home,
                 ),
                 ItemConfig(
-                  icon: _tabIcon(ImageRes.homeTab2Nor, logic.unhandledCount.value),
-                  activeIcon:
-                      _tabIcon(ImageRes.homeTab2Sel, logic.unhandledCount.value),
+                  icon: _tabIcon(ImageRes.homeTab2Sel, logic.unhandledCount.value),
+                  inactiveIcon:
+                      _tabIcon(ImageRes.homeTab2Nor, logic.unhandledCount.value),
                   title: StrRes.contacts,
                 ),
                 ItemConfig(
-                  icon: _tabIcon(ImageRes.homeTab3Nor, 0),
-                  activeIcon: _tabIcon(ImageRes.homeTab3Sel, 0),
+                  icon: _tabIcon(ImageRes.homeTab3Sel, 0),
+                  inactiveIcon: _tabIcon(ImageRes.homeTab3Nor, 0),
                   title: StrRes.workingCircle,
                 ),
                 ItemConfig(
-                  icon: _tabIcon(ImageRes.homeTab4Nor, 0),
-                  activeIcon: _tabIcon(ImageRes.homeTab4Sel, 0),
+                  icon: _tabIcon(ImageRes.homeTab4Sel, 0),
+                  inactiveIcon: _tabIcon(ImageRes.homeTab4Nor, 0),
                   title: StrRes.mine,
                 ),
               ],
