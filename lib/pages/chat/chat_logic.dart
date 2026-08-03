@@ -1269,7 +1269,16 @@ class ChatLogic extends SuperController {
       Logger.print('--------assets path-----$path');
       switch (asset.type) {
         case AssetType.image:
-          await sendPicture(path: path, sendNow: sendNow);
+          final ctx = Get.context;
+          if (ctx == null) break;
+          // GIF keeps original path; other images open edit/crop/doodle first.
+          if (path.toLowerCase().endsWith('.gif')) {
+            await sendPicture(path: path, sendNow: sendNow);
+          } else {
+            final edited = await ImageEditHelper.openFromPath(ctx, path);
+            if (edited == null || edited.isEmpty) break;
+            await sendPicture(path: edited, sendNow: sendNow);
+          }
           break;
         case AssetType.video:
           final thumbnailData = await asset.thumbnailDataWithSize(
