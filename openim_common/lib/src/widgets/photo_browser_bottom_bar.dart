@@ -91,7 +91,7 @@ class PhotoBrowserBottomBar extends StatelessWidget {
                 minWidth: MediaQuery.of(context).size.width, maxHeight: 40.h),
             child: CupertinoButton(
                 padding: EdgeInsets.zero,
-                minimumSize: Size(0, 40.h),
+                minSize: 40.h,
                 child: Text(StrRes.cancel, style: Styles.ts_0C1C33_12sp),
                 onPressed: () {
                   Navigator.of(context).pop();

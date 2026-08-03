@@ -51,7 +51,7 @@ dependencies:
   flutter_spinkit: ^5.1.0
   percent_indicator: ^4.2.3
   flutter_image_compress: ^2.1.0
-  pro_image_editor: ^13.3.0
+  pro_image_editor: ^11.23.0
   font_awesome_flutter: ^10.9.1
   dart_date: ^1.1.1
   video_compress: ^3.1.2
