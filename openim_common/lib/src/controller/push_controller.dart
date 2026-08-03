@@ -15,9 +15,9 @@ enum PushType { getui, FCM, none }
 /// Getui credentials for iOS offline push (Bundle ID: com.zghtchat9.im).
 /// Replace placeholders with values from the Getui console; when filled,
 /// [PushController] enables [PushType.getui] automatically.
-const appID = 'your-app-id';
-const appKey = 'your-app-key';
-const appSecret = 'your-app-secret';
+const appID = 'gy41yoFqNV8bdYKPBDYwc7';
+const appKey = 'UveVgAb1Id8vAfz7RdCkA6';
+const appSecret = 'yIcrJFzeUd6MynyvYNZ251';
 
 bool get _hasGetuiCredentials =>
     appID.isNotEmpty &&

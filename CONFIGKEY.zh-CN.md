@@ -11,9 +11,9 @@
 ### 杀进程也能收推送的前提（缺一不可）
 
 1. **个推控制台**已创建 iOS 应用，Bundle ID：`com.zghtchat9.im`
-2. 客户端填入真实 **AppID / AppKey / AppSecret**（见下方）
+2. 客户端填入真实 **AppID / AppKey / AppSecret**（见下方；**Master Secret 仅给 OpenIM 服务端用，不要写进 App**）
 3. **个推后台已上传 Apple APNs 证书/密钥**（.p12 或 AuthKey）——否则杀进程收不到系统通知
-4. **OpenIM 服务端**（如 `im.zghtchat9.top`）配置个推推送（与客户端相同 AppID/Key/Secret，按 userID/别名下发）
+4. **OpenIM 服务端**（如 `im.zghtchat9.top`）配置个推推送（AppID/AppKey/AppSecret/**Master Secret**，按 userID/别名下发）
 5. 正式签名包在 Xcode **Signing & Capabilities** 勾选 **Push Notifications**；`Runner.entitlements` 中 `aps-environment` 开发用 `development`，正式分发改为 `production`
 
 > 仅改客户端 SDK ≠ 离线可收。必须：个推密钥 + APNs + OpenIM 服务端推送配置 三者齐全。
