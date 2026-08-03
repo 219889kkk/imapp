@@ -73,6 +73,15 @@ class _MediaBrowserState extends State<MediaBrowser> with TickerProviderStateMix
     super.dispose();
   }
 
+  bool _safeLocalFile(File? file) {
+    if (file == null) return false;
+    try {
+      return file.existsSync();
+    } catch (_) {
+      return false;
+    }
+  }
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -176,13 +185,20 @@ class _MediaBrowserState extends State<MediaBrowser> with TickerProviderStateMix
                           tag: s.tag ?? s.thumbnail,
                           slideType: SlideType.onlyImage,
                           slidePagekey: slidePagekey,
-                          child: s.file != null && s.file!.existsSync()
+                          child: _safeLocalFile(s.file)
                               ? ExtendedImage.file(
                                   s.file!,
                                   enableSlideOutPage: true,
                                   fit: BoxFit.contain,
                                   mode: ExtendedImageMode.gesture,
                                   cacheWidth: cacheWidth,
+                                  loadStateChanged: (state) {
+                                    if (state.extendedImageLoadState ==
+                                        LoadState.failed) {
+                                      return ImageRes.pictureError.toImage;
+                                    }
+                                    return null;
+                                  },
                                   initGestureConfigHandler:
                                       (ExtendedImageState state) {
                                     return GestureConfig(

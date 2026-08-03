@@ -18,7 +18,7 @@ import '../../utils/utils.dart';
 class ImageEditHelper {
   ImageEditHelper._();
 
-  static const int _maxEditEdge = 1920;
+  static const int _maxEditEdge = 1280;
 
   static Future<String?> openFromMediaSource(
     BuildContext context,

@@ -37,15 +37,24 @@ class PushController extends GetxService {
   @override
   void onInit() {
     super.onInit();
-    if (_hasGetuiCredentials) {
+    // Getui vendor channels are only wired for iOS this round.
+    // Initializing Getui on Android without GETUI_APPID/manifest causes crashes.
+    if (Platform.isIOS && _hasGetuiCredentials) {
       pushType = PushType.getui;
       _ensureGetuiStarted();
     } else {
       pushType = PushType.none;
-      Logger.print(
-        'PushController: Getui credentials not set, pushType=none '
-        '(offline push disabled until AppID/AppKey/AppSecret are filled)',
-      );
+      if (Platform.isAndroid && _hasGetuiCredentials) {
+        Logger.print(
+          'PushController: Getui credentials present but Android push '
+          'disabled until vendor channels are configured',
+        );
+      } else if (!_hasGetuiCredentials) {
+        Logger.print(
+          'PushController: Getui credentials not set, pushType=none '
+          '(offline push disabled until AppID/AppKey/AppSecret are filled)',
+        );
+      }
     }
   }
 
@@ -131,12 +140,11 @@ class PushController extends GetxService {
 
       if (Platform.isIOS) {
         gt.startSdk(appId: appID, appKey: appKey, appSecret: appSecret);
-      } else if (Platform.isAndroid) {
-        // Android vendor channels are out of scope; init only if credentials set.
-        gt.initGetuiSdk;
+        _getuiInited = true;
+        Logger.print('Getui SDK start requested (iOS)');
+      } else {
+        Logger.print('Getui SDK start skipped on Android (iOS-only this round)');
       }
-      _getuiInited = true;
-      Logger.print('Getui SDK start requested (platform=${Platform.operatingSystem})');
     } catch (e, s) {
       Logger.print('Getui SDK start failed: $e $s');
       _getuiInited = false;

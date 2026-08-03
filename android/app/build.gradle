@@ -46,8 +46,8 @@ android {
         profile { signingConfig signingConfigs.release }
         release {
             signingConfig signingConfigs.release
-            // R8 minify broke CI release builds (OpenIM / native plugins).
-            // Keep arm64-only + Dart obfuscation for size instead.
+            // Keep release unminified. Dart --obfuscate is also disabled in CI
+            // because GetX / plugins can crash on some OEM devices when names are mangled.
             minifyEnabled false
             shrinkResources false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
