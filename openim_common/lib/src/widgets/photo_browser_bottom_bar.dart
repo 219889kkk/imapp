@@ -13,32 +13,34 @@ class PhotoBrowserBottomBar extends StatelessWidget {
   PhotoBrowserBottomBar({
     super.key,
     this.onPressedButton,
-    this.onlySave,
+    this.onlySave = false,
     this.showEdit = false,
   });
-  ValueChanged<OperateType>? onPressedButton;
-  bool? onlySave;
-  bool showEdit;
 
-  PhotoBrowserBottomBar.show(
+  final ValueChanged<OperateType>? onPressedButton;
+  final bool onlySave;
+  final bool showEdit;
+
+  static void show(
     BuildContext context, {
-    super.key,
     bool onlySave = false,
     bool showEdit = false,
     ValueChanged<OperateType>? onPressedButton,
   }) {
     showModalBottomSheet(
-        isScrollControlled: true,
-        backgroundColor: Colors.transparent,
-        context: context,
-        builder: (context) {
-          return PhotoBrowserBottomBar(
-            onPressedButton: onPressedButton,
-            onlySave: onlySave,
-            showEdit: showEdit,
-          );
-        });
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      context: context,
+      builder: (context) {
+        return PhotoBrowserBottomBar(
+          onPressedButton: onPressedButton,
+          onlySave: onlySave,
+          showEdit: showEdit,
+        );
+      },
+    );
   }
+
   @override
   Widget build(BuildContext context) {
     return _buildBar(context);
@@ -46,13 +48,13 @@ class PhotoBrowserBottomBar extends StatelessWidget {
 
   Widget _buildBar(BuildContext context) {
     return Container(
-      constraints: BoxConstraints(maxHeight: 142),
+      constraints: const BoxConstraints(maxHeight: 142),
       clipBehavior: Clip.antiAlias,
-      decoration: BoxDecoration(
-        color: Styles.c_F0F2F6,
+      decoration: const BoxDecoration(
+        color: Color(0xFFF0F2F6),
         borderRadius: BorderRadius.only(
-          topLeft: const Radius.circular(8.0),
-          topRight: const Radius.circular(8.0),
+          topLeft: Radius.circular(8.0),
+          topRight: Radius.circular(8.0),
         ),
       ),
       child: Column(
@@ -60,7 +62,7 @@ class PhotoBrowserBottomBar extends StatelessWidget {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceAround,
             children: [
-              if (onlySave == false)
+              if (!onlySave)
                 _buildItem(ImageRes.forwardIcon.toImage, StrRes.menuForward,
                     onPressed: () {
                   Navigator.of(context).pop();
@@ -83,15 +85,13 @@ class PhotoBrowserBottomBar extends StatelessWidget {
               })
             ],
           ),
-          Divider(
-            height: 6.h,
-          ),
+          Divider(height: 6.h),
           ConstrainedBox(
             constraints: BoxConstraints(
                 minWidth: MediaQuery.of(context).size.width, maxHeight: 40.h),
             child: CupertinoButton(
                 padding: EdgeInsets.zero,
-                minSize: 40.h,
+                minimumSize: Size(0, 40.h),
                 child: Text(StrRes.cancel, style: Styles.ts_0C1C33_12sp),
                 onPressed: () {
                   Navigator.of(context).pop();
@@ -105,18 +105,16 @@ class PhotoBrowserBottomBar extends StatelessWidget {
   Widget _buildItem(Widget icon, String title, {VoidCallback? onPressed}) {
     return Column(children: [
       CupertinoButton(
-          padding: EdgeInsets.only(top: 16, bottom: 8),
+          padding: const EdgeInsets.only(top: 16, bottom: 8),
           child: Container(
-            decoration: BoxDecoration(
-                color: Styles.c_FFFFFF,
+            decoration: const BoxDecoration(
+                color: Color(0xFFFFFFFF),
                 borderRadius: BorderRadius.all(Radius.circular(5))),
             height: 48,
             width: 48,
             child: Center(child: icon),
           ),
-          onPressed: () {
-            onPressed?.call();
-          }),
+          onPressed: onPressed),
       Text(
         title,
         textAlign: TextAlign.center,
