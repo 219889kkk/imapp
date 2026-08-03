@@ -29,6 +29,15 @@ import FirebaseCore
         GeneratedPluginRegistrant.register(with: self)
         return super.application(application, didFinishLaunchingWithOptions: launchOptions)
     }
+
+    /// Required empty hook so Getui can receive remote notifications when the app is backgrounded.
+    override func application(
+        _ application: UIApplication,
+        didReceiveRemoteNotification userInfo: [AnyHashable: Any],
+        fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
+    ) {
+        completionHandler(.newData)
+    }
     
     func handleReplayKitFromFlutter(result:FlutterResult, call: FlutterMethodCall){
         switch (call.method) {

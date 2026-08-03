@@ -116,6 +116,11 @@ public final class GeneratedPluginRegistrant {
       Log.e(TAG, "Error registering plugin geolocator_android, com.baseflow.geolocator.GeolocatorPlugin", e);
     }
     try {
+      flutterEngine.getPlugins().add(new com.getui.getuiflut.GetuiflutPlugin());
+    } catch (Exception e) {
+      Log.e(TAG, "Error registering plugin getuiflut, com.getui.getuiflut.GetuiflutPlugin", e);
+    }
+    try {
       flutterEngine.getPlugins().add(new com.baseflow.googleapiavailability.GoogleApiAvailabilityPlugin());
     } catch (Exception e) {
       Log.e(TAG, "Error registering plugin google_api_availability_android, com.baseflow.googleapiavailability.GoogleApiAvailabilityPlugin", e);

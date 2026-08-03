@@ -6,7 +6,17 @@
 
 ## 离线推送功能
 
-目前使用的是集成方案。
+目前使用的是集成方案。客户端已接入 **iOS 个推**（`getuiflut`）：登录后绑定 OpenIM `userID` 为别名；密钥非占位时自动启用 `PushType.getui`。
+
+### 杀进程也能收推送的前提（缺一不可）
+
+1. **个推控制台**已创建 iOS 应用，Bundle ID：`com.zghtchat9.im`
+2. 客户端填入真实 **AppID / AppKey / AppSecret**（见下方）
+3. **个推后台已上传 Apple APNs 证书/密钥**（.p12 或 AuthKey）——否则杀进程收不到系统通知
+4. **OpenIM 服务端**（如 `im.zghtchat9.top`）配置个推推送（与客户端相同 AppID/Key/Secret，按 userID/别名下发）
+5. 正式签名包在 Xcode **Signing & Capabilities** 勾选 **Push Notifications**；`Runner.entitlements` 中 `aps-environment` 开发用 `development`，正式分发改为 `production`
+
+> 仅改客户端 SDK ≠ 离线可收。必须：个推密钥 + APNs + OpenIM 服务端推送配置 三者齐全。
 
 ### 客户端配置
 
@@ -24,6 +34,14 @@
   const appKey = 'your-app-key';
   const appSecret = 'your-app-secret';
 ```
+
+替换为真实值后，下次启动会自动 `pushType = getui`，登录时 `bindAlias(userID)`。
+
+**iOS 工程已改：**
+- `Info.plist` → `UIBackgroundModes` 含 `remote-notification`（及通话相关 `audio`/`voip`）
+- `Runner.entitlements` → `aps-environment = development`
+
+**验证步骤：** 装含个推的新 iOS 包 → 登录 → 完全划掉 App → 另一账号发消息/打语音 → 应出系统通知。
 
 **Android 平台配置：**
 根据[其文档](https://docs.getui.com/getui/mobile/android/overview/)做好相应的Android配置，注意[多厂商](https://docs.getui.com/getui/mobile/vendor/vendor_open/)配置。然后修改以下文件内容：

@@ -1036,6 +1036,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "4.7.2"
+  getuiflut:
+    dependency: transitive
+    description:
+      name: getuiflut
+      sha256: "3dbebe0928785ff8f8e0e409b959c6f7e7bdd83c17bd59aeae0cfac731717461"
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.2.41"
   glob:
     dependency: transitive
     description:

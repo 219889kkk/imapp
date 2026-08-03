@@ -102,6 +102,12 @@
 @import geolocator_apple;
 #endif
 
+#if __has_include(<getuiflut/GetuiflutPlugin.h>)
+#import <getuiflut/GetuiflutPlugin.h>
+#else
+@import getuiflut;
+#endif
+
 #if __has_include(<image_cropper/FLTImageCropperPlugin.h>)
 #import <image_cropper/FLTImageCropperPlugin.h>
 #else
@@ -289,6 +295,7 @@
   [FlutterOpenimSdkPlugin registerWithRegistrar:[registry registrarForPlugin:@"FlutterOpenimSdkPlugin"]];
   [FlutterWebRTCPlugin registerWithRegistrar:[registry registrarForPlugin:@"FlutterWebRTCPlugin"]];
   [GeolocatorPlugin registerWithRegistrar:[registry registrarForPlugin:@"GeolocatorPlugin"]];
+  [GetuiflutPlugin registerWithRegistrar:[registry registrarForPlugin:@"GetuiflutPlugin"]];
   [FLTImageCropperPlugin registerWithRegistrar:[registry registrarForPlugin:@"FLTImageCropperPlugin"]];
   [ImageGallerySaverPlusPlugin registerWithRegistrar:[registry registrarForPlugin:@"ImageGallerySaverPlusPlugin"]];
   [FLTImagePickerPlugin registerWithRegistrar:[registry registrarForPlugin:@"FLTImagePickerPlugin"]];

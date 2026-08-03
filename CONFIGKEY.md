@@ -6,7 +6,15 @@
 
 ## Offlinepush
 
-Currently using the integrated solution.
+Currently using the integrated solution. iOS Getui (`getuiflut`) is wired: after login the OpenIM `userID` is bound as a Getui alias. When real AppID/AppKey/AppSecret replace placeholders, `PushType.getui` is enabled automatically.
+
+### Kill-app push checklist (all required)
+
+1. Getui console: iOS app with Bundle ID `com.zghtchat9.im`
+2. Client credentials filled in `push_controller.dart`
+3. APNs cert/key uploaded in Getui console
+4. OpenIM server configured for Getui (same credentials, push by userID/alias)
+5. Signed builds: Xcode **Push Notifications** capability; `aps-environment` is `development` for debug, `production` for App Store / ad-hoc
 
 ### Client configuration
 
@@ -24,6 +32,8 @@ According to [its documentation](https://docs.getui.com/getui/mobile/ios/overvie
   const appKey = 'your-app-key';
   const appSecret = 'your-app-secret';
 ```
+
+**iOS project:** `Info.plist` includes `remote-notification`; `Runner.entitlements` has `aps-environment=development`.
 
 **Android platform configuration:**
 According to [its documentation](https://docs.getui.com/getui/mobile/android/overview/), make corresponding Android configurations, and pay attention to [multi-vendor](https://docs.getui.com/getui/mobile/vendor/vendor_open/) configurations. Then modify the following file contents:
