@@ -791,6 +791,8 @@ class StrRes {
 
   static String get edit => 'edit'.tr;
 
+  static String get editDoodle => 'editDoodle'.tr;
+
   static String get publish => 'publish'.tr;
 
   static String get groupMember => 'groupMember'.tr;

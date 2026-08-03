@@ -393,6 +393,7 @@ const Map<String, String> en_US = {
   'groupAcPermissionTips': 'Only owner and admin can edit',
   'plsEnterGroupAc': 'Please enter group announcement',
   'edit': 'Edit',
+  'editDoodle': 'Edit & Doodle',
   'publish': 'Publish',
   'groupMember': 'Group Members',
   'selectedPeopleCount': 'Selected (%s)',

@@ -170,33 +170,63 @@ class IMUtils {
       return file;
     }
 
+    // HEIC encode is unreliable on many Android OEMs and can crash the process.
     CompressFormat format = CompressFormat.jpeg;
-    if (name.endsWith(".jpg") || name.endsWith(".jpeg")) {
-      format = CompressFormat.jpeg;
-    } else if (name.endsWith(".png")) {
+    if (name.endsWith(".png")) {
       format = CompressFormat.png;
-    } else if (name.endsWith(".heic")) {
-      format = CompressFormat.heic;
     } else if (name.endsWith(".webp")) {
       format = CompressFormat.webp;
+    } else if (name.endsWith(".heic") || name.endsWith(".heif")) {
+      format = Platform.isIOS ? CompressFormat.heic : CompressFormat.jpeg;
     }
 
-    var targetDirectory = await getTempDirectory(name);
+    try {
+      var targetDirectory = await getTempDirectory(name);
 
-    if (file.path == targetDirectory.path) {
-      targetDirectory = await getTempDirectory('compressed-$name');
+      if (file.path == targetDirectory.path) {
+        targetDirectory = await getTempDirectory('compressed-$name');
+      }
+
+      // Force jpeg extension when falling back from HEIC on Android.
+      var outPath = targetDirectory.path;
+      if (!Platform.isIOS &&
+          (name.endsWith('.heic') || name.endsWith('.heif'))) {
+        outPath = (await getTempDirectory(
+                'compressed-${DateTime.now().millisecondsSinceEpoch}.jpg'))
+            .path;
+        format = CompressFormat.jpeg;
+      }
+
+      final result = await FlutterImageCompress.compressAndGetFile(
+        file.absolute.path,
+        outPath,
+        quality: quality,
+        minWidth: 1280,
+        minHeight: 720,
+        format: format,
+      );
+
+      return result != null ? File(result.path) : file;
+    } catch (e, s) {
+      Logger.print('compressImageAndGetFile failed: $e $s');
+      // Last resort: re-encode as jpeg to avoid OEM encoder crashes.
+      try {
+        final fallback = await getTempDirectory(
+            'fallback-${DateTime.now().millisecondsSinceEpoch}.jpg');
+        final result = await FlutterImageCompress.compressAndGetFile(
+          file.absolute.path,
+          fallback.path,
+          quality: quality,
+          minWidth: 1280,
+          minHeight: 720,
+          format: CompressFormat.jpeg,
+        );
+        return result != null ? File(result.path) : file;
+      } catch (e2, s2) {
+        Logger.print('compressImage jpeg fallback failed: $e2 $s2');
+        return file;
+      }
     }
-
-    final result = await FlutterImageCompress.compressAndGetFile(
-      file.absolute.path,
-      targetDirectory.path,
-      quality: quality,
-      minWidth: 1280,
-      minHeight: 720,
-      format: format,
-    );
-
-    return result != null ? File(result.path) : file;
   }
 
   static Future<String> createTempFile({
@@ -1035,31 +1065,116 @@ class IMUtils {
       bool muted = false,
       bool Function(int)? onAutoPlay,
       ValueChanged<int>? onPageChanged,
-      bool onlySave = false}) {
-    final sources = message.isVideoType
-        ? MediaSource(
-            url: message.videoElem?.videoUrl,
-            thumbnail: message.videoElem!.snapshotUrl
-                    ?.adjustThumbnailAbsoluteString(960) ??
-                '',
-            file: File(message.videoElem!.videoPath!),
-            tag: message.clientMsgID,
-            isVideo: true,
-          )
-        : MediaSource(
-            url: message.pictureElem?.sourcePicture?.url,
-            thumbnail: message.pictureElem!.snapshotPicture?.url
-                    ?.adjustThumbnailAbsoluteString(960) ??
-                '',
-            file: File(message.pictureElem!.sourcePath!),
-            tag: message.clientMsgID,
-          );
+      ValueChanged<String>? onEdited,
+      bool onlySave = false}) async {
+    MediaSource sources;
+    try {
+      if (message.isVideoType) {
+        final videoPath = message.videoElem?.videoPath;
+        File? videoFile;
+        if (isNotNullEmptyStr(videoPath)) {
+          try {
+            final p = await toFilePath(videoPath!);
+            final f = File(p);
+            if (await f.exists()) videoFile = f;
+          } catch (e, s) {
+            Logger.print('previewMediaFile video path: $e $s');
+          }
+        }
+        sources = MediaSource(
+          url: message.videoElem?.videoUrl,
+          thumbnail: message.videoElem?.snapshotUrl
+                  ?.adjustThumbnailAbsoluteString(960) ??
+              '',
+          file: videoFile,
+          tag: message.clientMsgID,
+          isVideo: true,
+        );
+      } else {
+        final picPath = message.pictureElem?.sourcePath;
+        File? picFile;
+        if (isNotNullEmptyStr(picPath)) {
+          try {
+            final p = await toFilePath(picPath!);
+            final f = File(p);
+            if (await f.exists()) picFile = f;
+          } catch (e, s) {
+            Logger.print('previewMediaFile picture path: $e $s');
+          }
+        }
+        sources = MediaSource(
+          url: message.pictureElem?.sourcePicture?.url ??
+              message.pictureElem?.bigPicture?.url ??
+              message.pictureElem?.snapshotPicture?.url,
+          thumbnail: message.pictureElem?.snapshotPicture?.url
+                  ?.adjustThumbnailAbsoluteString(960) ??
+              '',
+          file: picFile,
+          tag: message.clientMsgID,
+        );
+      }
+    } catch (e, s) {
+      Logger.print('previewMediaFile build source failed: $e $s');
+      IMViews.showToast('$e');
+      return;
+    }
+
+    if (!sources.isVideo &&
+        sources.file == null &&
+        !isNotNullEmptyStr(sources.url) &&
+        sources.thumbnail.isEmpty) {
+      IMViews.showToast(StrRes.saveFailed);
+      return;
+    }
 
     final mb = MediaBrowser(
       sources: [sources],
       initialIndex: 0,
       onAutoPlay: (index) => onAutoPlay != null ? onAutoPlay(index) : false,
       muted: muted,
+      allowEdit: !sources.isVideo && onEdited != null,
+      onEdit: onEdited == null
+          ? null
+          : (index) async {
+              final source = sources;
+              final editedPath = await ImageEditHelper.openFromMediaSource(
+                context,
+                source,
+              );
+              if (editedPath != null && editedPath.isNotEmpty) {
+                onEdited(editedPath);
+              }
+            },
+      onLongPress: (index) {
+        final source = sources;
+        PhotoBrowserBottomBar.show(
+          context,
+          onlySave: onlySave || source.isVideo,
+          showEdit: !source.isVideo && onEdited != null,
+          onPressedButton: (type) async {
+            if (type == OperateType.edit && onEdited != null) {
+              final editedPath = await ImageEditHelper.openFromMediaSource(
+                context,
+                source,
+              );
+              if (editedPath != null && editedPath.isNotEmpty) {
+                onEdited(editedPath);
+              }
+            } else if (type == OperateType.save) {
+              if (isNotNullEmptyStr(source.url)) {
+                saveImage(context, source.url!);
+              } else if (source.file != null) {
+                await HttpUtil.saveFileToGallerySaver(
+                  source.file!,
+                  name:
+                      'img_${DateTime.now().millisecondsSinceEpoch}.jpg',
+                );
+                IMViews.showToast(StrRes.saveSuccessfully);
+              }
+            }
+          },
+        );
+      },
     );
     return Navigator.of(context).push(
       PageRouteBuilder(

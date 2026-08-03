@@ -384,6 +384,7 @@ const Map<String, String> zh_CN = {
   'groupAcPermissionTips': '只有群主及管理员可以编辑',
   'plsEnterGroupAc': '请输入群公告',
   'edit': '编辑',
+  'editDoodle': '编辑涂鸦',
   'publish': '发布',
   'groupMember': '群成员',
   'selectedPeopleCount': '已选择（%s）',

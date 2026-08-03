@@ -6,15 +6,27 @@ import 'package:openim_common/openim_common.dart';
 enum OperateType {
   forward,
   save,
+  edit,
 }
 
 class PhotoBrowserBottomBar extends StatelessWidget {
-  PhotoBrowserBottomBar({super.key, this.onPressedButton, this.onlySave});
+  PhotoBrowserBottomBar({
+    super.key,
+    this.onPressedButton,
+    this.onlySave,
+    this.showEdit = false,
+  });
   ValueChanged<OperateType>? onPressedButton;
   bool? onlySave;
+  bool showEdit;
 
-  PhotoBrowserBottomBar.show(BuildContext context,
-      {super.key, bool onlySave = false, ValueChanged<OperateType>? onPressedButton}) {
+  PhotoBrowserBottomBar.show(
+    BuildContext context, {
+    super.key,
+    bool onlySave = false,
+    bool showEdit = false,
+    ValueChanged<OperateType>? onPressedButton,
+  }) {
     showModalBottomSheet(
         isScrollControlled: true,
         backgroundColor: Colors.transparent,
@@ -23,6 +35,7 @@ class PhotoBrowserBottomBar extends StatelessWidget {
           return PhotoBrowserBottomBar(
             onPressedButton: onPressedButton,
             onlySave: onlySave,
+            showEdit: showEdit,
           );
         });
   }
@@ -48,9 +61,17 @@ class PhotoBrowserBottomBar extends StatelessWidget {
             mainAxisAlignment: MainAxisAlignment.spaceAround,
             children: [
               if (onlySave == false)
-                _buildItem(ImageRes.forwardIcon.toImage, StrRes.menuForward, onPressed: () {
+                _buildItem(ImageRes.forwardIcon.toImage, StrRes.menuForward,
+                    onPressed: () {
                   Navigator.of(context).pop();
                   onPressedButton?.call(OperateType.forward);
+                }),
+              if (showEdit)
+                _buildItem(
+                    const Icon(Icons.edit, size: 22, color: Color(0xFF0C1C33)),
+                    StrRes.editDoodle, onPressed: () {
+                  Navigator.of(context).pop();
+                  onPressedButton?.call(OperateType.edit);
                 }),
               _buildItem(
                   ImageRes.saveIcon.toImage
@@ -66,7 +87,8 @@ class PhotoBrowserBottomBar extends StatelessWidget {
             height: 6.h,
           ),
           ConstrainedBox(
-            constraints: BoxConstraints(minWidth: MediaQuery.of(context).size.width, maxHeight: 40.h),
+            constraints: BoxConstraints(
+                minWidth: MediaQuery.of(context).size.width, maxHeight: 40.h),
             child: CupertinoButton(
                 padding: EdgeInsets.zero,
                 minSize: 40.h,
