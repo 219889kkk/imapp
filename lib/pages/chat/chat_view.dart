@@ -138,7 +138,6 @@ class ChatPage extends StatelessWidget {
               },
               onEdited: (path) async {
                 try {
-                  Navigator.of(context).pop();
                   await logic.sendPicture(path: path);
                 } catch (e) {
                   IMViews.showToast(e.toString());

@@ -211,28 +211,36 @@ class ImageEditHelper {
   }
 }
 
-class _ChatImageEditorPage extends StatelessWidget {
+class _ChatImageEditorPage extends StatefulWidget {
   const _ChatImageEditorPage({required this.file});
 
   final File file;
 
   @override
+  State<_ChatImageEditorPage> createState() => _ChatImageEditorPageState();
+}
+
+class _ChatImageEditorPageState extends State<_ChatImageEditorPage> {
+  bool _didPop = false;
+
+  void _popOnce([Uint8List? bytes]) {
+    if (_didPop || !mounted) return;
+    _didPop = true;
+    Navigator.of(context).pop(bytes);
+  }
+
+  @override
   Widget build(BuildContext context) {
-    // pro_image_editor calls onImageEditingComplete then onCloseEditor on
-    // the same done tap. Popping in both would close the preview underneath
-    // and make the checkmark feel like it needs two presses.
-    var completed = false;
+    // pro_image_editor may call onImageEditingComplete then onCloseEditor.
+    // Only pop once so we never close the preview/chat underneath.
     return ProImageEditor.file(
-      file,
+      widget.file,
       callbacks: ProImageEditorCallbacks(
         onImageEditingComplete: (Uint8List bytes) async {
-          completed = true;
-          if (context.mounted) Navigator.of(context).pop(bytes);
+          _popOnce(bytes);
         },
         onCloseEditor: (_) {
-          if (!completed && context.mounted) {
-            Navigator.of(context).pop();
-          }
+          _popOnce();
         },
       ),
       configs: const ProImageEditorConfigs(

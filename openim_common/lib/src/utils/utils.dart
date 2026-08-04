@@ -1127,60 +1127,67 @@ class IMUtils {
       return;
     }
 
-    final mb = MediaBrowser(
-      sources: [sources],
-      initialIndex: 0,
-      onAutoPlay: (index) => onAutoPlay != null ? onAutoPlay(index) : false,
-      muted: muted,
-      allowEdit: !sources.isVideo && onEdited != null,
-      onEdit: onEdited == null
-          ? null
-          : (index) async {
-              final source = sources;
-              final editedPath = await ImageEditHelper.openFromMediaSource(
-                context,
-                source,
-              );
-              if (editedPath != null && editedPath.isNotEmpty) {
-                onEdited(editedPath);
-              }
-            },
-      onLongPress: (index) {
-        final source = sources;
-        PhotoBrowserBottomBar.show(
-          context,
-          onlySave: onlySave || source.isVideo,
-          showEdit: !source.isVideo && onEdited != null,
-          onPressedButton: (type) async {
-            if (type == OperateType.edit && onEdited != null) {
-              final editedPath = await ImageEditHelper.openFromMediaSource(
-                context,
-                source,
-              );
-              if (editedPath != null && editedPath.isNotEmpty) {
-                onEdited(editedPath);
-              }
-            } else if (type == OperateType.save) {
-              if (isNotNullEmptyStr(source.url)) {
-                saveImage(context, source.url!);
-              } else if (source.file != null) {
-                await HttpUtil.saveFileToGallerySaver(
-                  source.file!,
-                  name:
-                      'img_${DateTime.now().millisecondsSinceEpoch}.jpg',
-                );
-                IMViews.showToast(StrRes.saveSuccessfully);
-              }
-            }
-          },
-        );
-      },
-    );
     return Navigator.of(context).push(
       PageRouteBuilder(
         opaque: false,
-        pageBuilder: (context, animation, secondaryAnimation) {
-          return mb;
+        pageBuilder: (browserContext, animation, secondaryAnimation) {
+          return MediaBrowser(
+            sources: [sources],
+            initialIndex: 0,
+            onAutoPlay: (index) =>
+                onAutoPlay != null ? onAutoPlay(index) : false,
+            muted: muted,
+            allowEdit: !sources.isVideo && onEdited != null,
+            onEdit: onEdited == null
+                ? null
+                : (index) async {
+                    final source = sources;
+                    final editedPath =
+                        await ImageEditHelper.openFromMediaSource(
+                      browserContext,
+                      source,
+                    );
+                    if (editedPath == null || editedPath.isEmpty) return;
+                    // Close preview with its own context so chat is never popped.
+                    if (browserContext.mounted) {
+                      Navigator.of(browserContext).pop();
+                    }
+                    onEdited(editedPath);
+                  },
+            onLongPress: (index) {
+              final source = sources;
+              PhotoBrowserBottomBar.show(
+                browserContext,
+                onlySave: onlySave || source.isVideo,
+                showEdit: !source.isVideo && onEdited != null,
+                onPressedButton: (type) async {
+                  if (type == OperateType.edit && onEdited != null) {
+                    final editedPath =
+                        await ImageEditHelper.openFromMediaSource(
+                      browserContext,
+                      source,
+                    );
+                    if (editedPath == null || editedPath.isEmpty) return;
+                    if (browserContext.mounted) {
+                      Navigator.of(browserContext).pop();
+                    }
+                    onEdited(editedPath);
+                  } else if (type == OperateType.save) {
+                    if (isNotNullEmptyStr(source.url)) {
+                      saveImage(browserContext, source.url!);
+                    } else if (source.file != null) {
+                      await HttpUtil.saveFileToGallerySaver(
+                        source.file!,
+                        name:
+                            'img_${DateTime.now().millisecondsSinceEpoch}.jpg',
+                      );
+                      IMViews.showToast(StrRes.saveSuccessfully);
+                    }
+                  }
+                },
+              );
+            },
+          );
         },
         transitionsBuilder: (context, animation, secondaryAnimation, child) {
           return FadeTransition(opacity: animation, child: child);
