@@ -1053,6 +1053,7 @@ class ChatLogic extends SuperController {
       id: oldMsg.clientMsgID!,
       value: true,
     ));
+    messageList.refresh();
   }
 
   void _ensureGroupReadInfo(Message message) {

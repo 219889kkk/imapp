@@ -196,6 +196,11 @@ public final class GeneratedPluginRegistrant {
       Log.e(TAG, "Error registering plugin photo_manager, com.fluttercandies.photo_manager.PhotoManagerPlugin", e);
     }
     try {
+      flutterEngine.getPlugins().add(new ch.waio.pro_image_editor.ProImageEditorPlugin());
+    } catch (Exception e) {
+      Log.e(TAG, "Error registering plugin pro_image_editor, ch.waio.pro_image_editor.ProImageEditorPlugin", e);
+    }
+    try {
       flutterEngine.getPlugins().add(new net.touchcapture.qr.flutterqrplus.FlutterQrPlusPlugin());
     } catch (Exception e) {
       Log.e(TAG, "Error registering plugin qr_code_scanner_plus, net.touchcapture.qr.flutterqrplus.FlutterQrPlusPlugin", e);

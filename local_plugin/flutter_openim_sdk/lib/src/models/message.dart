@@ -286,22 +286,28 @@ class Message {
     ex = message.ex;
     exMap = message.exMap;
     sessionType = message.sessionType;
-    pictureElem = message.pictureElem;
-    soundElem = message.soundElem;
-    videoElem = message.videoElem;
-    fileElem = message.fileElem;
-    atTextElem = message.atTextElem;
-    locationElem = message.locationElem;
-    customElem = message.customElem;
-    quoteElem = message.quoteElem;
-    mergeElem = message.mergeElem;
-    notificationElem = message.notificationElem;
-    faceElem = message.faceElem;
-    attachedInfoElem = message.attachedInfoElem;
-    textElem = message.textElem;
-    cardElem = message.cardElem;
-    advancedTextElem = message.advancedTextElem;
-    typingElem = message.typingElem;
+    // Keep local payload when send-ack omits elems (common for text/link messages).
+    // Overwriting with null/empty makes the sender bubble disappear while peer still has it.
+    pictureElem = message.pictureElem ?? pictureElem;
+    soundElem = message.soundElem ?? soundElem;
+    videoElem = message.videoElem ?? videoElem;
+    fileElem = message.fileElem ?? fileElem;
+    atTextElem = (message.atTextElem?.text?.isNotEmpty == true)
+        ? message.atTextElem
+        : (atTextElem ?? message.atTextElem);
+    locationElem = message.locationElem ?? locationElem;
+    customElem = message.customElem ?? customElem;
+    quoteElem = message.quoteElem ?? quoteElem;
+    mergeElem = message.mergeElem ?? mergeElem;
+    notificationElem = message.notificationElem ?? notificationElem;
+    faceElem = message.faceElem ?? faceElem;
+    attachedInfoElem = message.attachedInfoElem ?? attachedInfoElem;
+    textElem = (message.textElem?.content?.isNotEmpty == true)
+        ? message.textElem
+        : (textElem ?? message.textElem);
+    cardElem = message.cardElem ?? cardElem;
+    advancedTextElem = message.advancedTextElem ?? advancedTextElem;
+    typingElem = message.typingElem ?? typingElem;
   }
 
   /// Single chat message
