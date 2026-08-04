@@ -1,0 +1,222 @@
+# iOS 签名 IPA（Development / Ad Hoc）
+# 前置：在仓库 Settings → Secrets 配置见 docs 注释与 scripts/prepare-ios-signing-secrets.ps1
+# Actions → iOS Signed → Run workflow → 下载 openim-ios-signed
+
+name: iOS Signed
+
+on:
+  workflow_dispatch:
+    inputs:
+      export_method:
+        description: "signing method"
+        required: true
+        default: ad-hoc
+        type: choice
+        options:
+          - ad-hoc
+          - development
+          - app-store
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Require signing secrets
+        env:
+          IOS_P12_BASE64: ${{ secrets.IOS_P12_BASE64 }}
+          IOS_P12_PASSWORD: ${{ secrets.IOS_P12_PASSWORD }}
+          IOS_PROFILE_APP_BASE64: ${{ secrets.IOS_PROFILE_APP_BASE64 }}
+          IOS_PROFILE_NSE_BASE64: ${{ secrets.IOS_PROFILE_NSE_BASE64 }}
+          IOS_TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
+        run: |
+          set -e
+          missing=0
+          for v in IOS_P12_BASE64 IOS_P12_PASSWORD IOS_PROFILE_APP_BASE64 IOS_PROFILE_NSE_BASE64; do
+            if [ -z "${!v}" ]; then
+              echo "::error::Missing secret: $v"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "Add secrets via scripts/prepare-ios-signing-secrets.ps1 then re-run."
+            exit 1
+          fi
+          echo "TEAM_ID=${IOS_TEAM_ID:-U7QZA36QT4}" >> "$GITHUB_ENV"
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.41.0"
+          channel: stable
+          cache: true
+
+      - name: Pub get
+        run: flutter pub get
+
+      - name: Patch livekit WebRTC pod version
+        run: |
+          set -e
+          PODSPEC=$(find "$PUB_CACHE" -path "*/livekit_client-*/ios/livekit_client.podspec" | head -1)
+          if [ -z "$PODSPEC" ]; then
+            echo "livekit_client podspec not found in pub cache"
+            exit 1
+          fi
+          sed -i '' "s/137.7151.03/137.7151.04/g" "$PODSPEC"
+          echo "Patched $PODSPEC"
+
+      - name: Install certificate and profiles
+        env:
+          IOS_P12_BASE64: ${{ secrets.IOS_P12_BASE64 }}
+          IOS_P12_PASSWORD: ${{ secrets.IOS_P12_PASSWORD }}
+          IOS_PROFILE_APP_BASE64: ${{ secrets.IOS_PROFILE_APP_BASE64 }}
+          IOS_PROFILE_NSE_BASE64: ${{ secrets.IOS_PROFILE_NSE_BASE64 }}
+          KEYCHAIN_PASSWORD: ${{ secrets.IOS_KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          CERT_PATH="$RUNNER_TEMP/hangxun_signing.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/hangxun.keychain-db"
+          KC_PASS="${KEYCHAIN_PASSWORD:-github-actions-temp-keychain}"
+
+          echo -n "$IOS_P12_BASE64" | base64 --decode > "$CERT_PATH"
+
+          security create-keychain -p "$KC_PASS" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KC_PASS" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -P "$IOS_P12_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KC_PASS" "$KEYCHAIN_PATH"
+
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+
+          install_profile() {
+            local b64="$1"
+            local label="$2"
+            local tmp="$RUNNER_TEMP/${label}.mobileprovision"
+            echo -n "$b64" | base64 --decode > "$tmp"
+            local plist="$RUNNER_TEMP/${label}.plist"
+            security cms -D -i "$tmp" > "$plist"
+            local uuid name
+            uuid=$(/usr/libexec/PlistBuddy -c 'Print UUID' "$plist")
+            name=$(/usr/libexec/PlistBuddy -c 'Print Name' "$plist")
+            cp "$tmp" "$HOME/Library/MobileDevice/Provisioning Profiles/${uuid}.mobileprovision"
+            echo "${label}_UUID=$uuid" >> "$GITHUB_ENV"
+            echo "${label}_NAME=$name" >> "$GITHUB_ENV"
+            echo "Installed $label profile: $name ($uuid)"
+          }
+
+          install_profile "$IOS_PROFILE_APP_BASE64" "APP"
+          install_profile "$IOS_PROFILE_NSE_BASE64" "NSE"
+
+      - name: Switch to manual signing
+        env:
+          APP_NAME: ${{ env.APP_NAME }}
+          NSE_NAME: ${{ env.NSE_NAME }}
+          TEAM_ID: ${{ env.TEAM_ID }}
+        run: |
+          set -e
+          PBX="ios/Runner.xcodeproj/project.pbxproj"
+          sed -i '' 's/CODE_SIGN_STYLE = Automatic;/CODE_SIGN_STYLE = Manual;/g' "$PBX"
+          python3 <<'PY'
+          import pathlib, re, os
+          p = pathlib.Path("ios/Runner.xcodeproj/project.pbxproj")
+          text = p.read_text(encoding="utf-8")
+          app_name = os.environ["APP_NAME"]
+          nse_name = os.environ["NSE_NAME"]
+          team = os.environ.get("TEAM_ID", "U7QZA36QT4")
+
+          def set_for_bundle(src: str, bundle: str, profile: str) -> str:
+              pattern = re.compile(
+                  r"(buildSettings = \{(?:[^{}]|\n)*?PRODUCT_BUNDLE_IDENTIFIER = "
+                  + re.escape(bundle)
+                  + r";(?:[^{}]|\n)*?\})",
+                  re.M,
+              )
+              def repl(m):
+                  block = m.group(1)
+                  if "CODE_SIGN_STYLE" in block:
+                      block = re.sub(r"CODE_SIGN_STYLE = [^;]+;", "CODE_SIGN_STYLE = Manual;", block)
+                  else:
+                      block = block.replace("buildSettings = {", "buildSettings = {\n\t\t\t\tCODE_SIGN_STYLE = Manual;")
+                  if "DEVELOPMENT_TEAM" in block:
+                      block = re.sub(r"DEVELOPMENT_TEAM = [^;]+;", f"DEVELOPMENT_TEAM = {team};", block)
+                  else:
+                      block = block.replace("buildSettings = {", f"buildSettings = {{\n\t\t\t\tDEVELOPMENT_TEAM = {team};")
+                  spec = f'PROVISIONING_PROFILE_SPECIFIER = "{profile}";'
+                  if "PROVISIONING_PROFILE_SPECIFIER" in block:
+                      block = re.sub(r'PROVISIONING_PROFILE_SPECIFIER = "[^"]*";', spec, block)
+                      block = re.sub(r"PROVISIONING_PROFILE_SPECIFIER = [^;\n]+;", spec, block)
+                  else:
+                      block = block.replace("buildSettings = {", f"buildSettings = {{\n\t\t\t\t{spec}")
+                  return block
+              out, n = pattern.subn(repl, src)
+              print(f"Updated {n} buildSettings block(s) for {bundle}")
+              if n == 0:
+                  raise SystemExit(f"No buildSettings found for {bundle}")
+              return out
+
+          text = set_for_bundle(text, "top.hangxun.app", app_name)
+          text = set_for_bundle(text, "top.hangxun.app.NotificationService", nse_name)
+          p.write_text(text, encoding="utf-8")
+          PY
+
+      - name: Write ExportOptions.plist
+        env:
+          APP_NAME: ${{ env.APP_NAME }}
+          NSE_NAME: ${{ env.NSE_NAME }}
+          TEAM_ID: ${{ env.TEAM_ID }}
+          METHOD: ${{ inputs.export_method }}
+        run: |
+          set -e
+          python3 <<'PY'
+          import os, pathlib
+          method = os.environ["METHOD"]
+          team = os.environ["TEAM_ID"]
+          app = os.environ["APP_NAME"]
+          nse = os.environ["NSE_NAME"]
+          content = f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>method</key>
+	<string>{method}</string>
+	<key>teamID</key>
+	<string>{team}</string>
+	<key>signingStyle</key>
+	<string>manual</string>
+	<key>compileBitcode</key>
+	<false/>
+	<key>stripSwiftSymbols</key>
+	<true/>
+	<key>provisioningProfiles</key>
+	<dict>
+		<key>top.hangxun.app</key>
+		<string>{app}</string>
+		<key>top.hangxun.app.NotificationService</key>
+		<string>{nse}</string>
+	</dict>
+</dict>
+</plist>
+"""
+          pathlib.Path("ios/ExportOptions-ci.plist").write_text(content, encoding="utf-8")
+          print(content)
+          PY
+          plutil -lint ios/ExportOptions-ci.plist
+
+      - name: Build signed IPA
+        run: |
+          set -e
+          flutter build ipa --release --export-options-plist=ios/ExportOptions-ci.plist
+          ls -la build/ios/ipa/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: openim-ios-signed
+          path: build/ios/ipa/*.ipa
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
