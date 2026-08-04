@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:flutter_openim_sdk/flutter_openim_sdk.dart';
@@ -419,47 +420,110 @@ class Apis {
     }
     if (token.isEmpty) {
       Logger.print('updateVoipToken skip: PushKit token is empty');
+      // ignore: avoid_print
+      print('[VOIP_TOKEN] skip: PushKit token is empty');
+      IMViews.showToast('voip_token: PushKit token empty');
       throw StateError('PushKit token is empty');
     }
     final chatTok = DataSp.chatToken?.trim() ?? '';
     if (chatTok.isEmpty) {
       Logger.print('updateVoipToken skip: chat auth token empty');
+      // ignore: avoid_print
+      print('[VOIP_TOKEN] skip: chat auth token empty');
+      IMViews.showToast('voip_token: chat auth empty');
       throw StateError('chat token empty');
     }
     // iOS phone = 1; avoid IMUtils.getPlatform() (needs Get.context).
     final pid = platformID ?? (Platform.isIOS ? 1 : 2);
     final prefix = token.length <= 8 ? token : token.substring(0, 8);
     final opId = HttpUtil.operationID;
-    Logger.print(
-        'updateVoipToken request userID=$userID len=${token.length} prefix=$prefix platformID=$pid');
+    final body = <String, dynamic>{
+      'userID': userID,
+      'token': token,
+      'platformID': pid,
+    };
+    final reqLog =
+        'url=${Urls.voipToken} userID=$userID len=${token.length} prefix=$prefix platformID=$pid bodyKeys=${body.keys.toList()}';
+    Logger.print('updateVoipToken request $reqLog');
+    // ignore: avoid_print
+    print('[VOIP_TOKEN] request $reqLog');
     try {
-      final result = await dio.post<Map<String, dynamic>>(
+      final result = await dio.post<dynamic>(
         Urls.voipToken,
-        data: {
-          'userID': userID,
-          'token': token,
-          'platformID': pid,
-        },
-        options: Options(headers: {
-          'token': chatTok,
-          'operationID': opId,
-        }),
+        data: body,
+        options: Options(
+          headers: {
+            'token': chatTok,
+            'operationID': opId,
+            'Content-Type': 'application/json',
+          },
+          responseType: ResponseType.json,
+        ),
       );
-      final resp = ApiResp.fromJson(result.data ?? {});
+      final raw = result.data;
+      final rawJson = raw is String
+          ? raw
+          : raw is Map
+              ? jsonEncode(raw)
+              : '$raw';
+      // Always dump full response JSON (release builds often hide Logger/Talker).
+      // ignore: avoid_print
+      print('[VOIP_TOKEN] response HTTP=${result.statusCode} bytes=${rawJson.length} json=$rawJson');
       Logger.print(
-          'updateVoipToken response errCode=${resp.errCode} errMsg=${resp.errMsg} errDlt=${resp.errDlt}');
+          'updateVoipToken raw HTTP=${result.statusCode} bytes=${rawJson.length} json=$rawJson');
+
+      Map<String, dynamic> map;
+      if (raw is Map<String, dynamic>) {
+        map = raw;
+      } else if (raw is Map) {
+        map = Map<String, dynamic>.from(raw);
+      } else if (raw is String && raw.isNotEmpty) {
+        final decoded = jsonDecode(raw);
+        map = decoded is Map
+            ? Map<String, dynamic>.from(decoded)
+            : <String, dynamic>{};
+      } else {
+        map = <String, dynamic>{};
+      }
+
+      final resp = ApiResp.fromJson(map);
+      final summary =
+          'errCode=${resp.errCode} errMsg=${resp.errMsg} errDlt=${resp.errDlt}';
+      // ignore: avoid_print
+      print('[VOIP_TOKEN] parsed $summary');
+      Logger.print('updateVoipToken parsed $summary');
+
+      // On-device visible — so ops can screenshot without Xcode.
+      IMViews.showToast(
+        resp.errCode == 0
+            ? 'voip_token ok len=${token.length}'
+            : 'voip_token fail $summary',
+      );
+
       if (resp.errCode != 0) {
         _kickoff(resp.errCode);
-        throw StateError(
-            'voip_token errCode=${resp.errCode} errMsg=${resp.errMsg} errDlt=${resp.errDlt}');
+        throw StateError('voip_token $summary json=$rawJson');
       }
       Logger.print(
           'updateVoipToken ok userID=$userID len=${token.length} prefix=$prefix');
     } on DioException catch (e, s) {
+      final data = e.response?.data;
+      final rawJson = data is String
+          ? data
+          : data is Map
+              ? jsonEncode(data)
+              : '$data';
+      // ignore: avoid_print
+      print(
+          '[VOIP_TOKEN] dio fail status=${e.response?.statusCode} json=$rawJson msg=${e.message}');
       Logger.print(
-          'updateVoipToken dio failed status=${e.response?.statusCode} data=${e.response?.data} msg=${e.message} $s');
+          'updateVoipToken dio failed status=${e.response?.statusCode} json=$rawJson msg=${e.message} $s');
+      IMViews.showToast(
+          'voip_token dio ${e.response?.statusCode} $rawJson');
       rethrow;
     } catch (e, s) {
+      // ignore: avoid_print
+      print('[VOIP_TOKEN] failed: $e');
       Logger.print('updateVoipToken failed: $e $s');
       rethrow;
     }
