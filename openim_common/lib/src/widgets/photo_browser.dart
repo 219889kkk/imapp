@@ -14,11 +14,11 @@ import 'custom_mk_controls.dart';
 import 'photo_browser_hero.dart';
 
 class MediaSource {
-  final String? url;
-  final String thumbnail;
-  final File? file;
-  final bool isVideo;
-  final String? tag;
+  String? url;
+  String thumbnail;
+  File? file;
+  bool isVideo;
+  String? tag;
 
   MediaSource({required this.thumbnail, this.url, this.file, this.isVideo = false, this.tag});
 }
@@ -34,6 +34,8 @@ class MediaBrowser extends StatefulWidget {
     this.onLongPress,
     this.onEdit,
     this.allowEdit = false,
+    this.onSend,
+    this.allowSend = false,
   });
   final int initialIndex;
   final List<MediaSource> sources;
@@ -41,8 +43,10 @@ class MediaBrowser extends StatefulWidget {
   final bool Function(int index)? onAutoPlay;
   final ValueChanged<int>? onSave;
   final ValueChanged<int>? onLongPress;
-  final ValueChanged<int>? onEdit;
+  final FutureOr<void> Function(int)? onEdit;
   final bool allowEdit;
+  final VoidCallback? onSend;
+  final bool allowSend;
   @override
   State<MediaBrowser> createState() => _MediaBrowserState();
 }
@@ -188,6 +192,7 @@ class _MediaBrowserState extends State<MediaBrowser> with TickerProviderStateMix
                           child: _safeLocalFile(s.file)
                               ? ExtendedImage.file(
                                   s.file!,
+                                  key: ValueKey(s.file!.path),
                                   enableSlideOutPage: true,
                                   fit: BoxFit.contain,
                                   mode: ExtendedImageMode.gesture,
@@ -311,7 +316,10 @@ class _MediaBrowserState extends State<MediaBrowser> with TickerProviderStateMix
                   borderRadius: BorderRadius.circular(20),
                   child: InkWell(
                     borderRadius: BorderRadius.circular(20),
-                    onTap: () => widget.onEdit?.call(currentIndex),
+                    onTap: () async {
+                      await widget.onEdit?.call(currentIndex);
+                      if (mounted) setState(() {});
+                    },
                     child: Padding(
                       padding: const EdgeInsets.symmetric(
                           horizontal: 12, vertical: 8),
@@ -331,6 +339,26 @@ class _MediaBrowserState extends State<MediaBrowser> with TickerProviderStateMix
                       ),
                     ),
                   ),
+                ),
+              ),
+            ),
+          if (widget.allowSend && widget.onSend != null)
+            Positioned(
+              left: 16,
+              right: 16,
+              bottom: MediaQuery.of(context).padding.bottom + 24,
+              child: SafeArea(
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Styles.c_0089FF,
+                    foregroundColor: Colors.white,
+                    minimumSize: const Size.fromHeight(44),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                  ),
+                  onPressed: widget.onSend,
+                  child: Text(StrRes.send),
                 ),
               ),
             ),

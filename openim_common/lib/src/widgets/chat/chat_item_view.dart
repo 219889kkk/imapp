@@ -211,8 +211,11 @@ class _ChatItemViewState extends State<ChatItemView> {
       }
     } else if (_message.isTextType) {
       isBubbleBg = true;
+      final text = _message.textElem?.content?.isNotEmpty == true
+          ? _message.textElem!.content!
+          : (_message.localEx ?? '');
       child = ChatText(
-        text: _message.textElem?.content ?? '',
+        text: text,
         patterns: _patternsFor(_message),
         textScaleFactor: widget.textScaleFactor,
         onVisibleTrulyText: widget.onVisibleTrulyText,

@@ -271,7 +271,10 @@ class Message {
     sendID = message.sendID;
     recvID = message.recvID;
     msgFrom = message.msgFrom;
-    contentType = message.contentType;
+    // Keep local type when ack omits / zeroes contentType (text/link bubbles vanish otherwise).
+    if (message.contentType != null && message.contentType != 0) {
+      contentType = message.contentType;
+    }
     senderPlatformID = message.senderPlatformID;
     senderNickname = message.senderNickname;
     senderFaceUrl = message.senderFaceUrl;
@@ -308,6 +311,35 @@ class Message {
     cardElem = message.cardElem ?? cardElem;
     advancedTextElem = message.advancedTextElem ?? advancedTextElem;
     typingElem = message.typingElem ?? typingElem;
+  }
+
+  /// Fill empty payload from [other] (recv / history) without wiping local content.
+  void fillMissingPayload(Message other) {
+    if ((textElem?.content == null || textElem!.content!.isEmpty) &&
+        other.textElem?.content?.isNotEmpty == true) {
+      textElem = other.textElem;
+    }
+    if ((atTextElem?.text == null || atTextElem!.text!.isEmpty) &&
+        other.atTextElem?.text?.isNotEmpty == true) {
+      atTextElem = other.atTextElem;
+    }
+    quoteElem ??= other.quoteElem;
+    pictureElem ??= other.pictureElem;
+    soundElem ??= other.soundElem;
+    videoElem ??= other.videoElem;
+    fileElem ??= other.fileElem;
+    customElem ??= other.customElem;
+    if ((localEx == null || localEx!.isEmpty) &&
+        other.localEx != null &&
+        other.localEx!.isNotEmpty) {
+      localEx = other.localEx;
+    }
+    if ((contentType == null || contentType == 0) && other.contentType != null) {
+      contentType = other.contentType;
+    }
+    status ??= other.status;
+    serverMsgID ??= other.serverMsgID;
+    seq = (seq == null || seq == 0) ? other.seq : seq;
   }
 
   /// Single chat message

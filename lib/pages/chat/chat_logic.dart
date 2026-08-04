@@ -252,6 +252,18 @@ class ChatLogic extends SuperController {
               messageList.add(message);
               scrollBottom();
             }
+          } else {
+            // Own send may already be in list with empty payload from ack;
+            // merge recv body so sender bubble keeps the link/text.
+            final existing = messageList.firstWhereOrNull(
+                    (e) => e.clientMsgID == message.clientMsgID) ??
+                scrollingCacheMessageList.firstWhereOrNull(
+                    (e) => e.clientMsgID == message.clientMsgID);
+            if (existing != null) {
+              existing.fillMissingPayload(message);
+              if (message.status != null) existing.status = message.status;
+              messageList.refresh();
+            }
           }
         }
       }
@@ -480,6 +492,16 @@ class ChatLogic extends SuperController {
               text: content,
               quoteMsg: quoted,
             );
+    }
+
+    // Cache plain text so UI can recover if ack/history drops textElem.
+    final id = message.clientMsgID;
+    if (id != null && id.isNotEmpty) {
+      copyTextMap[id] = content;
+    }
+    message.localEx = content;
+    if (message.textElem?.content?.isNotEmpty != true) {
+      message.textElem = TextElem(content: content);
     }
 
     _sendMessage(message);
@@ -1047,7 +1069,16 @@ class ChatLogic extends SuperController {
 
   void _sendSucceeded(Message oldMsg, Message newMsg) {
     Logger.print('message send success----');
+    final cached = copyTextMap[oldMsg.clientMsgID];
     oldMsg.update(newMsg);
+    oldMsg.fillMissingPayload(newMsg);
+    if ((oldMsg.textElem?.content == null ||
+            oldMsg.textElem!.content!.isEmpty) &&
+        cached != null &&
+        cached.isNotEmpty) {
+      oldMsg.textElem = TextElem(content: cached);
+      oldMsg.localEx ??= cached;
+    }
     _ensureGroupReadInfo(oldMsg);
     sendStatusSub.addSafely(MsgStreamEv<bool>(
       id: oldMsg.clientMsgID!,
@@ -1221,17 +1252,83 @@ class ChatLogic extends SuperController {
               }
               return true;
             }));
-    if (null != assets) {
-      for (var asset in assets) {
+    if (null == assets || assets.isEmpty) return;
+
+    final imagePaths = <String>[];
+    for (final asset in assets) {
+      if (asset.type == AssetType.video) {
         await _handleAssets(asset, sendNow: false);
+        continue;
       }
-
-      for (var msg in tempMessages) {
-        await _sendMessage(msg, addToUI: false);
+      if (asset.type != AssetType.image) continue;
+      final file = await asset.file;
+      if (file == null) continue;
+      final path = file.path;
+      if (path.toLowerCase().endsWith('.gif')) {
+        await sendPicture(path: path, sendNow: false);
+      } else {
+        imagePaths.add(path);
       }
-
-      tempMessages.clear();
     }
+
+    if (imagePaths.isNotEmpty) {
+      final confirmed = await _previewAlbumImagesThenConfirm(imagePaths);
+      if (confirmed != null) {
+        for (final path in confirmed) {
+          await sendPicture(path: path, sendNow: false);
+        }
+      }
+    }
+
+    for (var msg in tempMessages) {
+      await _sendMessage(msg, addToUI: false);
+    }
+    tempMessages.clear();
+  }
+
+  /// Enlarge selected album images: edit doodle, then send.
+  Future<List<String>?> _previewAlbumImagesThenConfirm(
+      List<String> paths) async {
+    final ctx = Get.context;
+    if (ctx == null) return paths;
+    final working = List<String>.from(paths);
+    final sources = working
+        .map((p) => MediaSource(
+              thumbnail: '',
+              file: File(p),
+              tag: p,
+            ))
+        .toList();
+
+    final sent = await Navigator.of(ctx).push<bool>(
+      PageRouteBuilder(
+        opaque: false,
+        pageBuilder: (context, animation, secondaryAnimation) {
+          return MediaBrowser(
+            sources: sources,
+            initialIndex: 0,
+            allowEdit: true,
+            allowSend: true,
+            onEdit: (index) async {
+              final edited =
+                  await ImageEditHelper.openFromPath(context, working[index]);
+              if (edited == null || edited.isEmpty) return;
+              working[index] = edited;
+              sources[index].file = File(edited);
+              sources[index].tag = edited;
+            },
+            onSend: () {
+              Navigator.of(context).pop(true);
+            },
+          );
+        },
+        transitionsBuilder: (context, animation, secondaryAnimation, child) {
+          return FadeTransition(opacity: animation, child: child);
+        },
+      ),
+    );
+    if (sent == true) return working;
+    return null;
   }
 
   void onTapCamera() async {
@@ -1270,15 +1367,17 @@ class ChatLogic extends SuperController {
       Logger.print('--------assets path-----$path');
       switch (asset.type) {
         case AssetType.image:
-          final ctx = Get.context;
-          if (ctx == null) break;
-          // GIF keeps original path; other images open edit/crop/doodle first.
+          // Camera / single path: edit first; album uses enlarge preview instead.
           if (path.toLowerCase().endsWith('.gif')) {
             await sendPicture(path: path, sendNow: sendNow);
-          } else {
+          } else if (sendNow) {
+            final ctx = Get.context;
+            if (ctx == null) break;
             final edited = await ImageEditHelper.openFromPath(ctx, path);
             if (edited == null || edited.isEmpty) break;
             await sendPicture(path: edited, sendNow: sendNow);
+          } else {
+            await sendPicture(path: path, sendNow: sendNow);
           }
           break;
         case AssetType.video:
@@ -1846,6 +1945,42 @@ class ChatLogic extends SuperController {
     );
   }
 
+  List<Message> _mergeHistoryWithLocal(List<Message> remote) {
+    final localById = <String, Message>{};
+    for (final m in messageList) {
+      final id = m.clientMsgID;
+      if (id != null && id.isNotEmpty) localById[id] = m;
+    }
+    for (final m in remote) {
+      final local = localById[m.clientMsgID];
+      if (local == null) {
+        final cached = copyTextMap[m.clientMsgID];
+        if ((m.textElem?.content == null || m.textElem!.content!.isEmpty) &&
+            cached != null &&
+            cached.isNotEmpty) {
+          m.textElem = TextElem(content: cached);
+        }
+        continue;
+      }
+      m.fillMissingPayload(local);
+      local.fillMissingPayload(m);
+      if ((m.textElem?.content == null || m.textElem!.content!.isEmpty) &&
+          local.textElem?.content?.isNotEmpty == true) {
+        m.textElem = local.textElem;
+      }
+    }
+    final remoteIds =
+        remote.map((e) => e.clientMsgID).whereType<String>().toSet();
+    final pending = messageList.where((m) {
+      final id = m.clientMsgID;
+      if (id == null || remoteIds.contains(id)) return false;
+      return m.status == MessageStatus.sending ||
+          m.status == MessageStatus.failed;
+    }).toList();
+    if (pending.isEmpty) return remote;
+    return [...remote, ...pending];
+  }
+
   Future<bool> onScrollToBottomLoad() async {
     late List<Message> list;
     final result = await _fetchHistoryMessages();
@@ -1861,7 +1996,7 @@ class ChatLogic extends SuperController {
     if (_isFirstLoad) {
       _isFirstLoad = false;
       // remove the message that has been timed down
-      messageList.assignAll(list);
+      messageList.assignAll(_mergeHistoryWithLocal(list));
       scrollBottom();
 
       _deferGroupPostMessageWork(messageList);
@@ -1886,7 +2021,7 @@ class ChatLogic extends SuperController {
         .toList();
 
     final offset = scrollController.offset;
-    messageList.assignAll(list);
+    messageList.assignAll(_mergeHistoryWithLocal(list));
     _ensureGroupReadInfoForList(messageList);
     scrollController.jumpTo(offset);
   }

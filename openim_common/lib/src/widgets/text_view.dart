@@ -73,72 +73,82 @@ class MatchTextView extends StatelessWidget {
   }
 
   void _matchModel(List<InlineSpan> children) {
-    final mappingMap = <String, MatchPattern>{};
+    try {
+      final mappingMap = <String, MatchPattern>{};
 
-    for (var e in patterns) {
-      if (e.type == PatternType.email) {
-        mappingMap[regexEmail] = e;
-      } else if (e.type == PatternType.mobile) {
-        mappingMap[regexMobile] = e;
-      } else if (e.type == PatternType.tel) {
-        mappingMap[regexTel] = e;
-      } else if (e.type == PatternType.url) {
-        mappingMap[regexUrl] = e;
-      } else {
-        mappingMap[e.pattern!] = e;
-      }
-    }
-
-    var regexEmoji = emojiFaces.keys
-        .toList()
-        .join('|')
-        .replaceAll('[', '\\[')
-        .replaceAll(']', '\\]');
-
-    mappingMap[regexEmoji] = MatchPattern(type: PatternType.email);
-
-    String pattern;
-
-    if (mappingMap.length > 1) {
-      pattern = '(${mappingMap.keys.toList().join('|')})';
-    } else {
-      pattern = regexEmoji;
-    }
-
-    stripHtmlIfNeeded(text).splitMapJoin(
-      RegExp(pattern),
-      onMatch: (Match match) {
-        var matchText = match[0]!;
-        InlineSpan inlineSpan;
-        final mapping = mappingMap[matchText] ??
-            mappingMap[mappingMap.keys.firstWhere((element) {
-              final reg = RegExp(element);
-              return reg.hasMatch(matchText);
-            }, orElse: () {
-              return '';
-            })];
-        if (mapping != null) {
-          inlineSpan = TextSpan(
-            text: matchText.split('').join('\u200B'),
-            style: mapping.style ?? matchTextStyle ?? textStyle,
-            recognizer: mapping.onTap == null
-                ? null
-                : (TapGestureRecognizer()
-                  ..onTap = () => mapping.onTap!(
-                      _getUrl(matchText, mapping.type), mapping.type)),
-          );
-        } else {
-          _appendEmojiAwareTextSpan(children, matchText, textStyle);
-          return '';
+      for (var e in patterns) {
+        if (e.type == PatternType.email) {
+          mappingMap[regexEmail] = e;
+        } else if (e.type == PatternType.mobile) {
+          mappingMap[regexMobile] = e;
+        } else if (e.type == PatternType.tel) {
+          mappingMap[regexTel] = e;
+        } else if (e.type == PatternType.url) {
+          mappingMap[regexUrl] = e;
+        } else if (e.pattern != null && e.pattern!.isNotEmpty) {
+          mappingMap[e.pattern!] = e;
         }
-        children.add(inlineSpan);
-        return '';
-      },
-      onNonMatch: (text) {
-        _appendEmojiAwareTextSpan(children, text, textStyle);
-        return '';
-      },
-    );
+      }
+
+      var regexEmoji = emojiFaces.keys
+          .toList()
+          .join('|')
+          .replaceAll('[', '\\[')
+          .replaceAll(']', '\\]');
+
+      mappingMap[regexEmoji] = MatchPattern(type: PatternType.email);
+
+      String pattern;
+
+      if (mappingMap.length > 1) {
+        pattern = '(${mappingMap.keys.toList().join('|')})';
+      } else {
+        pattern = regexEmoji;
+      }
+
+      stripHtmlIfNeeded(text).splitMapJoin(
+        RegExp(pattern),
+        onMatch: (Match match) {
+          var matchText = match[0]!;
+          InlineSpan inlineSpan;
+          MatchPattern? mapping = mappingMap[matchText];
+          if (mapping == null) {
+            for (final entry in mappingMap.entries) {
+              try {
+                if (RegExp(entry.key).hasMatch(matchText)) {
+                  mapping = entry.value;
+                  break;
+                }
+              } catch (_) {}
+            }
+          }
+          if (mapping != null) {
+            inlineSpan = TextSpan(
+              text: matchText,
+              style: mapping.style ?? matchTextStyle ?? textStyle,
+              recognizer: mapping.onTap == null
+                  ? null
+                  : (TapGestureRecognizer()
+                    ..onTap = () => mapping!.onTap!(
+                        _getUrl(matchText, mapping.type), mapping.type)),
+            );
+          } else {
+            _appendEmojiAwareTextSpan(children, matchText, textStyle);
+            return '';
+          }
+          children.add(inlineSpan);
+          return '';
+        },
+        onNonMatch: (text) {
+          _appendEmojiAwareTextSpan(children, text, textStyle);
+          return '';
+        },
+      );
+    } catch (_) {
+      children.clear();
+      if (prefixSpan != null) children.add(prefixSpan!);
+      _appendEmojiAwareTextSpan(children, text, textStyle);
+    }
   }
 
   void _appendEmojiAwareTextSpan(
@@ -165,9 +175,13 @@ class MatchTextView extends StatelessWidget {
   }
 
   static String stripHtmlIfNeeded(String text) {
-    return text.replaceAll(RegExp(r'<[^>]*>|&[^;]+;|[]'), ' ');
+    return text.replaceAll(RegExp(r'<[^>]*>|&[^;]+;'), ' ');
   }
 }
+
+// Broader URL matcher: multi-label domains with digits (e.g. fenfa.im903901.top).
+const regexUrl =
+    r"https?:\/\/[a-zA-Z0-9][-a-zA-Z0-9@:%._\+~#=]{0,255}(?::\d{1,5})?(?:\/[-a-zA-Z0-9@:%_\+.~#?&/=]*)?";
 
 class MatchPattern {
   PatternType type;
@@ -184,9 +198,6 @@ class MatchPattern {
 enum PatternType { email, mobile, tel, url, emoji, custom }
 
 const regexEmail = r"\b[\w\.-]+@[\w\.-]+\.\w{2,4}\b";
-
-const regexUrl =
-    r"((http|https):\/\/)(([a-zA-Z0-9@:._\+-~#=]{2,256}\.[a-z]{2,6})|(\d{1,3}(\.\d{1,3}){3}))(:\d+)?(\/[-a-zA-Z0-9@:%_\+.~#?&//=]*)?";
 
 const String regexMobile =
     '^(\\+?86)?((13[0-9])|(14[57])|(15[0-35-9])|(16[2567])|(17[01235-8])|(18[0-9])|(19[1589]))\\d{8}\$';
