@@ -456,7 +456,7 @@
 				MARKETING_VERSION = 3.3.1;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
-				PRODUCT_BUNDLE_IDENTIFIER = com.zghtchat9.im.NotificationService;
+				PRODUCT_BUNDLE_IDENTIFIER = top.hangxun.app.NotificationService;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
@@ -493,7 +493,7 @@
 				);
 				MARKETING_VERSION = 3.3.1;
 				MTL_FAST_MATH = YES;
-				PRODUCT_BUNDLE_IDENTIFIER = com.zghtchat9.im.NotificationService;
+				PRODUCT_BUNDLE_IDENTIFIER = top.hangxun.app.NotificationService;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -528,7 +528,7 @@
 				);
 				MARKETING_VERSION = 3.3.1;
 				MTL_FAST_MATH = YES;
-				PRODUCT_BUNDLE_IDENTIFIER = com.zghtchat9.im.NotificationService;
+				PRODUCT_BUNDLE_IDENTIFIER = top.hangxun.app.NotificationService;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -606,7 +606,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 3.8.2;
-				PRODUCT_BUNDLE_IDENTIFIER = com.zghtchat9.im;
+				PRODUCT_BUNDLE_IDENTIFIER = top.hangxun.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
@@ -745,7 +745,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 3.8.2;
-				PRODUCT_BUNDLE_IDENTIFIER = com.zghtchat9.im;
+				PRODUCT_BUNDLE_IDENTIFIER = top.hangxun.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
@@ -776,7 +776,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 3.8.2;
-				PRODUCT_BUNDLE_IDENTIFIER = com.zghtchat9.im;
+				PRODUCT_BUNDLE_IDENTIFIER = top.hangxun.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;

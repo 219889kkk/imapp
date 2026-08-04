@@ -10,7 +10,7 @@ Currently using the integrated solution. iOS Getui (`getuiflut`) is wired: after
 
 ### Kill-app push checklist (all required)
 
-1. Getui console: iOS app with Bundle ID `com.zghtchat9.im`
+1. Getui console: iOS app with Bundle ID `top.hangxun.app`
 2. Client credentials filled in `push_controller.dart`
 3. APNs cert/key uploaded in Getui console
 4. OpenIM server configured for Getui (same credentials, push by userID/alias)

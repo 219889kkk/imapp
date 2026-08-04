@@ -12,7 +12,7 @@ import 'firebase_options.dart';
 
 enum PushType { getui, FCM, none }
 
-/// Getui credentials for iOS offline push (Bundle ID: com.zghtchat9.im).
+/// Getui credentials for iOS offline push (Bundle ID: top.hangxun.app).
 /// Replace placeholders with values from the Getui console; when filled,
 /// [PushController] enables [PushType.getui] automatically.
 const appID = 'gy41yoFqNV8bdYKPBDYwc7';

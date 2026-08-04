@@ -118,6 +118,16 @@ class _ChatEmojiPanelState extends State<ChatEmojiPanel>
                   package: 'openim_common',
                   fit: BoxFit.contain,
                   filterQuality: FilterQuality.low,
+                  errorBuilder: (_, __, ___) => Center(
+                    child: Text(
+                      item.emoji,
+                      style: TextStyle(
+                        fontFamily: Styles.emojiFontFamily,
+                        fontSize: 24.sp,
+                        height: 1,
+                      ),
+                    ),
+                  ),
                 ),
               ),
             ),

@@ -13,7 +13,7 @@ class SplashPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Styles.c_0089FF,
+      backgroundColor: const Color(0xFF003A7A),
       body: SizedBox.expand(
         child: Image.asset(
           ImageRes.splashFullscreen,

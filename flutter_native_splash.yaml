@@ -2,7 +2,7 @@ flutter_native_splash:
   # Full-screen HangXun splash (color and background_image cannot both be set)
   background_image: "assets/splash_bg.png"
   android_12:
-    color: "#0B2F7A"
+    color: "#003A7A"
     image: launcher_icon/app-icon.png
-    icon_background_color: "#0B2F7A"
+    icon_background_color: "#003A7A"
   web: false
