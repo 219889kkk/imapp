@@ -64,12 +64,25 @@ import flutter_callkit_incoming
         // Getui: bindAlias (Dart) + PushKit token credentials (native) for kill-app wake.
         HangXunGetuiVoip.registerPushKitToken(credentials.token)
 
-        // flutter_callkit_incoming stores token for Dart getDevicePushTokenVoIP().
+        // Persist even if plugin sharedInstance is still nil (PushKit can fire before Flutter ready).
+        // Key must match flutter_callkit_incoming's DevicePushTokenVoIP.
+        UserDefaults.standard.set(deviceToken, forKey: "DevicePushTokenVoIP")
         SwiftFlutterCallkitIncomingPlugin.sharedInstance?.setDevicePushTokenVoIP(deviceToken)
+
+        // Notify Dart so login-time upload does not depend solely on plugin event timing.
+        DispatchQueue.main.async {
+            guard let controller = self.window?.rootViewController as? FlutterViewController else { return }
+            let channel = FlutterMethodChannel(
+                name: "top.hangxun.app/voip",
+                binaryMessenger: controller.binaryMessenger
+            )
+            channel.invokeMethod("onVoipToken", arguments: deviceToken)
+        }
     }
 
     func pushRegistry(_ registry: PKPushRegistry, didInvalidatePushTokenFor type: PKPushType) {
         NSLog("HangXun VoIP: token invalidated")
+        UserDefaults.standard.set("", forKey: "DevicePushTokenVoIP")
         SwiftFlutterCallkitIncomingPlugin.sharedInstance?.setDevicePushTokenVoIP("")
     }
 

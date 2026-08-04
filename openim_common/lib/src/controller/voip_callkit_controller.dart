@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/services.dart';
 import 'package:flutter_callkit_incoming/entities/android_params.dart';
 import 'package:flutter_callkit_incoming/entities/call_event.dart';
 import 'package:flutter_callkit_incoming/entities/call_kit_params.dart';
@@ -30,12 +31,15 @@ class VoipCallkitController extends GetxService {
           ? Get.find<VoipCallkitController>()
           : null;
 
+  static const _nativeChannel = MethodChannel('top.hangxun.app/voip');
+
   StreamSubscription? _eventSub;
   String? _voipToken;
   String? _boundUserID;
   String? _lastUploadedToken;
   Timer? _tokenRetryTimer;
   int _tokenRetryCount = 0;
+  bool _uploading = false;
 
   /// True while a CallKit incoming UI is active (avoid double local banners).
   final RxBool callKitActive = false.obs;
@@ -48,6 +52,7 @@ class VoipCallkitController extends GetxService {
   void onInit() {
     super.onInit();
     if (!Platform.isIOS) return;
+    _listenNativeVoipChannel();
     _listenEvents();
     _refreshVoipToken();
   }
@@ -56,6 +61,7 @@ class VoipCallkitController extends GetxService {
   void onClose() {
     _eventSub?.cancel();
     _tokenRetryTimer?.cancel();
+    _nativeChannel.setMethodCallHandler(null);
     super.onClose();
   }
 
@@ -66,6 +72,8 @@ class VoipCallkitController extends GetxService {
         ? Get.find<VoipCallkitController>()
         : Get.put(VoipCallkitController(), permanent: true);
     ctrl._boundUserID = userID;
+    // Force re-upload even if same device token was uploaded for another account.
+    ctrl._lastUploadedToken = null;
     unawaited(ctrl._refreshVoipToken(upload: true));
     ctrl._scheduleTokenRetries();
     Logger.print('VoipCallkit login userID=$userID token=${ctrl._voipToken}');
@@ -90,11 +98,24 @@ class VoipCallkitController extends GetxService {
     return true;
   }
 
+  void _listenNativeVoipChannel() {
+    _nativeChannel.setMethodCallHandler((call) async {
+      if (call.method == 'onVoipToken') {
+        final token = '${call.arguments ?? ''}'.trim();
+        if (token.isEmpty) return;
+        _voipToken = token;
+        Logger.print('VoIP token from native channel: $token');
+        await _uploadVoipTokenIfNeeded();
+      }
+    });
+  }
+
   Future<void> _refreshVoipToken({bool upload = false}) async {
     try {
       final token = await FlutterCallkitIncoming.getDevicePushTokenVoIP();
-      if (token != null && '$token'.isNotEmpty) {
-        _voipToken = '$token';
+      final raw = '$token'.trim();
+      if (raw.isNotEmpty) {
+        _voipToken = raw;
         Logger.print('VoIP PushKit token: $_voipToken');
         if (upload) await _uploadVoipTokenIfNeeded();
       } else {
@@ -108,7 +129,7 @@ class VoipCallkitController extends GetxService {
   void _scheduleTokenRetries() {
     _tokenRetryTimer?.cancel();
     _tokenRetryCount = 0;
-    // PushKit token often arrives after Flutter login; retry ~30s.
+    // PushKit token often arrives after Flutter login; retry ~2 minutes.
     _tokenRetryTimer = Timer.periodic(const Duration(seconds: 2), (timer) async {
       _tokenRetryCount++;
       await _refreshVoipToken(upload: true);
@@ -117,7 +138,11 @@ class VoipCallkitController extends GetxService {
         timer.cancel();
         return;
       }
-      if (_tokenRetryCount >= 15) timer.cancel();
+      if (_tokenRetryCount >= 60) {
+        Logger.print(
+            'VoIP token upload gave up after retries; last=$_voipToken uploaded=$_lastUploadedToken');
+        timer.cancel();
+      }
     });
   }
 
@@ -130,8 +155,17 @@ class VoipCallkitController extends GetxService {
       return;
     }
     if (token == _lastUploadedToken) return;
-    await Apis.updateVoipToken(userID: userID, voipToken: token!);
-    _lastUploadedToken = token;
+    if (_uploading) return;
+    _uploading = true;
+    try {
+      await Apis.updateVoipToken(userID: userID, voipToken: token!);
+      _lastUploadedToken = token;
+      Logger.print('VoIP token uploaded for $userID');
+    } catch (e, s) {
+      Logger.print('VoIP token upload error (will retry): $e $s');
+    } finally {
+      _uploading = false;
+    }
   }
 
   void _listenEvents() {

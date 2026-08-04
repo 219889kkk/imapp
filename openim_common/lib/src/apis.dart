@@ -413,20 +413,26 @@ class Apis {
   }) async {
     final token = voipToken.trim();
     if (userID.isEmpty || token.isEmpty) return;
+    // iOS phone = 1; avoid IMUtils.getPlatform() (needs Get.context, can throw at login).
+    final pid = platformID ?? (Platform.isIOS ? 1 : 2);
     try {
       await HttpUtil.post(
         Urls.voipToken,
         data: {
           'userID': userID,
           'voipToken': token,
-          'platformID': platformID ?? IMUtils.getPlatform(),
+          'platformID': pid,
         },
         options: chatTokenOptions,
         showErrorToast: false,
       );
-      Logger.print('updateVoipToken ok userID=$userID len=${token.length}');
+      final prefix =
+          token.length <= 8 ? token : token.substring(0, 8);
+      Logger.print(
+          'updateVoipToken ok userID=$userID len=${token.length} prefix=$prefix');
     } catch (e, s) {
       Logger.print('updateVoipToken failed: $e $s');
+      rethrow;
     }
   }
 
