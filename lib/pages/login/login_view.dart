@@ -31,9 +31,12 @@ class LoginPage extends StatelessWidget {
               child: Column(
                 children: [
                   88.verticalSpace,
-                  ImageRes.loginLogo.toImage
-                    ..width = 96.w
-                    ..height = 96.h,
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(20.r),
+                    child: ImageRes.loginLogo.toImage
+                      ..width = 96.w
+                      ..height = 96.h,
+                  ),
                   StrRes.welcome.toText..style = Styles.ts_0089FF_17sp_semibold,
                   51.verticalSpace,
                   Padding(
