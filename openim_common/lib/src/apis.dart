@@ -406,30 +406,59 @@ class Apis {
   }
 
   /// Callee-side: upload PushKit VoIP token so server can APNs-direct this device.
+  /// Body field is `token` (hex string), not `voipToken`.
   static Future<void> updateVoipToken({
     required String userID,
     required String voipToken,
     int? platformID,
   }) async {
     final token = voipToken.trim();
-    if (userID.isEmpty || token.isEmpty) return;
-    // iOS phone = 1; avoid IMUtils.getPlatform() (needs Get.context, can throw at login).
+    if (userID.isEmpty) {
+      Logger.print('updateVoipToken skip: userID empty');
+      return;
+    }
+    if (token.isEmpty) {
+      Logger.print('updateVoipToken skip: PushKit token is empty');
+      throw StateError('PushKit token is empty');
+    }
+    final chatTok = DataSp.chatToken?.trim() ?? '';
+    if (chatTok.isEmpty) {
+      Logger.print('updateVoipToken skip: chat auth token empty');
+      throw StateError('chat token empty');
+    }
+    // iOS phone = 1; avoid IMUtils.getPlatform() (needs Get.context).
     final pid = platformID ?? (Platform.isIOS ? 1 : 2);
+    final prefix = token.length <= 8 ? token : token.substring(0, 8);
+    final opId = HttpUtil.operationID;
+    Logger.print(
+        'updateVoipToken request userID=$userID len=${token.length} prefix=$prefix platformID=$pid');
     try {
-      await HttpUtil.post(
+      final result = await dio.post<Map<String, dynamic>>(
         Urls.voipToken,
         data: {
           'userID': userID,
-          'voipToken': token,
+          'token': token,
           'platformID': pid,
         },
-        options: chatTokenOptions,
-        showErrorToast: false,
+        options: Options(headers: {
+          'token': chatTok,
+          'operationID': opId,
+        }),
       );
-      final prefix =
-          token.length <= 8 ? token : token.substring(0, 8);
+      final resp = ApiResp.fromJson(result.data ?? {});
+      Logger.print(
+          'updateVoipToken response errCode=${resp.errCode} errMsg=${resp.errMsg} errDlt=${resp.errDlt}');
+      if (resp.errCode != 0) {
+        _kickoff(resp.errCode);
+        throw StateError(
+            'voip_token errCode=${resp.errCode} errMsg=${resp.errMsg} errDlt=${resp.errDlt}');
+      }
       Logger.print(
           'updateVoipToken ok userID=$userID len=${token.length} prefix=$prefix');
+    } on DioException catch (e, s) {
+      Logger.print(
+          'updateVoipToken dio failed status=${e.response?.statusCode} data=${e.response?.data} msg=${e.message} $s');
+      rethrow;
     } catch (e, s) {
       Logger.print('updateVoipToken failed: $e $s');
       rethrow;

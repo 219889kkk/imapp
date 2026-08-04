@@ -149,20 +149,30 @@ class VoipCallkitController extends GetxService {
   Future<void> _uploadVoipTokenIfNeeded() async {
     final userID = _boundUserID;
     final token = _voipToken;
-    if (userID == null || userID.isEmpty) return;
+    if (userID == null || userID.isEmpty) {
+      Logger.print('voip_token upload skip: no bound userID');
+      return;
+    }
+    if (token == null || token.trim().isEmpty) {
+      Logger.print('voip_token upload skip: PushKit hex empty');
+      return;
+    }
     if (!isPlausibleVoipToken(token)) {
-      Logger.print('skip voip token upload (implausible): $token');
+      Logger.print('voip_token upload skip (implausible): $token');
       return;
     }
     if (token == _lastUploadedToken) return;
     if (_uploading) return;
     _uploading = true;
+    final prefix = token.length <= 8 ? token : token.substring(0, 8);
+    Logger.print(
+        'voip_token upload start userID=$userID len=${token.length} prefix=$prefix');
     try {
-      await Apis.updateVoipToken(userID: userID, voipToken: token!);
+      await Apis.updateVoipToken(userID: userID, voipToken: token);
       _lastUploadedToken = token;
-      Logger.print('VoIP token uploaded for $userID');
+      Logger.print('voip_token upload success userID=$userID');
     } catch (e, s) {
-      Logger.print('VoIP token upload error (will retry): $e $s');
+      Logger.print('voip_token upload error (will retry): $e $s');
     } finally {
       _uploading = false;
     }

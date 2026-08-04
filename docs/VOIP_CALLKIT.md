@@ -19,15 +19,17 @@
 
 ## `POST /user/rtc/voip_token`
 
-被叫登录后上报（需 chat token）：
+被叫登录后上报（需 chat token 请求头）：
 
 ```json
 {
   "userID": "6651546301",
-  "voipToken": "<PushKit hex token>",
+  "token": "<PushKit hex token>",
   "platformID": 1
 }
 ```
+
+字段名是 **`token`**（PushKit hex，非空）。客户端日志会打印 `errCode` / `errMsg` / `errDlt`。
 
 ## `POST /user/rtc/voip_push`
 
