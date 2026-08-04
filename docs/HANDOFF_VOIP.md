@@ -67,16 +67,18 @@
 
 ---
 
-## 2. 当前现象（截至交接）
+## 2. 当前现象（服务端已定位并修复，待推仓装包验收）
 
 | 项 | 状态 |
 |----|------|
 | 账号 test0099 | userID **`6651546301`** |
-| 库里 VoIP Token | 仍是假值 **全 `b`（bbbbbb…）** |
-| 库更新时间 | 停在 **`08-04 15:51`**（之后多次上报未落库） |
-| 客户端请求 | 已多次 `POST /user/rtc/voip_token` |
-| 响应体大小 | 失败约 **63 字节**；成功写入约 **124 字节** → 现网一直是失败响应 |
-| 主叫 voip_push | 有请求；无真实 Token 时 APNs 打不到真机 |
+| 根因（已确认） | 失败响应 **63 字节** = `{"errCode":1001,...,"errDlt":"token is empty"}`；`voip_push` **66 字节** = `toUserID is empty` |
+| 客户端旧包 | 只发 `inviteeUserIDList` / 偶发 body 无有效 `token` → 服务端判空 |
+| 服务端（本机已部署） | 兼容 `voipToken` 别名；`inviteeUserIDList` 回落到 `toUserID`；双槽 Production/Sandbox 证书 |
+| 客户端（本地 commit `162e25b`，待 push） | `voip_token` 发 `token`+`bundleID`+`environment`；`voip_push` 发 `toUserID` |
+| 验收 | 真机装 **含 `162e25b` 及以后** 的包 → 登录 test0099 → Toast `voip_token ok` → 库 Token 非全 `b` |
+
+> 注意：库中若出现 `aabbccdd…` / `deadbeef…` 等，多为服务端自测写入，**不是**真机 PushKit。
 
 ---
 
@@ -86,22 +88,36 @@
 
 - Base：`https://im.zghtchat9.top/chat`  
 - Header：`token` = **chat 登录 token**（不是 PushKit）；`operationID` = 毫秒时间戳  
-- Body（字段名必须是 **`token`**）：
+- Body：
 
 ```json
 {
-  "userID": "6651546301",
   "token": "<PushKit hex，非空，非全 b/0/f>",
-  "platformID": 1
+  "bundleID": "top.hangxun.app",
+  "environment": "production"
 }
 ```
 
-- 成功：`errCode=0`，库中该 userID 的 VoIP Token 更新为 hex。  
-- 请在服务端日志打印并返回清晰的 **`errCode` / `errMsg` / `errDlt`**（客户端会 Toast + `[VOIP_TOKEN]` 打印完整 JSON）。
+- 也兼容字段名 `voipToken`（与 `token` 二选一即可）。  
+- `environment`：`production`（正式/TestFlight）或 `sandbox`（Xcode Debug）。  
+- 成功：`errCode=0`，约 **124 字节**，库中该 userID 的 VoIP Token 更新为 hex。  
+- 失败「token is empty」约 **63 字节**。
 
 ### `POST /user/rtc/voip_push`
 
-主叫 `callingInvite`（customType `200`）后调用；对 `inviteeUserIDList` 发 **APNs VoIP**（topic `top.hangxun.app.voip`）。详见 [VOIP_CALLKIT.md](./VOIP_CALLKIT.md)。
+主叫 `callingInvite`（customType `200`）后调用：
+
+```json
+{
+  "toUserID": "calleeUserID",
+  "roomID": "uuid-room-id",
+  "inviterUserID": "callerUserID",
+  "inviterNickname": "主叫昵称",
+  "mediaType": "audio"
+}
+```
+
+也兼容旧字段 `inviteeUserIDList`（取第一个）与 `nickname`。优先 APNs VoIP（topic `top.hangxun.app.voip`），失败回退个推。详见 [VOIP_CALLKIT.md](./VOIP_CALLKIT.md)。
 
 ---
 
@@ -114,25 +130,27 @@
 | `0c04f8d` | Body 字段改为 **`token`**；打 errCode/errDlt |
 | `567c373` | **完整响应 JSON** + 屏幕 Toast（Release 也能看见） |
 | `f2a7a76` | CI：iOS Signed 工作流（需 Secrets） |
+| `162e25b` | **对齐服务端契约**：`voip_push` 发 `toUserID`；`voip_token` 发 `token`+`bundleID`+`environment` |
 
 关键文件：
 
-- `openim_common/lib/src/apis.dart` → `Apis.updateVoipToken`  
+- `openim_common/lib/src/apis.dart` → `Apis.updateVoipToken` / `Apis.voipPush`  
 - `openim_common/lib/src/controller/voip_callkit_controller.dart`  
 - `openim_common/lib/src/urls.dart` → `Urls.voipToken`  
 - `ios/Runner/AppDelegate.swift` → PushKit / CallKit / Token 落盘  
 
 ---
 
-## 5. 服务端请优先排查
+## 5. 服务端状态（本机 `/opt/openim/chat` 已修并重建 `openim-chat`）
 
-1. 对一次真实失败请求看完整 JSON：`errCode`、`errDlt`（常见：`token is empty`、鉴权失败、ArgsError）。  
-2. Handler 是否读 **body.`token`**（若仍读 `voipToken`，会一直判空 → ~63 字节失败）。  
-3. 鉴权 header `token`（chat）与 body `token`（PushKit）是否被中间件搞混。  
-4. 写入成功后是否覆盖假 Token；假值 `bbbbbb…` 的初始写入来源。  
-5. `platformID` / userID 校验是否误拒。  
+已处理：
 
-验收：test0099 真机装 **`567c373` 及以后** 的包 → 登录后 Toast 为 `voip_token ok` 或把失败 JSON 贴回 → 库中 `6651546301` 变为真实 hex → 再测 test0077→test0099 杀进程 CallKit。
+1. 失败 63 字节 = `token is empty`（已复现）；Handler 读 `token`，并兼容 `voipToken`。  
+2. `voip_push` 兼容 `inviteeUserIDList` → `toUserID`。  
+3. CheckToken 只读 **header** `token`，不会吞掉 body。  
+4. Production/Sandbox 证书双槽；按设备 `environment` 选证书，失败回退个推。  
+
+验收：真机装 **`162e25b` 及以后** 的包 → 登录 test0099 → Toast `voip_token ok` → 库 `6651546301` 为真实 hex → test0077 杀进程呼叫应走 CallKit。
 
 ---
 
