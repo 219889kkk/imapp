@@ -1,30 +1,41 @@
 #import "HangXunGetuiVoip.h"
-#import <GTSDK/GeTuiSdk.h>
 
 @implementation HangXunGetuiVoip
 
-+ (void)registerVoipTokenCredentials:(NSData *)token {
-    // Avoid hard compile dependency: getuiflut 0.2.x commented out VoIP APIs.
-    SEL sel = NSSelectorFromString(@"registerVoipTokenCredentials:");
-    if ([GeTuiSdk respondsToSelector:sel]) {
++ (void)registerPushKitToken:(NSData *)token {
+    // Newer GTSDK: registerTokenCredentials:  | older: registerVoipTokenCredentials:
+    Class cls = NSClassFromString(@"GeTuiSdk");
+    if (cls == Nil) {
+        NSLog(@"HangXun VoIP: GeTuiSdk class not found");
+        return;
+    }
+    SEL newer = NSSelectorFromString(@"registerTokenCredentials:");
+    SEL older = NSSelectorFromString(@"registerVoipTokenCredentials:");
+    SEL sel = [cls respondsToSelector:newer] ? newer :
+              ([cls respondsToSelector:older] ? older : NULL);
+    if (sel == NULL) {
+        NSLog(@"HangXun VoIP: no Getui token-credentials selector");
+        return;
+    }
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
-        [GeTuiSdk performSelector:sel withObject:token];
+    [cls performSelector:sel withObject:token];
 #pragma clang diagnostic pop
-        NSLog(@"HangXun VoIP: GeTuiSdk.registerVoipTokenCredentials done");
-    } else {
-        NSLog(@"HangXun VoIP: GeTuiSdk missing registerVoipTokenCredentials:");
-    }
+    NSLog(@"HangXun VoIP: Getui token credentials registered via %@", NSStringFromSelector(sel));
 }
 
-+ (void)handleVoipNotification:(NSDictionary *)payload {
-    SEL sel = NSSelectorFromString(@"handleVoipNotification:");
-    if ([GeTuiSdk respondsToSelector:sel]) {
++ (void)handlePushKitPayload:(NSDictionary *)payload {
+    Class cls = NSClassFromString(@"GeTuiSdk");
+    if (cls == Nil) return;
+    SEL newer = NSSelectorFromString(@"handleNotification:");
+    SEL older = NSSelectorFromString(@"handleVoipNotification:");
+    SEL sel = [cls respondsToSelector:newer] ? newer :
+              ([cls respondsToSelector:older] ? older : NULL);
+    if (sel == NULL) return;
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
-        [GeTuiSdk performSelector:sel withObject:payload];
+    [cls performSelector:sel withObject:payload];
 #pragma clang diagnostic pop
-    }
 }
 
 @end

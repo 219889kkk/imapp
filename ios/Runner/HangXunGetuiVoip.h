@@ -1,13 +1,12 @@
 #import <Foundation/Foundation.h>
-#import <GTSDK/GeTuiSdk.h>
 
 NS_ASSUME_NONNULL_BEGIN
 
-/// Thin wrappers around Getui VoIP APIs (removed from getuiflut Dart layer).
+/// Thin wrappers around Getui VoIP / PushKit token APIs.
 @interface HangXunGetuiVoip : NSObject
 
-+ (void)registerVoipTokenCredentials:(NSData *)token;
-+ (void)handleVoipNotification:(NSDictionary *)payload;
++ (void)registerPushKitToken:(NSData *)token;
++ (void)handlePushKitPayload:(NSDictionary *)payload;
 
 @end
 

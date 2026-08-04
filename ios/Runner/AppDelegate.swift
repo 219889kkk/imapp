@@ -61,8 +61,8 @@ import flutter_callkit_incoming
         let deviceToken = credentials.token.map { String(format: "%02x", $0) }.joined()
         NSLog("HangXun VoIP token: %@", deviceToken)
 
-        // Getui: bindAlias (Dart) + registerVoipTokenCredentials (native) for kill-app wake.
-        HangXunGetuiVoip.registerVoipTokenCredentials(credentials.token)
+        // Getui: bindAlias (Dart) + PushKit token credentials (native) for kill-app wake.
+        HangXunGetuiVoip.registerPushKitToken(credentials.token)
 
         // flutter_callkit_incoming stores token for Dart getDevicePushTokenVoIP().
         SwiftFlutterCallkitIncomingPlugin.sharedInstance?.setDevicePushTokenVoIP(deviceToken)
@@ -88,7 +88,7 @@ import flutter_callkit_incoming
         let dict = payload.dictionaryPayload
         NSLog("HangXun VoIP payload: %@", dict)
 
-        HangXunGetuiVoip.handleVoipNotification(dict)
+        HangXunGetuiVoip.handlePushKitPayload(dict)
 
         let action = ((dict["action"] as? String) ?? "").lowercased()
         let roomID = (dict["roomID"] as? String)
