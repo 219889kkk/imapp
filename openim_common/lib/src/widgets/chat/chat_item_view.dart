@@ -215,6 +215,7 @@ class _ChatItemViewState extends State<ChatItemView> {
           ? _message.textElem!.content!
           : (_message.localEx ?? '');
       child = ChatText(
+        isISend: _isISend,
         text: text,
         patterns: _patternsFor(_message),
         textScaleFactor: widget.textScaleFactor,
@@ -223,6 +224,7 @@ class _ChatItemViewState extends State<ChatItemView> {
     } else if (_message.contentType == MessageType.atText) {
       isBubbleBg = true;
       child = ChatText(
+        isISend: _isISend,
         text: _message.atTextElem?.text ?? '',
         patterns: _patternsFor(_message),
         textScaleFactor: widget.textScaleFactor,
@@ -675,6 +677,7 @@ class _ChatItemViewState extends State<ChatItemView> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         ChatText(
+          isISend: _isISend,
           text: message.quoteElem?.text ?? '',
           patterns: widget.patterns,
           textScaleFactor: widget.textScaleFactor,

@@ -75,10 +75,9 @@ class ThemeColorResolver {
     final bubbleSent = dark
         ? hsl.withSaturation(0.35).withLightness(0.22).toColor()
         : seed;
-    final bubbleSentLink = hsl
-        .withSaturation(0.25)
-        .withLightness(dark ? 0.62 : 0.42)
-        .toColor();
+    // Keep sent-bubble links readable (blue-on-blue looked like empty bubbles).
+    final bubbleSentText = _contrastText(bubbleSent);
+    final bubbleSentLink = bubbleSentText;
     final primaryWeak = dark
         ? scheme.primaryContainer
         : Color.alphaBlend(seed.withOpacity(0.12), const Color(0xFFF8F9FA));
@@ -100,7 +99,7 @@ class ThemeColorResolver {
       bubbleSent: bubbleSent,
       bubbleSentLink: bubbleSentLink,
       bubbleUnread: bubbleSentLink,
-      bubbleSentText: _contrastText(bubbleSent),
+      bubbleSentText: bubbleSentText,
       noticeBanner: noticeBanner,
     );
   }

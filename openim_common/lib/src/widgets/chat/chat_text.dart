@@ -34,7 +34,10 @@ class ChatText extends StatelessWidget {
         textStyle: textStyle ??
             (isISend ? Styles.ts_bubbleSentText_17sp : Styles.ts_0C1C33_17sp),
         matchTextStyle: isISend
-            ? Styles.ts_bubbleSentLink_17sp
+            ? Styles.ts_bubbleSentLink_17sp.copyWith(
+                decoration: TextDecoration.underline,
+                decorationColor: Styles.bubbleSentLink,
+              )
             : Styles.ts_0089FF_17sp,
         prefixSpan: prefixSpan,
         textAlign: textAlign,
