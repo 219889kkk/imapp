@@ -23,13 +23,15 @@
 
 ```json
 {
-  "userID": "6651546301",
   "token": "<PushKit hex token>",
-  "platformID": 1
+  "bundleID": "top.hangxun.app",
+  "environment": "production"
 }
 ```
 
-字段名是 **`token`**（PushKit hex，非空）。客户端日志会打印 `errCode` / `errMsg` / `errDlt`。
+- `token`：PushKit hex（必填；也兼容字段名 `voipToken`）
+- `environment`：`production`（正式/TestFlight）或 `sandbox`（Xcode Debug）
+- `bundleID`：默认 `top.hangxun.app`
 
 ## `POST /user/rtc/voip_push`
 
@@ -37,20 +39,18 @@ Base：`https://im.zghtchat9.top/chat`（与 `get_token` 同组，需 chat token
 
 ```json
 {
-  "action": "invite",
-  "inviteeUserIDList": ["calleeUserID"],
+  "toUserID": "calleeUserID",
   "roomID": "uuid-room-id",
   "inviterUserID": "callerUserID",
+  "inviterNickname": "主叫昵称",
   "mediaType": "audio",
-  "nickname": "主叫昵称",
-  "sessionType": 1,
-  "groupID": "",
-  "timeout": 60
+  "callUUID": "optional-uuid"
 }
 ```
 
-- `action`: `invite` | `cancel` | `end` | `hungup`
-- 服务端应对 `inviteeUserIDList` 发 **APNs VoIP**（`apns-topic: top.hangxun.app.voip`，`apns-push-type: voip`，`priority: 10`），payload 字段与上表一致，便于被叫 CallKit 展示与接听。
+也兼容旧字段 `inviteeUserIDList`（取第一个）与 `nickname`。
+
+- 服务端优先直连 APNs VoIP（`apns-topic: top.hangxun.app.voip`），失败回退个推。
 
 ## 苹果证书（运维）
 

@@ -372,6 +372,10 @@ class Apis {
   /// Caller-side: after sending `callingInvite` (customType 200), ask chat
   /// server to send iOS APNs VoIP so the callee's CallKit UI can ring when
   /// the app is killed. See `docs/VOIP_CALLKIT.md`.
+  ///
+  /// Server contract: `toUserID` + `roomID` + `mediaType` (+ optional
+  /// `inviterUserID` / `inviterNickname` / `callUUID`). Legacy
+  /// `inviteeUserIDList` is also accepted by the server.
   static Future<void> voipPush({
     required List<String> inviteeUserIDList,
     required String roomID,
@@ -382,38 +386,58 @@ class Apis {
     String? groupID,
     int timeout = 60,
     String action = 'invite',
+    String? callUUID,
   }) async {
     if (inviteeUserIDList.isEmpty || roomID.isEmpty) return;
-    try {
-      await HttpUtil.post(
-        Urls.voipPush,
-        data: {
-          'action': action,
-          'inviteeUserIDList': inviteeUserIDList,
-          'roomID': roomID,
-          'inviterUserID': inviterUserID,
-          'mediaType': mediaType,
-          'nickname': nickname ?? '',
-          'sessionType': sessionType ?? 1,
-          'groupID': groupID ?? '',
-          'timeout': timeout,
-        },
-        options: chatTokenOptions,
-        showErrorToast: false,
-      );
-    } catch (e, s) {
-      Logger.print('voipPush failed: $e $s');
+    // cancel/end: server currently only handles wake-up invite; skip no-op.
+    if (action != 'invite') {
+      Logger.print('voipPush skip action=$action');
+      return;
+    }
+    final media = mediaType.trim().isEmpty ? 'audio' : mediaType.trim();
+    for (final toUserID in inviteeUserIDList) {
+      final uid = toUserID.trim();
+      if (uid.isEmpty) continue;
+      try {
+        await HttpUtil.post(
+          Urls.voipPush,
+          data: {
+            'toUserID': uid,
+            'roomID': roomID,
+            'inviterUserID': inviterUserID,
+            'inviterNickname': nickname ?? '',
+            'mediaType': media,
+            if (callUUID != null && callUUID.isNotEmpty) 'callUUID': callUUID,
+            // Keep legacy keys for older server builds.
+            'inviteeUserIDList': [uid],
+            'action': action,
+            'sessionType': sessionType ?? 1,
+            'groupID': groupID ?? '',
+            'timeout': timeout,
+            'nickname': nickname ?? '',
+          },
+          options: chatTokenOptions,
+          showErrorToast: false,
+        );
+      } catch (e, s) {
+        Logger.print('voipPush failed toUserID=$uid: $e $s');
+      }
     }
   }
 
   /// Callee-side: upload PushKit VoIP token so server can APNs-direct this device.
-  /// Body field is `token` (hex string), not `voipToken`.
+  ///
+  /// Server body: `token` (hex), `bundleID`, `environment` (`production`|`sandbox`).
   static Future<void> updateVoipToken({
     required String userID,
     required String voipToken,
     int? platformID,
+    String? bundleID,
+    String? environment,
   }) async {
-    final token = voipToken.trim();
+    // Normalize PushKit hex (strip spaces / angle brackets from some iOS dumps).
+    var token = voipToken.trim();
+    token = token.replaceAll(' ', '').replaceAll('<', '').replaceAll('>', '');
     if (userID.isEmpty) {
       Logger.print('updateVoipToken skip: userID empty');
       return;
@@ -433,98 +457,58 @@ class Apis {
       IMViews.showToast('voip_token: chat auth empty');
       throw StateError('chat token empty');
     }
-    // iOS phone = 1; avoid IMUtils.getPlatform() (needs Get.context).
     final pid = platformID ?? (Platform.isIOS ? 1 : 2);
     final prefix = token.length <= 8 ? token : token.substring(0, 8);
-    final opId = HttpUtil.operationID;
+    // Release/TestFlight → production APNs; Xcode debug → sandbox.
+    final env = (environment ??
+            (const bool.fromEnvironment('dart.vm.product')
+                ? 'production'
+                : 'sandbox'))
+        .trim()
+        .toLowerCase();
+    String bid = (bundleID ?? '').trim();
+    if (bid.isEmpty) {
+      try {
+        bid = (await PackageInfo.fromPlatform()).packageName;
+      } catch (_) {
+        bid = 'top.hangxun.app';
+      }
+      if (bid.isEmpty) bid = 'top.hangxun.app';
+    }
     final body = <String, dynamic>{
-      'userID': userID,
       'token': token,
+      'bundleID': bid,
+      'environment': env == 'sandbox' || env == 'development' || env == 'dev'
+          ? 'sandbox'
+          : 'production',
+      // Extra fields ignored by server; useful for logs / older gateways.
+      'userID': userID,
       'platformID': pid,
+      'voipToken': token,
     };
     final reqLog =
-        'url=${Urls.voipToken} userID=$userID len=${token.length} prefix=$prefix platformID=$pid bodyKeys=${body.keys.toList()}';
+        'url=${Urls.voipToken} userID=$userID len=${token.length} prefix=$prefix env=${body['environment']} bundleID=$bid bodyKeys=${body.keys.toList()}';
     Logger.print('updateVoipToken request $reqLog');
     // ignore: avoid_print
     print('[VOIP_TOKEN] request $reqLog');
     try {
-      final result = await dio.post<dynamic>(
+      // Use the same HttpUtil path as other chat APIs (token header + operationID).
+      await HttpUtil.post(
         Urls.voipToken,
         data: body,
-        options: Options(
-          headers: {
-            'token': chatTok,
-            'operationID': opId,
-            'Content-Type': 'application/json',
-          },
-          responseType: ResponseType.json,
-        ),
+        options: chatTokenOptions,
+        showErrorToast: false,
       );
-      final raw = result.data;
-      final rawJson = raw is String
-          ? raw
-          : raw is Map
-              ? jsonEncode(raw)
-              : '$raw';
-      // Always dump full response JSON (release builds often hide Logger/Talker).
       // ignore: avoid_print
-      print('[VOIP_TOKEN] response HTTP=${result.statusCode} bytes=${rawJson.length} json=$rawJson');
-      Logger.print(
-          'updateVoipToken raw HTTP=${result.statusCode} bytes=${rawJson.length} json=$rawJson');
-
-      Map<String, dynamic> map;
-      if (raw is Map<String, dynamic>) {
-        map = raw;
-      } else if (raw is Map) {
-        map = Map<String, dynamic>.from(raw);
-      } else if (raw is String && raw.isNotEmpty) {
-        final decoded = jsonDecode(raw);
-        map = decoded is Map
-            ? Map<String, dynamic>.from(decoded)
-            : <String, dynamic>{};
-      } else {
-        map = <String, dynamic>{};
-      }
-
-      final resp = ApiResp.fromJson(map);
-      final summary =
-          'errCode=${resp.errCode} errMsg=${resp.errMsg} errDlt=${resp.errDlt}';
-      // ignore: avoid_print
-      print('[VOIP_TOKEN] parsed $summary');
-      Logger.print('updateVoipToken parsed $summary');
-
-      // On-device visible — so ops can screenshot without Xcode.
-      IMViews.showToast(
-        resp.errCode == 0
-            ? 'voip_token ok len=${token.length}'
-            : 'voip_token fail $summary',
-      );
-
-      if (resp.errCode != 0) {
-        _kickoff(resp.errCode);
-        throw StateError('voip_token $summary json=$rawJson');
-      }
+      print('[VOIP_TOKEN] ok len=${token.length} prefix=$prefix env=${body['environment']}');
       Logger.print(
           'updateVoipToken ok userID=$userID len=${token.length} prefix=$prefix');
-    } on DioException catch (e, s) {
-      final data = e.response?.data;
-      final rawJson = data is String
-          ? data
-          : data is Map
-              ? jsonEncode(data)
-              : '$data';
-      // ignore: avoid_print
-      print(
-          '[VOIP_TOKEN] dio fail status=${e.response?.statusCode} json=$rawJson msg=${e.message}');
-      Logger.print(
-          'updateVoipToken dio failed status=${e.response?.statusCode} json=$rawJson msg=${e.message} $s');
-      IMViews.showToast(
-          'voip_token dio ${e.response?.statusCode} $rawJson');
-      rethrow;
+      IMViews.showToast('voip_token ok len=${token.length}');
     } catch (e, s) {
       // ignore: avoid_print
       print('[VOIP_TOKEN] failed: $e');
       Logger.print('updateVoipToken failed: $e $s');
+      IMViews.showToast('voip_token fail: $e');
       rethrow;
     }
   }

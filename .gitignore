@@ -58,3 +58,9 @@ ios/Flutter/flutter_export_environment.sh
 # Extra local/IDE
 .idea/
 *.iml
+
+# Local Apple cert materials (never commit)
+secrets/
+*.p12
+*.mobileprovision
+
