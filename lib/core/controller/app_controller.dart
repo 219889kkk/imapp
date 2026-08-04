@@ -314,6 +314,8 @@ class AppController extends GetxController
   }
 
   Future<void> showCallNotification(SignalingInfo info) async {
+    // iOS CallKit owns the system incoming-call UI; skip local banners.
+    if (Platform.isIOS) return;
     if (!DataSp.getEnableCallNotification()) return;
 
     final invitation = info.invitation;

@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../models/signaling_info.dart';
+
 class PackageBridge {
   PackageBridge._();
 
@@ -14,6 +16,12 @@ class PackageBridge {
   /// Handles Accept/Reject on the local incoming-call notification.
   /// `true` = accept / pick up, `false` = reject.
   static void Function(bool accept)? handleCallNotificationAction;
+
+  /// CallKit Accept with reconstructed [SignalingInfo] (iOS VoIP path).
+  static void Function(SignalingInfo signaling)? onCallKitAccept;
+
+  /// CallKit Decline with reconstructed [SignalingInfo] (iOS VoIP path).
+  static void Function(SignalingInfo signaling)? onCallKitDecline;
 }
 
 abstract class ScanBridge {

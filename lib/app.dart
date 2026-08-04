@@ -131,6 +131,7 @@ class InitBinding extends Bindings {
   void dependencies() {
     Get.put<IMController>(IMController());
     Get.put<PushController>(PushController());
+    Get.put<VoipCallkitController>(VoipCallkitController(), permanent: true);
     Get.put<CacheController>(CacheController());
   }
 }

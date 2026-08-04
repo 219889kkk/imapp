@@ -109,6 +109,7 @@ dependencies:
     path: openim_common
   openim_live:
     path: openim_live
+  flutter_callkit_incoming: ^2.5.8
   qr_code_scanner_plus: ^2.1.2
   record: ^6.2.1
   geolocator: ^14.0.2

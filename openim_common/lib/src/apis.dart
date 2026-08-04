@@ -368,6 +368,43 @@ class Apis {
     });
   }
 
+  /// Caller-side: after sending `callingInvite` (customType 200), ask chat
+  /// server to send iOS APNs VoIP so the callee's CallKit UI can ring when
+  /// the app is killed. See `docs/VOIP_CALLKIT.md`.
+  static Future<void> voipPush({
+    required List<String> inviteeUserIDList,
+    required String roomID,
+    required String inviterUserID,
+    required String mediaType,
+    String? nickname,
+    int? sessionType,
+    String? groupID,
+    int timeout = 60,
+    String action = 'invite',
+  }) async {
+    if (inviteeUserIDList.isEmpty || roomID.isEmpty) return;
+    try {
+      await HttpUtil.post(
+        Urls.voipPush,
+        data: {
+          'action': action,
+          'inviteeUserIDList': inviteeUserIDList,
+          'roomID': roomID,
+          'inviterUserID': inviterUserID,
+          'mediaType': mediaType,
+          'nickname': nickname ?? '',
+          'sessionType': sessionType ?? 1,
+          'groupID': groupID ?? '',
+          'timeout': timeout,
+        },
+        options: chatTokenOptions,
+        showErrorToast: false,
+      );
+    } catch (e, s) {
+      Logger.print('voipPush failed: $e $s');
+    }
+  }
+
   static Future<dynamic> checkVerificationCode({
     String? areaCode,
     String? phoneNumber,

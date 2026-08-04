@@ -202,25 +202,36 @@ class IMController extends GetxController with IMCallback, OpenIMLive {
             return true;
           }
           receiveNewInvitation(signaling);
-          if (Get.isRegistered<AppController>()) {
+          // iOS: CallKit owns incoming UI (PushKit when killed / background).
+          // Skip local flutter_local_notifications to avoid double UI.
+          if (Platform.isIOS) {
+            final voip = VoipCallkitController.toOrNull;
+            if (voip == null || !voip.ownsIncomingUi) {
+              // Foreground in-app page is enough; background uses CallKit in live_controller.
+            }
+          } else if (Get.isRegistered<AppController>()) {
             Get.find<AppController>().showCallNotification(signaling);
           }
           break;
         case CustomMessageType.callingAccept:
           inviteeAccepted(signaling);
           _clearCallNotification();
+          VoipCallkitController.toOrNull?.endCall(signaling.invitation?.roomID);
           break;
         case CustomMessageType.callingReject:
           inviteeRejected(signaling);
           _clearCallNotification();
+          VoipCallkitController.toOrNull?.endCall(signaling.invitation?.roomID);
           break;
         case CustomMessageType.callingCancel:
           invitationCancelled(signaling);
           _clearCallNotification();
+          VoipCallkitController.toOrNull?.endCall(signaling.invitation?.roomID);
           break;
         case CustomMessageType.callingHungup:
           beHangup(signaling);
           _clearCallNotification();
+          VoipCallkitController.toOrNull?.endCall(signaling.invitation?.roomID);
           break;
       }
       return true;

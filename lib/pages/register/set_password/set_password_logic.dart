@@ -90,6 +90,7 @@ class SetPasswordLogic extends GetxController {
       await imLogic.login(data.userID, data.imToken);
       Logger.print('---------im login success-------');
       PushController.login(data.userID);
+      VoipCallkitController.login(data.userID);
       Logger.print('---------jpush login success----');
     });
     AppNavigator.startMain();

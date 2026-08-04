@@ -60,6 +60,12 @@
 @import firebase_messaging;
 #endif
 
+#if __has_include(<flutter_callkit_incoming/FlutterCallkitIncomingPlugin.h>)
+#import <flutter_callkit_incoming/FlutterCallkitIncomingPlugin.h>
+#else
+@import flutter_callkit_incoming;
+#endif
+
 #if __has_include(<flutter_image_compress_common/ImageCompressPlugin.h>)
 #import <flutter_image_compress_common/ImageCompressPlugin.h>
 #else
@@ -288,6 +294,7 @@
   [FilePickerPlugin registerWithRegistrar:[registry registrarForPlugin:@"FilePickerPlugin"]];
   [FLTFirebaseCorePlugin registerWithRegistrar:[registry registrarForPlugin:@"FLTFirebaseCorePlugin"]];
   [FLTFirebaseMessagingPlugin registerWithRegistrar:[registry registrarForPlugin:@"FLTFirebaseMessagingPlugin"]];
+  [FlutterCallkitIncomingPlugin registerWithRegistrar:[registry registrarForPlugin:@"FlutterCallkitIncomingPlugin"]];
   [ImageCompressPlugin registerWithRegistrar:[registry registrarForPlugin:@"ImageCompressPlugin"]];
   [FlutterKeyboardVisibilityPlugin registerWithRegistrar:[registry registrarForPlugin:@"FlutterKeyboardVisibilityPlugin"]];
   [FlutterLocalNotificationsPlugin registerWithRegistrar:[registry registrarForPlugin:@"FlutterLocalNotificationsPlugin"]];

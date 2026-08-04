@@ -25,6 +25,9 @@ class Urls {
   static final getClientConfig = '${Config.appAuthUrl}/client_config/get';
   static final getTokenForRTC = "${Config.appAuthUrl}/user/rtc/get_token";
 
+  /// Trigger APNs VoIP / CallKit push for a call invite (see docs/VOIP_CALLKIT.md).
+  static final voipPush = "${Config.appAuthUrl}/user/rtc/voip_push";
+
   static final momentsFeed = "${Config.appAuthUrl}/moments/feed";
   static final momentPosts = "${Config.appAuthUrl}/moments/posts";
   static String momentProfile(String userID) =>

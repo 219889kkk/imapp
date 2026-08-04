@@ -8,6 +8,8 @@
 
 目前使用的是集成方案。客户端已接入 **iOS / Android 个推**（`getuiflut`）：登录后绑定 OpenIM `userID` 为别名；密钥非占位时自动启用 `PushType.getui`。
 
+**语音/视频来电（iOS）** 另走 **PushKit + CallKit + APNs VoIP**，不经个推普通通知。详见 [docs/VOIP_CALLKIT.md](docs/VOIP_CALLKIT.md)。
+
 ### 杀进程也能收推送的前提（缺一不可）
 
 1. **个推控制台**已创建应用  
@@ -20,6 +22,19 @@
 5. iOS 正式签名勾选 Push Notifications；Android 13+ 允许通知权限，并尽量关闭电池优化限制
 
 > 仅改客户端 SDK ≠ 离线可收。必须：个推密钥 +（iOS APNs / Android 厂商通道）+ OpenIM 服务端推送配置 齐全。
+
+### iOS 系统来电（CallKit / VoIP）
+
+杀进程要弹出**系统来电页**，除个推聊天通道外还需：
+
+1. Apple Developer：`top.hangxun.app` 开启 Push；申请 **VoIP Services** 证书（topic `top.hangxun.app.voip`）
+2. Xcode：`Push Notifications`；`Info.plist` Background Modes 含 `voip` / `audio` / `remote-notification`
+3. `Runner.entitlements`：`aps-environment`（开发 `development`，正式 `production`）
+4. 客户端：`bindAlias` + 原生 `registerVoipTokenCredentials`；PushKit 回调内先 `showCallkitIncoming`
+5. 主叫发完 `callingInvite(200)` 后调 `POST /chat/user/rtc/voip_push`（见 [docs/VOIP_CALLKIT.md](docs/VOIP_CALLKIT.md)）
+6. 服务端对该接口发 APNs VoIP（勿用个推 alert 冒充系统来电）
+
+联调：真机安装 → 登录看 VoIP Token → 被叫划掉 App → 主叫拨打 → 应出系统来电 UI。
 
 ### 客户端配置
 

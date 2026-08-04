@@ -78,6 +78,7 @@ class SplashLogic extends GetxController {
                   .millisecondsSinceEpoch);
         },
       );
+      VoipCallkitController.login(userID!);
       final result = await ConversationLogic.getConversationFirstPage()
           .timeout(const Duration(seconds: 15));
 

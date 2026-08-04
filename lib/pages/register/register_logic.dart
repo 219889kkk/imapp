@@ -83,6 +83,7 @@ class RegisterLogic extends GetxController {
       DataSp.putLoginType(2);
       await imLogic.login(data.userID, data.imToken);
       PushController.login(data.userID);
+      VoipCallkitController.login(data.userID);
     });
     AppNavigator.startMain();
   }

@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -67,7 +68,11 @@ class Config {
       );
 
   /// Offline APNs/Getui payload for call invites — distinct from chat messages.
-  static OfflinePushInfo offlineCallPushInfo({required bool isVideo}) {
+  /// [invitation] is encoded into `ex` JSON so the server can build VoIP payload.
+  static OfflinePushInfo offlineCallPushInfo({
+    required bool isVideo,
+    InvitationInfo? invitation,
+  }) {
     final title = isVideo
         ? StrRes.videoCallNotificationTitle
         : StrRes.voiceCallNotificationTitle;
@@ -79,12 +84,25 @@ class Config {
       nickname = OpenIM.iMManager.userInfo.nickname?.trim() ?? '';
     } catch (_) {}
     final desc = nickname.isEmpty ? hint : '$nickname$hint';
+    final mediaType = invitation?.mediaType ?? (isVideo ? 'video' : 'audio');
+    final exMap = <String, dynamic>{
+      'type': 'callingInvite',
+      'mediaType': mediaType,
+      'roomID': invitation?.roomID,
+      'inviterUserID':
+          invitation?.inviterUserID ?? OpenIM.iMManager.userID,
+      'inviteeUserIDList': invitation?.inviteeUserIDList,
+      'sessionType': invitation?.sessionType,
+      'groupID': invitation?.groupID,
+      'timeout': invitation?.timeout ?? 60,
+      'nickname': nickname,
+    };
     return OfflinePushInfo(
       title: title,
       desc: desc,
       iOSBadgeCount: true,
       iOSPushSound: 'default',
-      ex: isVideo ? 'callingInvite:video' : 'callingInvite:audio',
+      ex: jsonEncode(exMap),
     );
   }
 

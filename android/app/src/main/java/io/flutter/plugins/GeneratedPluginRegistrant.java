@@ -66,6 +66,11 @@ public final class GeneratedPluginRegistrant {
       Log.e(TAG, "Error registering plugin flutter_background, de.julianassmann.flutter_background.FlutterBackgroundPlugin", e);
     }
     try {
+      flutterEngine.getPlugins().add(new com.hiennv.flutter_callkit_incoming.FlutterCallkitIncomingPlugin());
+    } catch (Exception e) {
+      Log.e(TAG, "Error registering plugin flutter_callkit_incoming, com.hiennv.flutter_callkit_incoming.FlutterCallkitIncomingPlugin", e);
+    }
+    try {
       flutterEngine.getPlugins().add(new com.fluttercandies.flutter_image_compress.ImageCompressPlugin());
     } catch (Exception e) {
       Log.e(TAG, "Error registering plugin flutter_image_compress_common, com.fluttercandies.flutter_image_compress.ImageCompressPlugin", e);
@@ -84,6 +89,11 @@ public final class GeneratedPluginRegistrant {
       flutterEngine.getPlugins().add(new com.example.flutter_media_store.FlutterMediaStorePlugin());
     } catch (Exception e) {
       Log.e(TAG, "Error registering plugin flutter_media_store, com.example.flutter_media_store.FlutterMediaStorePlugin", e);
+    }
+    try {
+      flutterEngine.getPlugins().add(new net.jonhanson.flutter_native_splash.FlutterNativeSplashPlugin());
+    } catch (Exception e) {
+      Log.e(TAG, "Error registering plugin flutter_native_splash, net.jonhanson.flutter_native_splash.FlutterNativeSplashPlugin", e);
     }
     try {
       flutterEngine.getPlugins().add(new io.openim.live.alert.flutter_openim_live_alert.FlutterOpenimLiveAlertPlugin());

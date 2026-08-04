@@ -67,6 +67,12 @@ mixin OpenIMLive {
         PackageBridge.handleCallNotificationAction, _handleCallNotificationAction)) {
       PackageBridge.handleCallNotificationAction = null;
     }
+    if (identical(PackageBridge.onCallKitAccept, _onCallKitAccept)) {
+      PackageBridge.onCallKitAccept = null;
+    }
+    if (identical(PackageBridge.onCallKitDecline, _onCallKitDecline)) {
+      PackageBridge.onCallKitDecline = null;
+    }
     signalingSubject.close();
     backgroundSubject.close();
     roomParticipantDisconnectedSubject.close();
@@ -76,6 +82,8 @@ mixin OpenIMLive {
 
   onInitLive() async {
     PackageBridge.handleCallNotificationAction = _handleCallNotificationAction;
+    PackageBridge.onCallKitAccept = _onCallKitAccept;
+    PackageBridge.onCallKitDecline = _onCallKitDecline;
     _signalingListener();
     _insertSignalingMessageListener();
     _bindLiveAlertButtons();
@@ -96,6 +104,21 @@ mixin OpenIMLive {
         OpenIMLiveClient().closeByRoomID(info.invitation!.roomID!);
       }
     });
+  }
+
+  void _onCallKitAccept(SignalingInfo signaling) {
+    _autoPickup = true;
+    _stopSound();
+    PackageBridge.clearCallNotification?.call();
+    // Re-dispatch so in-app LiveKit UI presents and auto-picks up.
+    receiveNewInvitation(signaling);
+  }
+
+  void _onCallKitDecline(SignalingInfo signaling) {
+    _stopSound();
+    PackageBridge.clearCallNotification?.call();
+    _beCalledEvent = null;
+    onTapReject(signaling..userID = OpenIM.iMManager.userID);
   }
 
   void _handleCallNotificationAction(bool accept) {
@@ -141,6 +164,11 @@ mixin OpenIMLive {
             _beCalledEvent = null;
             FlutterOpenimLiveAlert.closeLiveAlert();
             PackageBridge.clearCallNotification?.call();
+            final roomID = event.data.invitation?.roomID;
+            if (Platform.isIOS) {
+              unawaited(VoipCallkitController.toOrNull?.endCall(roomID) ??
+                  Future.value());
+            }
           }
           if (event.state == CallState.beCalled) {
             _playSound();
@@ -166,8 +194,14 @@ mixin OpenIMLive {
                   rejectText: StrRes.reject,
                   acceptText: StrRes.pickUp,
                 );
+              } else if (Platform.isIOS) {
+                // Prefer CallKit over in-app alert when backgrounded.
+                final voip = VoipCallkitController.toOrNull;
+                if (voip != null && !voip.ownsIncomingUi) {
+                  await voip.showIncoming(event.data);
+                }
               }
-              // iOS / no-overlay: keep pending invite and show UI when app returns.
+              // Keep pending invite; CallKit / foreground restores UI.
               return;
             }
             _beCalledEvent = null;
@@ -325,15 +359,19 @@ mixin OpenIMLive {
     final message = await OpenIM.iMManager.messageManager.createCustomMessage(
         data: jsonEncode(data), extension: '', description: '');
     final isVideo = signaling.invitation!.mediaType == 'video';
+    final invitation = signaling.invitation!;
     OpenIM.iMManager.messageManager.sendMessage(
       message: message,
-      offlinePushInfo: Config.offlineCallPushInfo(isVideo: isVideo),
-      userID: signaling.invitation!.inviteeUserIDList!.first,
+      offlinePushInfo:
+          Config.offlineCallPushInfo(isVideo: isVideo, invitation: invitation),
+      userID: invitation.inviteeUserIDList!.first,
       // Keep WS delivery when online; also allow offline push when away.
       isOnlineOnly: false,
     );
+    // iOS CallKit: after invite(200), ask chat server to fire APNs VoIP.
+    unawaited(_triggerVoipPush(signaling, action: 'invite'));
     final certificate = await Apis.getTokenForRTC(
-        signaling.invitation!.roomID!, OpenIM.iMManager.userID);
+        invitation.roomID!, OpenIM.iMManager.userID);
 
     return certificate;
   }
@@ -346,20 +384,48 @@ mixin OpenIMLive {
     final message = await OpenIM.iMManager.messageManager.createCustomMessage(
         data: jsonEncode(data), extension: '', description: '');
     final isVideo = signaling.invitation!.mediaType == 'video';
-    for (final userID in signaling.invitation!.inviteeUserIDList!) {
+    final invitation = signaling.invitation!;
+    for (final userID in invitation.inviteeUserIDList!) {
       OpenIM.iMManager.messageManager.sendMessage(
         message: message,
-        offlinePushInfo: Config.offlineCallPushInfo(isVideo: isVideo),
+        offlinePushInfo:
+            Config.offlineCallPushInfo(isVideo: isVideo, invitation: invitation),
         userID: userID,
         isOnlineOnly: false,
       );
     }
+    unawaited(_triggerVoipPush(signaling, action: 'invite'));
     final certificate = await Apis.getTokenForRTC(
-      signaling.invitation!.roomID!,
+      invitation.roomID!,
       OpenIM.iMManager.userID,
     );
 
     return certificate;
+  }
+
+  Future<void> _triggerVoipPush(
+    SignalingInfo signaling, {
+    required String action,
+  }) async {
+    if (!Platform.isIOS && !Platform.isAndroid) return;
+    // Server sends iOS VoIP only; safe to call from any caller platform.
+    final inv = signaling.invitation;
+    if (inv == null) return;
+    String nickname = '';
+    try {
+      nickname = OpenIM.iMManager.userInfo.nickname?.trim() ?? '';
+    } catch (_) {}
+    await Apis.voipPush(
+      action: action,
+      inviteeUserIDList: inv.inviteeUserIDList ?? const [],
+      roomID: inv.roomID ?? '',
+      inviterUserID: inv.inviterUserID ?? OpenIM.iMManager.userID,
+      mediaType: inv.mediaType ?? 'audio',
+      nickname: nickname,
+      sessionType: inv.sessionType,
+      groupID: inv.groupID,
+      timeout: inv.timeout ?? 60,
+    );
   }
 
   Future<SignalingCertificate> onTapPickup(SignalingInfo signaling) async {
@@ -422,6 +488,7 @@ mixin OpenIMLive {
           userID: userID,
           isOnlineOnly: true);
     }
+    unawaited(_triggerVoipPush(signaling, action: 'cancel'));
     return true;
   }
 

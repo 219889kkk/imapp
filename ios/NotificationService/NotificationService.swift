@@ -51,6 +51,11 @@ class NotificationService: UNNotificationServiceExtension {
         if title.contains("通话") || body.contains("通话") { return true }
         if blob.contains("voice call") || blob.contains("video call") { return true }
         if body.contains("邀请你语音") || body.contains("邀请你视频") { return true }
+        // JSON ex from offlineCallPushInfo: {"type":"callingInvite",...}
+        if let ex = userInfo["ex"] as? String,
+           ex.contains("callingInvite") || ex.contains("\"type\"") {
+            return true
+        }
         return false
     }
 

@@ -181,6 +181,7 @@ class LoginLogic extends GetxController {
           );
         },
       );
+      VoipCallkitController.login(data.userID);
       return true;
     } catch (e, s) {
       Logger.print('login e: $e $s');

@@ -8,6 +8,8 @@
 
 Currently using the integrated solution. iOS Getui (`getuiflut`) is wired: after login the OpenIM `userID` is bound as a Getui alias. When real AppID/AppKey/AppSecret replace placeholders, `PushType.getui` is enabled automatically.
 
+**iOS voice/video calls** use **PushKit + CallKit + APNs VoIP** (not Getui alert banners). See [docs/VOIP_CALLKIT.md](docs/VOIP_CALLKIT.md).
+
 ### Kill-app push checklist (all required)
 
 1. Getui console: iOS app with Bundle ID `top.hangxun.app`
@@ -15,6 +17,16 @@ Currently using the integrated solution. iOS Getui (`getuiflut`) is wired: after
 3. APNs cert/key uploaded in Getui console
 4. OpenIM server configured for Getui (same credentials, push by userID/alias)
 5. Signed builds: Xcode **Push Notifications** capability; `aps-environment` is `development` for debug, `production` for App Store / ad-hoc
+
+### iOS CallKit / VoIP
+
+For the **system incoming-call UI** when the app is killed:
+
+1. Apple Developer: enable Push on `top.hangxun.app`; create a **VoIP Services** certificate (topic `top.hangxun.app.voip`)
+2. Xcode: Push Notifications; `Info.plist` background modes include `voip`
+3. Client: Getui `bindAlias` + native `registerVoipTokenCredentials`; PushKit must `showCallkitIncoming` before completion
+4. Caller: after `callingInvite` (200), `POST /chat/user/rtc/voip_push` — see [docs/VOIP_CALLKIT.md](docs/VOIP_CALLKIT.md)
+5. Server sends APNs VoIP for that API (do not rely on Getui alert for CallKit)
 
 ### Client configuration
 

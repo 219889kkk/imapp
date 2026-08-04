@@ -99,3 +99,4 @@ export 'src/widgets/overlay_widget.dart';
 export 'src/widgets/photo_browser.dart';
 export 'src/widgets/chat/image_edit_helper.dart';
 export 'src/controller/push_controller.dart';
+export 'src/controller/voip_callkit_controller.dart';

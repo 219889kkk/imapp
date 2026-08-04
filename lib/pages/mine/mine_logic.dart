@@ -56,6 +56,7 @@ class MineLogic extends GetxController {
           await imLogic.logout();
           await DataSp.removeLoginCertificate();
           PushController.logout();
+          VoipCallkitController.logout();
           Get.find<HomeLogic>().conversationsAtFirstPage.clear();
         });
         AppNavigator.startLogin();
@@ -72,6 +73,7 @@ class MineLogic extends GetxController {
     Get.snackbar(StrRes.accountWarn, tips ?? StrRes.accountException);
     await DataSp.removeLoginCertificate();
     PushController.logout();
+    VoipCallkitController.logout();
     AppNavigator.startLogin();
   }
 

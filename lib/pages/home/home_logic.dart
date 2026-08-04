@@ -106,6 +106,7 @@ class HomeLogic extends SuperController {
     Apis.kickoffController.stream.listen((event) {
       DataSp.removeLoginCertificate();
       PushController.logout();
+      VoipCallkitController.logout();
       AppNavigator.startLogin();
     });
     super.onInit();
@@ -193,6 +194,7 @@ class HomeLogic extends SuperController {
             await DataSp.clearLockScreenPassword();
             await DataSp.closeBiometric();
             PushController.logout();
+            VoipCallkitController.logout();
           });
           AppNavigator.startLogin();
         },
