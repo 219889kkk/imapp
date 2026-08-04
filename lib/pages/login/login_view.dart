@@ -31,11 +31,13 @@ class LoginPage extends StatelessWidget {
               child: Column(
                 children: [
                   88.verticalSpace,
+                  // Same artwork as desktop AppIcon; rounded like iOS mask.
                   ClipRRect(
-                    borderRadius: BorderRadius.circular(20.r),
+                    borderRadius: BorderRadius.circular(22.r),
                     child: ImageRes.loginLogo.toImage
                       ..width = 96.w
-                      ..height = 96.h,
+                      ..height = 96.h
+                      ..fit = BoxFit.cover,
                   ),
                   StrRes.welcome.toText..style = Styles.ts_0089FF_17sp_semibold,
                   51.verticalSpace,
