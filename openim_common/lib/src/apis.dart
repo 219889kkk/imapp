@@ -405,6 +405,31 @@ class Apis {
     }
   }
 
+  /// Callee-side: upload PushKit VoIP token so server can APNs-direct this device.
+  static Future<void> updateVoipToken({
+    required String userID,
+    required String voipToken,
+    int? platformID,
+  }) async {
+    final token = voipToken.trim();
+    if (userID.isEmpty || token.isEmpty) return;
+    try {
+      await HttpUtil.post(
+        Urls.voipToken,
+        data: {
+          'userID': userID,
+          'voipToken': token,
+          'platformID': platformID ?? IMUtils.getPlatform(),
+        },
+        options: chatTokenOptions,
+        showErrorToast: false,
+      );
+      Logger.print('updateVoipToken ok userID=$userID len=${token.length}');
+    } catch (e, s) {
+      Logger.print('updateVoipToken failed: $e $s');
+    }
+  }
+
   static Future<dynamic> checkVerificationCode({
     String? areaCode,
     String? phoneNumber,

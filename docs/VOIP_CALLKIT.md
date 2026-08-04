@@ -12,9 +12,22 @@
 
 ## 客户端必做
 
-1. **个推**：登录 `bindAlias(userID)`；PushKit 拿到 VoIP Token 后原生调用 `GeTuiSdk.registerVoipTokenCredentials`（见 `HangXunGetuiVoip.m`）。
-2. **PushKit 收包**：在 `completion` 返回前调用 CallKit `reportNewIncomingCall`（`flutter_callkit_incoming` `showCallkitIncoming(..., fromPushKit: true)`）。
-3. **主叫**：发送 `callingInvite`（customType `200`）后立即 `POST /user/rtc/voip_push`。
+1. **个推**：登录 `bindAlias(userID)`；PushKit 拿到 VoIP Token 后原生调用 `GeTuiSdk.registerTokenCredentials`（见 `HangXunGetuiVoip.m`）。
+2. **上报 Token**：登录后 / Token 刷新时 `POST /user/rtc/voip_token`，把真实 PushKit Token 存到被叫 userID（库里不能是 `bbbbbb...` 假值）。
+3. **PushKit 收包**：在 `completion` 返回前调用 CallKit `reportNewIncomingCall`（`flutter_callkit_incoming` `showCallkitIncoming(..., fromPushKit: true)`）。
+4. **主叫**：发送 `callingInvite`（customType `200`）后立即 `POST /user/rtc/voip_push`。
+
+## `POST /user/rtc/voip_token`
+
+被叫登录后上报（需 chat token）：
+
+```json
+{
+  "userID": "6651546301",
+  "voipToken": "<PushKit hex token>",
+  "platformID": 1
+}
+```
 
 ## `POST /user/rtc/voip_push`
 

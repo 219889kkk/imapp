@@ -28,6 +28,9 @@ class Urls {
   /// Trigger APNs VoIP / CallKit push for a call invite (see docs/VOIP_CALLKIT.md).
   static final voipPush = "${Config.appAuthUrl}/user/rtc/voip_push";
 
+  /// Callee reports PushKit VoIP device token (stored per userID for direct APNs).
+  static final voipToken = "${Config.appAuthUrl}/user/rtc/voip_token";
+
   static final momentsFeed = "${Config.appAuthUrl}/moments/feed";
   static final momentPosts = "${Config.appAuthUrl}/moments/posts";
   static String momentProfile(String userID) =>

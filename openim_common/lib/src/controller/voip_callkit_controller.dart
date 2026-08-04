@@ -11,6 +11,7 @@ import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 import 'package:get/get.dart';
 import 'package:uuid/uuid.dart';
 
+import '../apis.dart';
 import '../bridge/package_bridge.dart';
 import '../models/signaling_info.dart';
 import '../res/strings.dart';
@@ -32,6 +33,9 @@ class VoipCallkitController extends GetxService {
   StreamSubscription? _eventSub;
   String? _voipToken;
   String? _boundUserID;
+  String? _lastUploadedToken;
+  Timer? _tokenRetryTimer;
+  int _tokenRetryCount = 0;
 
   /// True while a CallKit incoming UI is active (avoid double local banners).
   final RxBool callKitActive = false.obs;
@@ -51,6 +55,7 @@ class VoipCallkitController extends GetxService {
   @override
   void onClose() {
     _eventSub?.cancel();
+    _tokenRetryTimer?.cancel();
     super.onClose();
   }
 
@@ -61,7 +66,8 @@ class VoipCallkitController extends GetxService {
         ? Get.find<VoipCallkitController>()
         : Get.put(VoipCallkitController(), permanent: true);
     ctrl._boundUserID = userID;
-    ctrl._refreshVoipToken();
+    unawaited(ctrl._refreshVoipToken(upload: true));
+    ctrl._scheduleTokenRetries();
     Logger.print('VoipCallkit login userID=$userID token=${ctrl._voipToken}');
   }
 
@@ -70,20 +76,62 @@ class VoipCallkitController extends GetxService {
     if (!Get.isRegistered<VoipCallkitController>()) return;
     final ctrl = Get.find<VoipCallkitController>();
     ctrl._boundUserID = null;
+    ctrl._lastUploadedToken = null;
+    ctrl._tokenRetryTimer?.cancel();
     unawaited(FlutterCallkitIncoming.endAllCalls());
     ctrl.callKitActive.value = false;
   }
 
-  Future<void> _refreshVoipToken() async {
+  /// Reject placeholders like server test token `bbbbbb...`.
+  static bool isPlausibleVoipToken(String? token) {
+    final t = token?.trim() ?? '';
+    if (t.length < 32) return false;
+    if (RegExp(r'^(b|0|f)+$', caseSensitive: false).hasMatch(t)) return false;
+    return true;
+  }
+
+  Future<void> _refreshVoipToken({bool upload = false}) async {
     try {
       final token = await FlutterCallkitIncoming.getDevicePushTokenVoIP();
       if (token != null && '$token'.isNotEmpty) {
         _voipToken = '$token';
         Logger.print('VoIP PushKit token: $_voipToken');
+        if (upload) await _uploadVoipTokenIfNeeded();
+      } else {
+        Logger.print('VoIP PushKit token empty (waiting for PushKit)');
       }
     } catch (e, s) {
       Logger.print('getDevicePushTokenVoIP failed: $e $s');
     }
+  }
+
+  void _scheduleTokenRetries() {
+    _tokenRetryTimer?.cancel();
+    _tokenRetryCount = 0;
+    // PushKit token often arrives after Flutter login; retry ~30s.
+    _tokenRetryTimer = Timer.periodic(const Duration(seconds: 2), (timer) async {
+      _tokenRetryCount++;
+      await _refreshVoipToken(upload: true);
+      if (isPlausibleVoipToken(_voipToken) &&
+          _lastUploadedToken == _voipToken) {
+        timer.cancel();
+        return;
+      }
+      if (_tokenRetryCount >= 15) timer.cancel();
+    });
+  }
+
+  Future<void> _uploadVoipTokenIfNeeded() async {
+    final userID = _boundUserID;
+    final token = _voipToken;
+    if (userID == null || userID.isEmpty) return;
+    if (!isPlausibleVoipToken(token)) {
+      Logger.print('skip voip token upload (implausible): $token');
+      return;
+    }
+    if (token == _lastUploadedToken) return;
+    await Apis.updateVoipToken(userID: userID, voipToken: token!);
+    _lastUploadedToken = token;
   }
 
   void _listenEvents() {
@@ -115,6 +163,7 @@ class VoipCallkitController extends GetxService {
           if (token != null && token.isNotEmpty) {
             _voipToken = token;
             Logger.print('VoIP token updated: $token');
+            unawaited(_uploadVoipTokenIfNeeded());
           }
           break;
         default:
