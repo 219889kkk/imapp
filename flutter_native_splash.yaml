@@ -1,8 +1,10 @@
 flutter_native_splash:
-  # Full-screen HangXun splash (color and background_image cannot both be set)
+  # Full-bleed HangXun splash from the first frame.
   background_image: "assets/splash_bg.png"
+  fullscreen: true
   android_12:
+    # System splash cannot be full-bleed; use the same art so it is never a blank blue.
     color: "#003A7A"
-    image: launcher_icon/app-icon.png
+    image: assets/splash_bg.png
     icon_background_color: "#003A7A"
   web: false
