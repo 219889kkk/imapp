@@ -1,75 +1,111 @@
-import 'package:emoji_picker_flutter/emoji_picker_flutter.dart' as emoji;
 import 'package:flutter/material.dart';
 
 import '../res/styles.dart';
 
-/// Matches emoji tokens including keycap sequences, ZWJ, and variation selectors.
-const _emojiTokenRegex =
-    r'((\u0023|\u002a|[\u0030-\u0039])\ufe0f?\u20e3)|\p{Emoji}|\u200D|\uFE0F';
-
-final _emojiTokenRegExp = RegExp(_emojiTokenRegex, unicode: true);
-
-bool _isBareKeycapBase(String segment) {
-  if (segment.length != 1) return false;
-  final code = segment.codeUnitAt(0);
-  return (code >= 0x30 && code <= 0x39) || code == 0x23 || code == 0x2a;
+/// Fast emoji-range check (avoids expensive `\p{Emoji}` regex on every keystroke).
+bool _isEmojiCodePoint(int cp) {
+  if (cp == 0x200D || cp == 0xFE0F || cp == 0x20E3) return true;
+  if (cp >= 0xFE00 && cp <= 0xFE0F) return true;
+  if (cp >= 0x1F1E6 && cp <= 0x1F1FF) return true; // flags
+  if (cp >= 0x1F300 && cp <= 0x1FAFF) return true; // emoji blocks
+  if (cp >= 0x1F000 && cp <= 0x1F02F) return true;
+  if (cp >= 0x2600 && cp <= 0x27BF) return true; // misc symbols
+  if (cp >= 0x2300 && cp <= 0x23FF) return true; // technical
+  if (cp >= 0x2B00 && cp <= 0x2BFF) return true;
+  if (cp >= 0x2900 && cp <= 0x297F) return true;
+  return false;
 }
 
+bool textLikelyContainsEmoji(String text) {
+  if (text.isEmpty) return false;
+  for (final cp in text.runes) {
+    if (_isEmojiCodePoint(cp)) return true;
+  }
+  return false;
+}
+
+TextStyle? _cachedBaseStyle;
+TextStyle? _cachedEmojiStyle;
+double? _cachedFontSize;
+
+TextStyle _emojiStyleFor(TextStyle? style) {
+  final size = style?.fontSize;
+  if (_cachedEmojiStyle != null &&
+      identical(_cachedBaseStyle, style) &&
+      _cachedFontSize == size) {
+    return _cachedEmojiStyle!;
+  }
+  _cachedBaseStyle = style;
+  _cachedFontSize = size;
+  _cachedEmojiStyle = (style ?? const TextStyle()).copyWith(
+    inherit: false,
+    fontFamily: Styles.emojiFontFamily,
+    fontSize: size,
+    height: style?.height,
+    letterSpacing: 0,
+  );
+  return _cachedEmojiStyle!;
+}
+
+String? _cachedText;
+TextStyle? _cachedTextStyle;
+List<InlineSpan>? _cachedSpans;
+
+/// Builds emoji-aware spans. Plain text uses a fast path (no regex).
 List<InlineSpan> buildEmojiAwareTextSpans(
   String text, {
   TextStyle? style,
 }) {
   if (text.isEmpty) return const [];
 
-  final emojiStyle = emoji.DefaultEmojiTextStyle.copyWith(
-    inherit: false,
-    fontFamily: Styles.emojiFontFamily,
-    fontSize: style?.fontSize,
-  );
-  final composedEmojiStyle = (style ?? const TextStyle())
-      .merge(emoji.DefaultEmojiTextStyle)
-      .merge(emojiStyle);
-
-  final matches = _emojiTokenRegExp
-      .allMatches(text)
-      .where(
-        (match) => !_isBareKeycapBase(text.substring(match.start, match.end)),
-      )
-      .toList();
-
-  if (matches.isEmpty) {
-    return [TextSpan(text: text, style: style)];
+  if (identical(_cachedText, text) &&
+      identical(_cachedTextStyle, style) &&
+      _cachedSpans != null) {
+    return _cachedSpans!;
+  }
+  // Common case: Chinese/ASCII only — skip scanning splits.
+  if (!textLikelyContainsEmoji(text)) {
+    final spans = <InlineSpan>[TextSpan(text: text, style: style)];
+    _cachedText = text;
+    _cachedTextStyle = style;
+    _cachedSpans = spans;
+    return spans;
   }
 
-  final spans = <TextSpan>[];
-  var cursor = 0;
-  for (final match in matches) {
-    if (cursor != match.start) {
-      spans
-        ..add(TextSpan(text: text.substring(cursor, match.start), style: style))
-        ..add(TextSpan(
-          text: text.substring(match.start, match.end),
-          style: composedEmojiStyle,
-        ));
-    } else if (spans.isEmpty) {
-      spans.add(TextSpan(
-        text: text.substring(match.start, match.end),
-        style: composedEmojiStyle,
-      ));
-    } else {
-      final lastIndex = spans.length - 1;
-      final lastText = spans[lastIndex].text ?? '';
-      final currentText = text.substring(match.start, match.end);
-      spans[lastIndex] = TextSpan(
-        text: '$lastText$currentText',
-        style: composedEmojiStyle,
-      );
+  final emojiStyle = _emojiStyleFor(style);
+  final spans = <InlineSpan>[];
+  final buffer = StringBuffer();
+  var emojiRun = false;
+
+  void flush() {
+    if (buffer.isEmpty) return;
+    final chunk = buffer.toString();
+    buffer.clear();
+    spans.add(TextSpan(
+      text: chunk,
+      style: emojiRun ? emojiStyle : style,
+    ));
+  }
+
+  for (final cp in text.runes) {
+    final isEmoji = _isEmojiCodePoint(cp);
+    if (buffer.isEmpty) {
+      emojiRun = isEmoji;
+      buffer.writeCharCode(cp);
+      continue;
     }
-    cursor = match.end;
+    if (isEmoji == emojiRun) {
+      buffer.writeCharCode(cp);
+    } else {
+      flush();
+      emojiRun = isEmoji;
+      buffer.writeCharCode(cp);
+    }
   }
+  flush();
 
-  if (cursor != text.length) {
-    spans.add(TextSpan(text: text.substring(cursor), style: style));
-  }
+  _cachedText = text;
+  _cachedTextStyle = style;
+  _cachedSpans = spans;
   return spans;
 }

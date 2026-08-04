@@ -78,6 +78,8 @@ abstract class SignalState<T extends SignalView> extends State<T> {
   void initState() {
     roomID ??= widget.roomID;
     callState = widget.initState;
+    // Voice: earpiece by default (better AEC). Video: speaker.
+    enabledSpeaker = widget.callType == CallType.video;
     callEventSub = sameRoomSignalStream.listen(_onStateDidUpdate);
     widget.onSyncUserInfo?.call(widget.userID).then(_onUpdateUserInfo);
     onDail();

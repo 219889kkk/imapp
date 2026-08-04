@@ -6,17 +6,20 @@
 
 ## 离线推送功能
 
-目前使用的是集成方案。客户端已接入 **iOS 个推**（`getuiflut`）：登录后绑定 OpenIM `userID` 为别名；密钥非占位时自动启用 `PushType.getui`。
+目前使用的是集成方案。客户端已接入 **iOS / Android 个推**（`getuiflut`）：登录后绑定 OpenIM `userID` 为别名；密钥非占位时自动启用 `PushType.getui`。
 
 ### 杀进程也能收推送的前提（缺一不可）
 
-1. **个推控制台**已创建 iOS 应用，Bundle ID：`top.hangxun.app`
+1. **个推控制台**已创建应用  
+   - iOS Bundle ID：`top.hangxun.app`  
+   - Android 包名：`io.openim.flutter.demo`
 2. 客户端填入真实 **AppID / AppKey / AppSecret**（见下方；**Master Secret 仅给 OpenIM 服务端用，不要写进 App**）
-3. **个推后台已上传 Apple APNs 证书/密钥**（.p12 或 AuthKey）——否则杀进程收不到系统通知
-4. **OpenIM 服务端**（如 `im.zghtchat9.top`）配置个推推送（AppID/AppKey/AppSecret/**Master Secret**，按 userID/别名下发）
-5. 正式签名包在 Xcode **Signing & Capabilities** 勾选 **Push Notifications**；`Runner.entitlements` 中 `aps-environment` 开发用 `development`，正式分发改为 `production`
+3. **iOS**：个推后台已上传 Apple APNs 证书/密钥  
+   **Android**：已配置 `GETUI_APPID`；小米/华为等机型建议再开通**厂商通道**（见下方）
+4. **OpenIM 服务端**配置个推推送（AppID/AppKey/AppSecret/**Master Secret**，按 userID/别名下发）
+5. iOS 正式签名勾选 Push Notifications；Android 13+ 允许通知权限，并尽量关闭电池优化限制
 
-> 仅改客户端 SDK ≠ 离线可收。必须：个推密钥 + APNs + OpenIM 服务端推送配置 三者齐全。
+> 仅改客户端 SDK ≠ 离线可收。必须：个推密钥 +（iOS APNs / Android 厂商通道）+ OpenIM 服务端推送配置 齐全。
 
 ### 客户端配置
 
@@ -24,9 +27,7 @@
 
 ###### 在[Getui](https://getui.com/)的集成指南，配置iOS和Android。
 
-**iOS 平台配置：**
-根据[其文档](https://docs.getui.com/getui/mobile/ios/overview/)做好相应的iOS配置。然后在代码中找到以下文件并修改对应的 iOS侧Key：
-
+**iOS / 公共密钥：**
 - **[push_controller.dart](openim_common/lib/src/controller/push_controller.dart)**
 
 ```dart
@@ -37,32 +38,23 @@
 
 替换为真实值后，下次启动会自动 `pushType = getui`，登录时 `bindAlias(userID)`。
 
-**iOS 工程已改：**
-- `Info.plist` → `UIBackgroundModes` 含 `remote-notification`（及通话相关 `audio`/`voip`）
-- `Runner.entitlements` → `aps-environment = development`
+**Android 工程已改：**
+- `android/app/build.gradle` → `GETUI_APPID` + 个推 SDK 依赖  
+- 启动时 `initGetuiSdk` + `turnOnPush` + 申请通知权限  
 
-**验证步骤：** 装含个推的新 iOS 包 → 登录 → 完全划掉 App → 另一账号发消息/打语音 → 应出系统通知。
-
-**Android 平台配置：**
-根据[其文档](https://docs.getui.com/getui/mobile/android/overview/)做好相应的Android配置，注意[多厂商](https://docs.getui.com/getui/mobile/vendor/vendor_open/)配置。然后修改以下文件内容：
-
-- **[build.gradle](android/app/build.gradle)**
+**小米 / Redmi（如 Redmi 14C）必做厂商通道，否则杀进程很难唤醒：**
+1. 在[小米开放平台](https://dev.mi.com/console)创建应用，包名与 `io.openim.flutter.demo` 一致，开通消息推送，拿到 AppID / AppKey  
+2. 在个推控制台绑定小米厂商通道  
+3. 填到 `android/app/build.gradle`：
 
 ```gradle
-  manifestPlaceholders = [
-      GETUI_APPID    : "",
-      XIAOMI_APP_ID  : "",
-      XIAOMI_APP_KEY : "",
-      MEIZU_APP_ID   : "",
-      MEIZU_APP_KEY  : "",
-      HUAWEI_APP_ID  : "",
-      OPPO_APP_KEY   : "",
-      OPPO_APP_SECRET: "",
-      VIVO_APP_ID    : "",
-      VIVO_APP_KEY   : "",
-      HONOR_APP_ID   : "",
-  ]
+  XIAOMI_APP_ID  : "你的小米AppID",
+  XIAOMI_APP_KEY : "你的小米AppKey",
 ```
+
+4. 手机设置：允许通知、自启动、关闭电池优化（省电策略）
+
+华为 / OPPO / vivo / 荣耀同理填对应占位符。
 
 #### 2. 海外地区使用 [FCM（Firebase Cloud Messaging）](https://firebase.google.com/docs/cloud-messaging)
 

@@ -208,21 +208,31 @@ class IMController extends GetxController with IMCallback, OpenIMLive {
           break;
         case CustomMessageType.callingAccept:
           inviteeAccepted(signaling);
+          _clearCallNotification();
           break;
         case CustomMessageType.callingReject:
           inviteeRejected(signaling);
+          _clearCallNotification();
           break;
         case CustomMessageType.callingCancel:
           invitationCancelled(signaling);
+          _clearCallNotification();
           break;
         case CustomMessageType.callingHungup:
           beHangup(signaling);
+          _clearCallNotification();
           break;
       }
       return true;
     } catch (e, s) {
       Logger.print('dispatch calling message error: $e $s');
       return false;
+    }
+  }
+
+  void _clearCallNotification() {
+    if (Get.isRegistered<AppController>()) {
+      Get.find<AppController>().cancelCallNotification();
     }
   }
 

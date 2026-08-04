@@ -54,10 +54,10 @@ mixin OpenIMLive {
 
   final _ring = 'assets/audio/live_ring.wav';
   final _audioPlayer = AudioPlayer(
-    // Handle audio_session events ourselves for the purpose of this demo.
+    // Avoid fighting LiveKit's playAndRecord session (reduces connect-time noise).
     handleInterruptions: false,
-    // androidApplyAudioAttributes: false,
-    // handleAudioSessionActivation: false,
+    androidApplyAudioAttributes: false,
+    handleAudioSessionActivation: false,
   );
 
   bool get isBusy => OpenIMLiveClient().isBusy;
@@ -104,6 +104,7 @@ mixin OpenIMLive {
         final pending = _beCalledEvent;
         _beCalledEvent = null;
         _stopSound();
+        PackageBridge.clearCallNotification?.call();
         if (pending != null) {
           onTapReject(pending.data..userID = OpenIM.iMManager.userID);
         }
@@ -119,6 +120,7 @@ mixin OpenIMLive {
           if (event.state != CallState.beCalled) {
             _beCalledEvent = null;
             FlutterOpenimLiveAlert.closeLiveAlert();
+            PackageBridge.clearCallNotification?.call();
           }
           if (event.state == CallState.beCalled) {
             _playSound();

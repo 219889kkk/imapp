@@ -82,7 +82,8 @@ class _ControlsViewState extends State<ControlsView> {
 
   bool _enabledMicrophone = true;
 
-  bool _enabledSpeaker = true;
+  late bool _enabledSpeaker;
+  bool _speakerRouteApplied = false;
 
   final _lockAudio = Lock();
   final _lockSpeaker = Lock();
@@ -99,6 +100,7 @@ class _ControlsViewState extends State<ControlsView> {
 
   @override
   void initState() {
+    _enabledSpeaker = widget.callType == CallType.video;
     _onChangedCallState(widget.initState);
     _callStateChangedSub = widget.callStateStream.listen(_onChangedCallState);
     _roomDidUpdateSub = widget.roomDidUpdateStream.listen(_roomDidUpdate);
@@ -111,6 +113,14 @@ class _ControlsViewState extends State<ControlsView> {
 
   _roomDidUpdate(Room room) {
     _room ??= room;
+    if (!_speakerRouteApplied) {
+      _speakerRouteApplied = true;
+      if (_enabledSpeaker) {
+        _enableSpeaker();
+      } else {
+        _disableSpeaker();
+      }
+    }
     if (room.localParticipant != null && _participant == null) {
       _participant = room.localParticipant;
       _participant?.addListener(_onChange);

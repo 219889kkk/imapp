@@ -12,9 +12,9 @@ import 'firebase_options.dart';
 
 enum PushType { getui, FCM, none }
 
-/// Getui credentials for iOS offline push (Bundle ID: top.hangxun.app).
+/// Getui credentials (iOS Bundle ID: top.hangxun.app; Android package: io.openim.flutter.demo).
 /// Replace placeholders with values from the Getui console; when filled,
-/// [PushController] enables [PushType.getui] automatically.
+/// [PushController] enables [PushType.getui] on both iOS and Android.
 const appID = 'gy41yoFqNV8bdYKPBDYwc7';
 const appKey = 'UveVgAb1Id8vAfz7RdCkA6';
 const appSecret = 'yIcrJFzeUd6MynyvYNZ251';
@@ -37,24 +37,15 @@ class PushController extends GetxService {
   @override
   void onInit() {
     super.onInit();
-    // Getui vendor channels are only wired for iOS this round.
-    // Initializing Getui on Android without GETUI_APPID/manifest causes crashes.
-    if (Platform.isIOS && _hasGetuiCredentials) {
+    if (_hasGetuiCredentials) {
       pushType = PushType.getui;
       _ensureGetuiStarted();
     } else {
       pushType = PushType.none;
-      if (Platform.isAndroid && _hasGetuiCredentials) {
-        Logger.print(
-          'PushController: Getui credentials present but Android push '
-          'disabled until vendor channels are configured',
-        );
-      } else if (!_hasGetuiCredentials) {
-        Logger.print(
-          'PushController: Getui credentials not set, pushType=none '
-          '(offline push disabled until AppID/AppKey/AppSecret are filled)',
-        );
-      }
+      Logger.print(
+        'PushController: Getui credentials not set, pushType=none '
+        '(offline push disabled until AppID/AppKey/AppSecret are filled)',
+      );
     }
   }
 
@@ -138,12 +129,19 @@ class PushController extends GetxService {
         );
       }
 
-      if (Platform.isIOS) {
+      if (Platform.isAndroid) {
+        // Android reads GETUI_APPID from manifestPlaceholders.
+        gt.initGetuiSdk;
+        gt.turnOnPush();
+        // Android 13+ notification permission (Xiaomi/Redmi etc.).
+        // ignore: unawaited_futures
+        Permissions.notification();
+        _getuiInited = true;
+        Logger.print('Getui SDK init requested (Android)');
+      } else if (Platform.isIOS) {
         gt.startSdk(appId: appID, appKey: appKey, appSecret: appSecret);
         _getuiInited = true;
         Logger.print('Getui SDK start requested (iOS)');
-      } else {
-        Logger.print('Getui SDK start skipped on Android (iOS-only this round)');
       }
     } catch (e, s) {
       Logger.print('Getui SDK start failed: $e $s');

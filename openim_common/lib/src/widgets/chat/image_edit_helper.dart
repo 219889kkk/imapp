@@ -218,14 +218,21 @@ class _ChatImageEditorPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // pro_image_editor calls onImageEditingComplete then onCloseEditor on
+    // the same done tap. Popping in both would close the preview underneath
+    // and make the checkmark feel like it needs two presses.
+    var completed = false;
     return ProImageEditor.file(
       file,
       callbacks: ProImageEditorCallbacks(
         onImageEditingComplete: (Uint8List bytes) async {
+          completed = true;
           if (context.mounted) Navigator.of(context).pop(bytes);
         },
         onCloseEditor: (_) {
-          if (context.mounted) Navigator.of(context).pop();
+          if (!completed && context.mounted) {
+            Navigator.of(context).pop();
+          }
         },
       ),
       configs: const ProImageEditorConfigs(

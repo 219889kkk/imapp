@@ -28,6 +28,22 @@ android {
         versionName flutter.versionName
         multiDexEnabled true
 
+        // Getui + vendor push placeholders (Xiaomi etc. fill after opening vendor channel).
+        manifestPlaceholders += [
+                GETUI_APPID    : "gy41yoFqNV8bdYKPBDYwc7",
+                GETUI_APP_ID   : "gy41yoFqNV8bdYKPBDYwc7",
+                XIAOMI_APP_ID  : "",
+                XIAOMI_APP_KEY : "",
+                MEIZU_APP_ID   : "",
+                MEIZU_APP_KEY  : "",
+                HUAWEI_APP_ID  : "",
+                OPPO_APP_KEY   : "",
+                OPPO_APP_SECRET: "",
+                VIVO_APP_ID    : "",
+                VIVO_APP_KEY   : "",
+                HONOR_APP_ID   : "",
+        ]
+
         // Do not set ndk.abiFilters here when building with --split-per-abi;
         // Gradle rejects having both. ABI is controlled by Flutter build flags.
     }
@@ -71,6 +87,10 @@ dependencies {
     // Firebase
     implementation platform("com.google.firebase:firebase-bom:33.7.0")
     implementation "com.google.firebase:firebase-messaging"
+
+    // Getui (mainland China offline push / OEM wake-up)
+    implementation 'com.getui:gtsdk:3.3.12.0'
+    implementation 'com.getui:gtc:3.2.18.0'
 }
 
 static def buildTime() {

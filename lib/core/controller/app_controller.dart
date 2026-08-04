@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:audio_session/audio_session.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:app_badge_plus/app_badge_plus.dart';
@@ -24,6 +26,8 @@ class AppController extends GetxController
   final themeRevision = 0.obs;
 
   final flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
+  StreamSubscription<List<ConnectivityResult>>? _connectivitySub;
+  DateTime? _lastImNudgeAt;
 
   final initializationSettingsAndroid =
       const AndroidInitializationSettings('@mipmap/ic_launcher');
@@ -66,6 +70,8 @@ class AppController extends GetxController
     }
     if (!run) {
       _cancelAllNotifications();
+      // Back to foreground: poke IM if the socket dropped while backgrounded.
+      _nudgeImConnection();
     }
   }
 
@@ -83,9 +89,56 @@ class AppController extends GetxController
       onDidReceiveNotificationResponse: (notificationResponse) {},
     );
     _requestNotificationPermissions();
+    _listenConnectivity();
+    PackageBridge.clearCallNotification = cancelCallNotification;
 
     autoCheckVersionUpgrade();
     super.onInit();
+  }
+
+  void _listenConnectivity() {
+    _connectivitySub?.cancel();
+    _connectivitySub = Connectivity().onConnectivityChanged.listen((results) {
+      final online = results.any((r) => r != ConnectivityResult.none);
+      if (online) {
+        _nudgeImConnection();
+      }
+    });
+  }
+
+  /// When process is alive but socket dropped: ping or soft re-login.
+  Future<void> _nudgeImConnection() async {
+    final now = DateTime.now();
+    if (_lastImNudgeAt != null &&
+        now.difference(_lastImNudgeAt!) < const Duration(seconds: 3)) {
+      return;
+    }
+    _lastImNudgeAt = now;
+
+    if (!Get.isRegistered<IMController>()) return;
+    if (!OpenIM.iMManager.isLogined) return;
+
+    final imLogic = Get.find<IMController>();
+    final status =
+        imLogic.imSdkStatusSubject.values.lastOrNull?.status;
+
+    try {
+      if (status == IMSdkStatus.connectionFailed ||
+          status == IMSdkStatus.syncFailed) {
+        final cert = DataSp.getLoginCertificate();
+        if (cert == null || cert.userID.isEmpty || cert.imToken.isEmpty) {
+          return;
+        }
+        Logger.print('IM nudge: soft re-login after disconnect');
+        await imLogic.login(cert.userID, cert.imToken);
+        return;
+      }
+
+      // Healthy or connecting: light ping to wake the socket path.
+      await OpenIM.iMManager.conversationManager.getTotalUnreadMsgCount();
+    } catch (e, s) {
+      Logger.print('IM nudge failed: $e $s');
+    }
   }
 
   Future<void> _requestNotificationPermissions() async {
@@ -269,12 +322,24 @@ class AppController extends GetxController
       presentSound: beepOn,
       interruptionLevel: InterruptionLevel.timeSensitive,
     );
+    // Fixed id so we can cancel when call ends / is cancelled.
     await flutterLocalNotificationsPlugin.show(
-      _fallbackNotificationID,
+      _callNotificationId,
       title,
       body,
       NotificationDetails(android: androidDetails, iOS: iosDetails),
     );
+  }
+
+  /// Stable id for the active incoming-call banner.
+  static const int _callNotificationId = 900001;
+
+  Future<void> cancelCallNotification() async {
+    try {
+      await flutterLocalNotificationsPlugin.cancel(_callNotificationId);
+    } catch (e, s) {
+      Logger.print('cancelCallNotification error: $e $s');
+    }
   }
 
   int get _fallbackNotificationID =>
@@ -356,6 +421,10 @@ class AppController extends GetxController
 
   @override
   void onClose() {
+    if (identical(PackageBridge.clearCallNotification, cancelCallNotification)) {
+      PackageBridge.clearCallNotification = null;
+    }
+    _connectivitySub?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     closeSubject();
     _audioPlayer.dispose();

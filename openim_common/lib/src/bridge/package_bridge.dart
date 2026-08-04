@@ -7,6 +7,9 @@ class PackageBridge {
   static ViewUserProfileBridge? viewUserProfileBridge;
   static ScanBridge? scanBridge;
   static RTCBridge? rtcBridge;
+
+  /// Clears the local incoming-call notification (registered by app layer).
+  static VoidCallback? clearCallNotification;
 }
 
 abstract class ScanBridge {

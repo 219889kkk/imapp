@@ -75,10 +75,18 @@ class _SingleRoomViewState extends SignalState<SingleRoomView> {
       _listener = _room?.createListener();
       // Try to connect to the room
       // This will throw an Exception if it fails for any reason.
+      final speakerOn = enabledSpeaker;
       await _room?.connect(url, token,
           roomOptions: RoomOptions(
               dynacast: true,
               adaptiveStream: true,
+              defaultAudioCaptureOptions: const AudioCaptureOptions(
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true,
+                highPassFilter: true,
+              ),
+              defaultAudioOutputOptions: AudioOutputOptions(speakerOn: speakerOn),
               defaultCameraCaptureOptions: const CameraCaptureOptions(params: VideoParametersPresets.h720_169),
               defaultVideoPublishOptions: VideoPublishOptions(
                   simulcast: true,
@@ -125,7 +133,23 @@ class _SingleRoomViewState extends SignalState<SingleRoomView> {
       }
     });
 
+  /// Caller still waiting: keep mic off while ring plays to avoid feedback noise.
+  bool get _deferMicrophone =>
+      widget.initState == CallState.call &&
+      (callState == CallState.call || callState == CallState.connecting);
+
+  Future<void> _applySpeakerRoute() async {
+    final speakerOn = enabledSpeaker;
+    try {
+      await Hardware.instance.setSpeakerphoneOn(speakerOn);
+      await _room?.setSpeakerOn(speakerOn);
+    } catch (error, stackTrace) {
+      Logger.print('could not set speaker: $error $stackTrace');
+    }
+  }
+
   void _publish() async {
+    await _applySpeakerRoute();
     // video will fail when running in ios simulator
     try {
       final enabled = widget.callType == CallType.video;
@@ -134,10 +158,27 @@ class _SingleRoomViewState extends SignalState<SingleRoomView> {
       Logger.print('could not publish video: $error $stackTrace');
     }
     try {
-      await _room?.localParticipant?.setMicrophoneEnabled(enabledMicrophone);
+      final micOn = enabledMicrophone && !_deferMicrophone;
+      await _room?.localParticipant?.setMicrophoneEnabled(micOn);
     } catch (error, stackTrace) {
       Logger.print('could not publish audio: $error $stackTrace');
     }
+  }
+
+  Future<void> _ensureMicrophonePublished() async {
+    if (!enabledMicrophone) return;
+    try {
+      if (_room?.localParticipant?.isMicrophoneEnabled() == true) return;
+      await _room?.localParticipant?.setMicrophoneEnabled(true);
+    } catch (error, stackTrace) {
+      Logger.print('could not enable microphone: $error $stackTrace');
+    }
+  }
+
+  @override
+  void onParticipantConnected() {
+    super.onParticipantConnected();
+    _ensureMicrophonePublished();
   }
 
   void _onRoomDidUpdate() {

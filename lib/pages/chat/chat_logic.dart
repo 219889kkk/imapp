@@ -436,13 +436,9 @@ class ChatLogic extends SuperController {
     });
 
     inputCtrl.addListener(() {
-      sendTypingMsg(focus: true);
+      // Cheap local check only; avoid IM RPC on every keystroke.
       _maybeSelectAtMember();
-      if (_debounce?.isActive ?? false) _debounce?.cancel();
-
-      _debounce = Timer(1.seconds, () {
-        sendTypingMsg(focus: false);
-      });
+      _scheduleTypingIndicator();
     });
 
     focusNode.addListener(() {
@@ -949,6 +945,28 @@ class ChatLogic extends SuperController {
   void sendTypingMsg({bool focus = false}) async {
     OpenIM.iMManager.conversationManager.changeInputStates(
         conversationID: conversationInfo.conversationID, focus: focus);
+  }
+
+  bool _typingActive = false;
+  Timer? _typingStartDebounce;
+
+  void _scheduleTypingIndicator() {
+    _typingStartDebounce?.cancel();
+    // Coalesce rapid keystrokes / emoji taps before hitting the IM SDK.
+    _typingStartDebounce = Timer(const Duration(milliseconds: 350), () {
+      if (!_typingActive) {
+        _typingActive = true;
+        sendTypingMsg(focus: true);
+      }
+    });
+    _debounce?.cancel();
+    _debounce = Timer(1.seconds, () {
+      _typingStartDebounce?.cancel();
+      if (_typingActive) {
+        _typingActive = false;
+        sendTypingMsg(focus: false);
+      }
+    });
   }
 
   void _showTypingStatus({String? nickname}) {
@@ -1568,6 +1586,7 @@ class ChatLogic extends SuperController {
     imLogic.onRecvC2CReadReceipt = null;
 
     _debounce?.cancel();
+    _typingStartDebounce?.cancel();
     _typingTimer?.cancel();
     super.onClose();
   }

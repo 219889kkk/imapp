@@ -15,42 +15,40 @@ class ChatEmojiTextEditingController extends TextEditingController {
         !withComposing ||
         value.isComposingRangeValid);
 
-    final composingRegionOutOfRange =
-        !value.isComposingRangeValid || !withComposing;
-
-    if (composingRegionOutOfRange) {
+    final text = value.text;
+    // IME composing (拼音等): keep Flutter default underline path without
+    // splitting emoji spans — major win for Chinese typing latency.
+    final composing = value.composing;
+    if (withComposing && value.isComposingRangeValid) {
+      final underlineStyle =
+          style?.merge(const TextStyle(decoration: TextDecoration.underline)) ??
+              const TextStyle(decoration: TextDecoration.underline);
       return TextSpan(
         style: style,
-        children: buildEmojiAwareTextSpans(text, style: style),
+        children: <InlineSpan>[
+          TextSpan(
+            text: composing.textBefore(text),
+            style: style,
+          ),
+          TextSpan(
+            text: composing.textInside(text),
+            style: underlineStyle,
+          ),
+          TextSpan(
+            text: composing.textAfter(text),
+            style: style,
+          ),
+        ],
       );
     }
 
-    final underlineStyle =
-        style?.merge(const TextStyle(decoration: TextDecoration.underline)) ??
-            const TextStyle(decoration: TextDecoration.underline);
+    if (!textLikelyContainsEmoji(text)) {
+      return TextSpan(style: style, text: text);
+    }
 
     return TextSpan(
       style: style,
-      children: <InlineSpan>[
-        TextSpan(
-          children: buildEmojiAwareTextSpans(
-            value.composing.textBefore(value.text),
-            style: style,
-          ),
-        ),
-        TextSpan(
-          children: buildEmojiAwareTextSpans(
-            value.composing.textInside(value.text),
-            style: underlineStyle,
-          ),
-        ),
-        TextSpan(
-          children: buildEmojiAwareTextSpans(
-            value.composing.textAfter(value.text),
-            style: style,
-          ),
-        ),
-      ],
+      children: buildEmojiAwareTextSpans(text, style: style),
     );
   }
 }

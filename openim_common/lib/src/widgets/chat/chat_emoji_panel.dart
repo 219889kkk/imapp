@@ -118,6 +118,8 @@ class _ChatEmojiPanelState extends State<ChatEmojiPanel>
                   package: 'openim_common',
                   fit: BoxFit.contain,
                   filterQuality: FilterQuality.low,
+                  gaplessPlayback: true,
+                  cacheWidth: 64,
                   errorBuilder: (_, __, ___) => Center(
                     child: Text(
                       item.emoji,
@@ -145,9 +147,15 @@ class _ChatEmojiPanelState extends State<ChatEmojiPanel>
 
   void _precacheCategory(int index) {
     if (!_precachedCategoryIndexes.add(index)) return;
-    for (final item in chatEmojiCategories[index].items) {
+    // Precache a small first screen only — full category decode jammed the UI.
+    final items = chatEmojiCategories[index].items;
+    final limit = items.length < 24 ? items.length : 24;
+    for (var i = 0; i < limit; i++) {
       precacheImage(
-        AssetImage(item.asset, package: 'openim_common'),
+        ResizeImage(
+          AssetImage(items[i].asset, package: 'openim_common'),
+          width: 64,
+        ),
         context,
       );
     }
