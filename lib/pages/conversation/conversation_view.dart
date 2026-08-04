@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_openim_sdk/flutter_openim_sdk.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:get/get.dart';
-import 'package:openim/core/controller/im_controller.dart';
 import 'package:openim/widgets/theme_aware.dart';
 import 'package:openim_common/openim_common.dart';
 import 'package:pull_to_refresh_new/pull_to_refresh.dart';
@@ -17,7 +16,6 @@ class ConversationPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final logic = Get.find<ConversationLogic>();
-    final im = Get.find<IMController>();
     return ThemeAware(
       builder: (context) => Scaffold(
         backgroundColor: Styles.pageBackground,
@@ -37,16 +35,9 @@ class ConversationPage extends StatelessWidget {
                 child: Row(
                   mainAxisSize: MainAxisSize.max,
                   children: [
-                    AvatarView(
-                      width: 42.w,
-                      height: 42.h,
-                      text: im.userInfo.value.nickname,
-                      url: im.userInfo.value.faceURL,
-                    ),
-                    10.horizontalSpace,
                     Flexible(
-                      child: (im.userInfo.value.nickname ?? StrRes.home).toText
-                        ..style = Styles.ts_0C1C33_17sp
+                      child: StrRes.home.toText
+                        ..style = Styles.ts_0C1C33_17sp_semibold
                         ..maxLines = 1
                         ..overflow = TextOverflow.ellipsis,
                     ),
