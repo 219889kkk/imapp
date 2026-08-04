@@ -45,7 +45,7 @@ class MediaBrowser extends StatefulWidget {
   final ValueChanged<int>? onLongPress;
   final FutureOr<void> Function(int)? onEdit;
   final bool allowEdit;
-  final VoidCallback? onSend;
+  final ValueChanged<int>? onSend;
   final bool allowSend;
   @override
   State<MediaBrowser> createState() => _MediaBrowserState();
@@ -357,7 +357,7 @@ class _MediaBrowserState extends State<MediaBrowser> with TickerProviderStateMix
                       borderRadius: BorderRadius.circular(8),
                     ),
                   ),
-                  onPressed: widget.onSend,
+                  onPressed: () => widget.onSend?.call(currentIndex),
                   child: Text(StrRes.send),
                 ),
               ),

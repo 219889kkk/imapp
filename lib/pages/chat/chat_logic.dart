@@ -26,6 +26,7 @@ import '../../core/im_callback.dart';
 import '../../routes/app_navigator.dart';
 import '../contacts/select_contacts/select_contacts_logic.dart';
 import '../conversation/conversation_logic.dart';
+import 'chat_album_picker.dart';
 import 'chat_message_prefetch_cache.dart';
 import 'group_setup/group_member_list/group_member_list_logic.dart';
 
@@ -1230,105 +1231,66 @@ class ChatLogic extends SuperController {
   }
 
   void onTapAlbum() async {
-    final List<AssetEntity>? assets = await AssetPicker.pickAssets(Get.context!,
-        pickerConfig: AssetPickerConfig(
-            sortPathsByModifiedDate: true,
-            filterOptions: PMFilter.defaultValue(containsPathModified: true),
-            selectPredicate: (_, entity, isSelected) async {
-              if (entity.type == AssetType.image) {
-                if (await allowSendImageType(entity)) {
-                  return true;
-                }
+    final ctx = Get.context;
+    if (ctx == null) return;
+    final List<AssetEntity>? assets = await ChatAlbumPicker.pick(
+      ctx,
+      selectPredicate: (_, entity, isSelected) async {
+        if (entity.type == AssetType.image) {
+          if (await allowSendImageType(entity)) {
+            return true;
+          }
+          IMViews.showToast(StrRes.supportsTypeHint);
+          return false;
+        }
+        if (entity.videoDuration > const Duration(seconds: 5 * 60)) {
+          IMViews.showToast(
+              sprintf(StrRes.selectVideoLimit, [5]) + StrRes.minute);
+          return false;
+        }
+        return true;
+      },
+    );
 
-                IMViews.showToast(StrRes.supportsTypeHint);
+    // Preview「发送」with optional edits.
+    final previewPaths = AlbumEditStore.previewSendPaths;
+    if (previewPaths != null && previewPaths.isNotEmpty) {
+      for (final path in previewPaths) {
+        await sendPicture(path: path, sendNow: false);
+      }
+      for (final msg in tempMessages) {
+        await _sendMessage(msg, addToUI: false);
+      }
+      tempMessages.clear();
+      AlbumEditStore.clear();
+      return;
+    }
 
-                return false;
-              }
+    if (assets == null || assets.isEmpty) {
+      AlbumEditStore.clear();
+      return;
+    }
 
-              if (entity.videoDuration > const Duration(seconds: 5 * 60)) {
-                IMViews.showToast(
-                    sprintf(StrRes.selectVideoLimit, [5]) + StrRes.minute);
-                return false;
-              }
-              return true;
-            }));
-    if (null == assets || assets.isEmpty) return;
-
-    final imagePaths = <String>[];
+    // Grid「发送」: send selected assets directly (apply preview edits if any).
     for (final asset in assets) {
       if (asset.type == AssetType.video) {
         await _handleAssets(asset, sendNow: false);
         continue;
       }
       if (asset.type != AssetType.image) continue;
-      final file = await asset.file;
-      if (file == null) continue;
-      final path = file.path;
-      if (path.toLowerCase().endsWith('.gif')) {
-        await sendPicture(path: path, sendNow: false);
-      } else {
-        imagePaths.add(path);
+      final edited = AlbumEditStore.editedPaths[asset.id];
+      if (edited != null && edited.isNotEmpty) {
+        await sendPicture(path: edited, sendNow: false);
+        continue;
       }
+      await _handleAssets(asset, sendNow: false);
     }
 
-    if (imagePaths.isNotEmpty) {
-      final confirmed = await _previewAlbumImagesThenConfirm(imagePaths);
-      if (confirmed != null) {
-        for (final path in confirmed) {
-          await sendPicture(path: path, sendNow: false);
-        }
-      }
-    }
-
-    for (var msg in tempMessages) {
+    for (final msg in tempMessages) {
       await _sendMessage(msg, addToUI: false);
     }
     tempMessages.clear();
-  }
-
-  /// Enlarge selected album images: edit doodle, then send.
-  Future<List<String>?> _previewAlbumImagesThenConfirm(
-      List<String> paths) async {
-    final ctx = Get.context;
-    if (ctx == null) return paths;
-    final working = List<String>.from(paths);
-    final sources = working
-        .map((p) => MediaSource(
-              thumbnail: '',
-              file: File(p),
-              tag: p,
-            ))
-        .toList();
-
-    final sent = await Navigator.of(ctx).push<bool>(
-      PageRouteBuilder(
-        opaque: false,
-        pageBuilder: (context, animation, secondaryAnimation) {
-          return MediaBrowser(
-            sources: sources,
-            initialIndex: 0,
-            allowEdit: true,
-            allowSend: true,
-            onEdit: (index) async {
-              final edited =
-                  await ImageEditHelper.openFromPath(context, working[index]);
-              if (edited == null || edited.isEmpty) return;
-              working[index] = edited;
-              sources[index].file = File(edited);
-              sources[index].tag = edited;
-            },
-            onSend: () {
-              Navigator.of(context).pop(true);
-            },
-          );
-        },
-        transitionsBuilder: (context, animation, secondaryAnimation, child) {
-          return FadeTransition(opacity: animation, child: child);
-        },
-      ),
-    );
-    if (sent == true) return working;
-    return null;
+    AlbumEditStore.clear();
   }
 
   void onTapCamera() async {
@@ -1367,7 +1329,7 @@ class ChatLogic extends SuperController {
       Logger.print('--------assets path-----$path');
       switch (asset.type) {
         case AssetType.image:
-          // Camera / single path: edit first; album uses enlarge preview instead.
+          // Camera keeps edit-before-send; album sends originals unless preview-edited.
           if (path.toLowerCase().endsWith('.gif')) {
             await sendPicture(path: path, sendNow: sendNow);
           } else if (sendNow) {
