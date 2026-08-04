@@ -63,6 +63,10 @@ mixin OpenIMLive {
   bool get isBusy => OpenIMLiveClient().isBusy;
 
   onCloseLive() {
+    if (identical(
+        PackageBridge.handleCallNotificationAction, _handleCallNotificationAction)) {
+      PackageBridge.handleCallNotificationAction = null;
+    }
     signalingSubject.close();
     backgroundSubject.close();
     roomParticipantDisconnectedSubject.close();
@@ -71,6 +75,7 @@ mixin OpenIMLive {
   }
 
   onInitLive() async {
+    PackageBridge.handleCallNotificationAction = _handleCallNotificationAction;
     _signalingListener();
     _insertSignalingMessageListener();
     _bindLiveAlertButtons();
@@ -91,6 +96,21 @@ mixin OpenIMLive {
         OpenIMLiveClient().closeByRoomID(info.invitation!.roomID!);
       }
     });
+  }
+
+  void _handleCallNotificationAction(bool accept) {
+    if (accept) {
+      _autoPickup = true;
+      _stopSound();
+      PackageBridge.clearCallNotification?.call();
+      return;
+    }
+    final pending = _beCalledEvent;
+    _stopSound();
+    PackageBridge.clearCallNotification?.call();
+    if (pending == null) return;
+    _beCalledEvent = null;
+    onTapReject(pending.data..userID = OpenIM.iMManager.userID);
   }
 
   void _bindLiveAlertButtons() {
@@ -141,8 +161,8 @@ mixin OpenIMLive {
                 }
                 await FlutterOpenimLiveAlert.showLiveAlert(
                   title: callType == CallType.video
-                      ? StrRes.videoCallInviteHint
-                      : StrRes.voiceCallInviteHint,
+                      ? StrRes.videoCallNotificationTitle
+                      : StrRes.voiceCallNotificationTitle,
                   rejectText: StrRes.reject,
                   acceptText: StrRes.pickUp,
                 );

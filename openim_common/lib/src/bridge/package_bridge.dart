@@ -10,6 +10,10 @@ class PackageBridge {
 
   /// Clears the local incoming-call notification (registered by app layer).
   static VoidCallback? clearCallNotification;
+
+  /// Handles Accept/Reject on the local incoming-call notification.
+  /// `true` = accept / pick up, `false` = reject.
+  static void Function(bool accept)? handleCallNotificationAction;
 }
 
 abstract class ScanBridge {

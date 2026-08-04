@@ -360,6 +360,12 @@ class StrRes {
 
   static String get offlineCallMessage => 'offlineCallMessage'.tr;
 
+  static String get voiceCallNotificationTitle =>
+      'voiceCallNotificationTitle'.tr;
+
+  static String get videoCallNotificationTitle =>
+      'videoCallNotificationTitle'.tr;
+
   static String get logoutHint => 'logoutHint'.tr;
 
   static String get myInfo => 'myInfo'.tr;

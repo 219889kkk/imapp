@@ -66,16 +66,27 @@ class Config {
         iOSPushSound: 'default',
       );
 
-  static OfflinePushInfo offlineCallPushInfo({required bool isVideo}) =>
-      OfflinePushInfo(
-        title: _appName,
-        desc: isVideo
-            ? StrRes.videoCallInviteHint
-            : StrRes.voiceCallInviteHint,
-        iOSBadgeCount: true,
-        iOSPushSound: 'default',
-        ex: 'callingInvite',
-      );
+  /// Offline APNs/Getui payload for call invites — distinct from chat messages.
+  static OfflinePushInfo offlineCallPushInfo({required bool isVideo}) {
+    final title = isVideo
+        ? StrRes.videoCallNotificationTitle
+        : StrRes.voiceCallNotificationTitle;
+    final hint = isVideo
+        ? StrRes.videoCallInviteHint
+        : StrRes.voiceCallInviteHint;
+    String nickname = '';
+    try {
+      nickname = OpenIM.iMManager.userInfo.nickname?.trim() ?? '';
+    } catch (_) {}
+    final desc = nickname.isEmpty ? hint : '$nickname$hint';
+    return OfflinePushInfo(
+      title: title,
+      desc: desc,
+      iOSBadgeCount: true,
+      iOSPushSound: 'default',
+      ex: isVideo ? 'callingInvite:video' : 'callingInvite:audio',
+    );
+  }
 
   static const friendScheme = "io.openim.app/addFriend/";
   static const groupScheme = "io.openim.app/joinGroup/";

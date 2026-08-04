@@ -32,11 +32,39 @@ class AppController extends GetxController
   final initializationSettingsAndroid =
       const AndroidInitializationSettings('@mipmap/ic_launcher');
 
+  static const String _callCategoryId = 'incoming_call';
+  static const String _callActionAccept = 'call_accept';
+  static const String _callActionReject = 'call_reject';
+
   final DarwinInitializationSettings initializationSettingsDarwin =
-      const DarwinInitializationSettings(
+      DarwinInitializationSettings(
     requestAlertPermission: true,
     requestBadgePermission: true,
     requestSoundPermission: true,
+    notificationCategories: [
+      DarwinNotificationCategory(
+        _callCategoryId,
+        actions: [
+          DarwinNotificationAction.plain(
+            _callActionAccept,
+            '接听',
+            options: {
+              DarwinNotificationActionOption.foreground,
+            },
+          ),
+          DarwinNotificationAction.plain(
+            _callActionReject,
+            '拒绝',
+            options: {
+              DarwinNotificationActionOption.destructive,
+            },
+          ),
+        ],
+        options: {
+          DarwinNotificationCategoryOption.hiddenPreviewShowTitle,
+        },
+      ),
+    ],
   );
 
   RTCBridge? get rtcBridge => PackageBridge.rtcBridge;
@@ -86,7 +114,7 @@ class AppController extends GetxController
     );
     await flutterLocalNotificationsPlugin.initialize(
       initializationSettings,
-      onDidReceiveNotificationResponse: (notificationResponse) {},
+      onDidReceiveNotificationResponse: _onNotificationResponse,
     );
     _requestNotificationPermissions();
     _listenConnectivity();
@@ -270,31 +298,52 @@ class AppController extends GetxController
     );
   }
 
+  void _onNotificationResponse(NotificationResponse response) {
+    final actionId = response.actionId;
+    final isCall = response.id == _callNotificationId ||
+        response.payload == 'callingInvite' ||
+        response.payload?.startsWith('callingInvite') == true;
+    if (!isCall) return;
+
+    if (actionId == _callActionAccept) {
+      PackageBridge.handleCallNotificationAction?.call(true);
+    } else if (actionId == _callActionReject) {
+      PackageBridge.handleCallNotificationAction?.call(false);
+    }
+    // Body tap: system brings app foreground; pending invite UI is restored there.
+  }
+
   Future<void> showCallNotification(SignalingInfo info) async {
     if (!DataSp.getEnableCallNotification()) return;
 
     final invitation = info.invitation;
-    final hint = invitation?.mediaType == 'video'
+    final isVideo = invitation?.mediaType == 'video';
+    final hint = isVideo
         ? StrRes.videoCallInviteHint
         : StrRes.voiceCallInviteHint;
+    final callTitle = isVideo
+        ? StrRes.videoCallNotificationTitle
+        : StrRes.voiceCallNotificationTitle;
 
-    String title = '航讯';
-    String body = StrRes.offlineCallMessage;
-    if (DataSp.getShowNotificationDetail()) {
-      String nickname = invitation?.inviterUserID ?? '';
-      try {
-        if (invitation?.inviterUserID != null) {
-          final list = await OpenIM.iMManager.userManager.getUsersInfo(
-            userIDList: [invitation!.inviterUserID!],
-          );
-          nickname = list.firstOrNull?.simpleUserInfo.nickname ?? nickname;
-        }
-      } catch (e, s) {
-        Logger.print('query inviter info error: $e $s');
+    String nickname = invitation?.inviterUserID ?? '';
+    try {
+      if (invitation?.inviterUserID != null) {
+        final list = await OpenIM.iMManager.userManager.getUsersInfo(
+          userIDList: [invitation!.inviterUserID!],
+        );
+        nickname = list.firstOrNull?.simpleUserInfo.nickname ?? nickname;
       }
-      title = nickname.isEmpty ? title : nickname;
-      body = '$nickname$hint';
+    } catch (e, s) {
+      Logger.print('query inviter info error: $e $s');
     }
+
+    // Always distinguish from chat: title = call type, body = who + invite.
+    final title = callTitle;
+    final body = nickname.isEmpty
+        ? StrRes.offlineCallMessage
+        : (DataSp.getShowNotificationDetail()
+            ? '$nickname$hint'
+            : StrRes.offlineCallMessage);
 
     if (!isRunningBackground) {
       _playMessageSound();
@@ -302,9 +351,9 @@ class AppController extends GetxController
 
     final beepOn = _isAllowBeep;
     final androidDetails = AndroidNotificationDetails(
-      beepOn ? 'call_v1' : 'call_silent',
+      beepOn ? 'call_v2' : 'call_silent_v2',
       beepOn ? 'Incoming Calls' : 'Incoming Calls (Silent)',
-      channelDescription: '航讯来电通知',
+      channelDescription: '航讯语音/视频来电',
       importance: Importance.max,
       priority: Priority.max,
       category: AndroidNotificationCategory.call,
@@ -315,12 +364,26 @@ class AppController extends GetxController
           : null,
       ongoing: true,
       autoCancel: false,
+      actions: [
+        AndroidNotificationAction(
+          _callActionAccept,
+          StrRes.pickUp,
+          showsUserInterface: true,
+          cancelNotification: true,
+        ),
+        AndroidNotificationAction(
+          _callActionReject,
+          StrRes.reject,
+          cancelNotification: true,
+        ),
+      ],
     );
     final iosDetails = DarwinNotificationDetails(
       presentAlert: true,
       presentBadge: true,
       presentSound: beepOn,
       interruptionLevel: InterruptionLevel.timeSensitive,
+      categoryIdentifier: _callCategoryId,
     );
     // Fixed id so we can cancel when call ends / is cancelled.
     await flutterLocalNotificationsPlugin.show(
@@ -328,6 +391,7 @@ class AppController extends GetxController
       title,
       body,
       NotificationDetails(android: androidDetails, iOS: iosDetails),
+      payload: isVideo ? 'callingInvite:video' : 'callingInvite:audio',
     );
   }
 
