@@ -407,16 +407,24 @@ class VoipCallkitController extends GetxService {
     try {
       if (roomID != null && roomID.isNotEmpty) {
         await FlutterCallkitIncoming.endCall(roomID);
-      } else {
-        await FlutterCallkitIncoming.endAllCalls();
       }
+      // Always clear leftovers (Android id mismatch / missed cancel race).
+      await FlutterCallkitIncoming.endAllCalls();
     } catch (e, s) {
       Logger.print('endCall failed: $e $s');
     }
     callKitActive.value = false;
   }
 
-  Future<void> endAllCalls() => endCall();
+  Future<void> endAllCalls() async {
+    if (!Platform.isIOS && !Platform.isAndroid) return;
+    try {
+      await FlutterCallkitIncoming.endAllCalls();
+    } catch (e, s) {
+      Logger.print('endAllCalls failed: $e $s');
+    }
+    callKitActive.value = false;
+  }
 
   static String newCallId() => const Uuid().v4();
 }

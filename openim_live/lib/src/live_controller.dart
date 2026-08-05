@@ -110,7 +110,12 @@ mixin OpenIMLive {
     _autoPickup = true;
     _stopSound();
     PackageBridge.clearCallNotification?.call();
+    // Dismiss system incoming UI; in-app page owns the call from here.
+    unawaited(VoipCallkitController.toOrNull?.endCall(
+            signaling.invitation?.roomID) ??
+        Future.value());
     // Re-dispatch so in-app LiveKit UI presents and auto-picks up.
+    // _autoPickup skips the background CallKit branch (see listener).
     receiveNewInvitation(signaling);
   }
 
@@ -126,6 +131,11 @@ mixin OpenIMLive {
       _autoPickup = true;
       _stopSound();
       PackageBridge.clearCallNotification?.call();
+      final pending = _beCalledEvent;
+      if (pending != null) {
+        _beCalledEvent = null;
+        receiveNewInvitation(pending.data);
+      }
       return;
     }
     final pending = _beCalledEvent;
@@ -165,13 +175,18 @@ mixin OpenIMLive {
             FlutterOpenimLiveAlert.closeLiveAlert();
             PackageBridge.clearCallNotification?.call();
             final roomID = event.data.invitation?.roomID;
-            if (Platform.isIOS) {
+            // Must stop Android full-screen / ringtone when peer cancels/hangs up.
+            if (Platform.isIOS || Platform.isAndroid) {
               unawaited(VoipCallkitController.toOrNull?.endCall(roomID) ??
                   Future.value());
             }
           }
           if (event.state == CallState.beCalled) {
-            _playSound();
+            if (!_autoPickup) {
+              _playSound();
+            } else {
+              _stopSound();
+            }
             final mediaType = event.data.invitation!.mediaType;
             final sessionType = event.data.invitation!.sessionType;
             final callType =
@@ -180,7 +195,9 @@ mixin OpenIMLive {
                 ? CallObj.single
                 : CallObj.group;
 
-            if (_isRunningBackground) {
+            // Background: show CallKit / overlay. Skip when user already
+            // accepted from CallKit (_autoPickup) — go straight to LiveKit UI.
+            if (_isRunningBackground && !_autoPickup) {
               _beCalledEvent = event;
               if (Platform.isAndroid) {
                 // Prefer flutter_callkit_incoming full-screen / call notification.
@@ -455,11 +472,12 @@ mixin OpenIMLive {
     };
     final message = await OpenIM.iMManager.messageManager.createCustomMessage(
         data: jsonEncode(data), extension: '', description: '');
+    // Persist accept so inviter still gets it if briefly offline / Doze.
     OpenIM.iMManager.messageManager.sendMessage(
         message: message,
         offlinePushInfo: OfflinePushInfo(),
         userID: signaling.invitation!.inviterUserID,
-        isOnlineOnly: true);
+        isOnlineOnly: false);
     final certificate = await Apis.getTokenForRTC(
         signaling.invitation!.roomID!, OpenIM.iMManager.userID);
 
@@ -484,7 +502,8 @@ mixin OpenIMLive {
         message: message,
         offlinePushInfo: OfflinePushInfo(),
         userID: recvUserID,
-        isOnlineOnly: true);
+        // Must not drop when peer WS briefly offline (else caller keeps ringing).
+        isOnlineOnly: false);
   }
 
   onTapCancel(SignalingInfo signaling) async {
@@ -503,7 +522,9 @@ mixin OpenIMLive {
           message: message,
           offlinePushInfo: OfflinePushInfo(),
           userID: userID,
-          isOnlineOnly: true);
+          // Critical: online-only cancel is dropped when callee is Doze /
+          // WS-dead while CallKit still rings → ringtone never stops.
+          isOnlineOnly: false);
     }
     unawaited(_triggerVoipPush(signaling, action: 'cancel'));
     return true;
@@ -521,7 +542,7 @@ mixin OpenIMLive {
         message: message,
         offlinePushInfo: OfflinePushInfo(),
         userID: signaling.invitation!.inviterUserID,
-        isOnlineOnly: true);
+        isOnlineOnly: false);
 
     return true;
   }
@@ -540,7 +561,7 @@ mixin OpenIMLive {
             message: message,
             offlinePushInfo: OfflinePushInfo(),
             userID: userID,
-            isOnlineOnly: true);
+            isOnlineOnly: false);
       }
     }
     _stopSound();

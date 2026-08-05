@@ -104,6 +104,22 @@ class AppController extends GetxController
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // FocusDetector alone misses some OEM background transitions; mirror lifecycle.
+    if (state == AppLifecycleState.resumed) {
+      runningBackground(false);
+    } else if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.hidden) {
+      // inactive can also mean a permission dialog; only treat paused/hidden as bg.
+      if (state == AppLifecycleState.paused ||
+          state == AppLifecycleState.hidden) {
+        runningBackground(true);
+      }
+    }
+  }
+
+  @override
   void onInit() async {
     WidgetsBinding.instance.addObserver(this);
     _syncStylesTheme();
@@ -116,12 +132,64 @@ class AppController extends GetxController
       initializationSettings,
       onDidReceiveNotificationResponse: _onNotificationResponse,
     );
+    await _ensureAndroidNotificationChannels();
     _requestNotificationPermissions();
     _listenConnectivity();
     PackageBridge.clearCallNotification = cancelCallNotification;
 
     autoCheckVersionUpgrade();
     super.onInit();
+  }
+
+  /// Create channels up-front so Android 8+ actually delivers banners/sound.
+  Future<void> _ensureAndroidNotificationChannels() async {
+    if (!Platform.isAndroid) return;
+    try {
+      final android = flutterLocalNotificationsPlugin
+          .resolvePlatformSpecificImplementation<
+              AndroidFlutterLocalNotificationsPlugin>();
+      if (android == null) return;
+      await android.createNotificationChannel(
+        const AndroidNotificationChannel(
+          'chat_v2',
+          'Chat Messages',
+          description: '航讯消息通知',
+          importance: Importance.max,
+          playSound: true,
+          sound: RawResourceAndroidNotificationSound('notification_ring'),
+        ),
+      );
+      await android.createNotificationChannel(
+        const AndroidNotificationChannel(
+          'chat_silent',
+          'Chat Messages (Silent)',
+          description: '航讯消息通知（静音）',
+          importance: Importance.high,
+          playSound: false,
+        ),
+      );
+      await android.createNotificationChannel(
+        const AndroidNotificationChannel(
+          'call_v2',
+          'Incoming Calls',
+          description: '航讯语音/视频来电',
+          importance: Importance.max,
+          playSound: true,
+          sound: RawResourceAndroidNotificationSound('notification_ring'),
+        ),
+      );
+      await android.createNotificationChannel(
+        const AndroidNotificationChannel(
+          'call_silent_v2',
+          'Incoming Calls (Silent)',
+          description: '航讯语音/视频来电（静音）',
+          importance: Importance.max,
+          playSound: false,
+        ),
+      );
+    } catch (e, s) {
+      Logger.print('create notification channels error: $e $s');
+    }
   }
 
   void _listenConnectivity() {
