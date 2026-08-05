@@ -22,7 +22,8 @@ android {
 
     defaultConfig {
         applicationId "io.openim.flutter.demo"
-        minSdkVersion flutter.minSdkVersion
+        // Android 7.0+ (API 24). Android 10 = API 29 is covered.
+        minSdkVersion 24
         targetSdk 33
         versionCode flutter.versionCode
         versionName flutter.versionName
