@@ -43,10 +43,10 @@ jobs:
       - name: Pub get
         run: flutter pub get
 
-      - name: Build release APK
+      - name: Build release APKs (arm64 + armeabi-v7a for Android 10 32-bit)
         run: |
           flutter build apk --release \
-            --target-platform android-arm64 \
+            --target-platform android-arm,android-arm64 \
             --split-per-abi
           ls -lh build/app/outputs/flutter-apk/
 
@@ -56,5 +56,6 @@ jobs:
           name: openim-android-apk
           path: |
             build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+            build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk
           if-no-files-found: error
           retention-days: 14
