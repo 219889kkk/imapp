@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_openim_sdk/flutter_openim_sdk.dart';
@@ -42,6 +43,7 @@ class IMController extends GetxController with IMCallback, OpenIMLive {
         dataDir: Config.cachePath,
         logLevel: Config.logLevel,
         logFilePath: Config.cachePath,
+        isLogStandardOutput: kDebugMode,
         listener: OnConnectListener(
           onConnecting: () {
             imSdkStatus(IMSdkStatus.connecting);

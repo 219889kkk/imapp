@@ -106,6 +106,7 @@ class ConversationPage extends StatelessWidget {
                           url: info.faceURL,
                           isGroup: logic.isGroupChat(info),
                           textStyle: Styles.ts_FFFFFF_14sp_medium,
+                          lowMemory: true,
                         ),
                       ],
                     ),

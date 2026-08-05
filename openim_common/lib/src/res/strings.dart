@@ -1251,6 +1251,16 @@ class StrRes {
   static String get gallery => 'gallery'.tr;
   static String get notification => 'notification'.tr;
   static String get externalStorage => 'externalStorage'.tr;
+  static String get androidCallPermTitle => 'androidCallPermTitle'.tr;
+  static String get androidCallPermBody => 'androidCallPermBody'.tr;
+  static String get androidCallPermGoSettings => 'androidCallPermGoSettings'.tr;
+  static String get androidCallPermLater => 'androidCallPermLater'.tr;
+  static String get androidCallPermNotification =>
+      'androidCallPermNotification'.tr;
+  static String get androidCallPermFullScreen =>
+      'androidCallPermFullScreen'.tr;
+  static String get androidCallPermOverlay => 'androidCallPermOverlay'.tr;
+  static String get androidCallPermBattery => 'androidCallPermBattery'.tr;
   static String get monday => 'monday'.tr;
   static String get tuesday => 'tuesday'.tr;
   static String get wednesday => 'wednesday'.tr;

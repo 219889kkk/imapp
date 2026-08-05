@@ -27,6 +27,7 @@ class ConversationLogic extends GetxController {
   final categoryLogic = Get.find<ConversationCategoryController>();
   final refreshController = RefreshController();
   final tempDraftText = <String, String>{};
+  final _contentPreviewCache = <String, String>{};
   final pageSize = 400;
   Timer? _prefetchTimer;
 
@@ -80,9 +81,10 @@ class ConversationLogic extends GetxController {
       onChangeConversations.addAll(newList);
     }
     for (var newValue in newList) {
-      Logger.print(
-          '======== conversation changed: ${newValue.toJson()} ========');
       ChatMessagePrefetchCache.invalidate(newValue);
+      _contentPreviewCache.remove(newValue.conversationID);
+      _contentPreviewCache.removeWhere(
+          (k, _) => k.startsWith('_k_${newValue.conversationID}|'));
       list.removeWhere((e) => e.conversationID == newValue.conversationID);
     }
 
@@ -103,8 +105,6 @@ class ConversationLogic extends GetxController {
     } else {
       list.insertAll(0, newList);
       _sortConversationList();
-      Logger.print(
-          '======== conversation sort result: ${list.where((e) => e.unreadCount > 0).toList().map((e) => '${e.showName} [${e.conversationID}]: ${e.unreadCount}')} ========');
     }
     _schedulePrefetchFirstPages();
   }
@@ -131,28 +131,50 @@ class ConversationLogic extends GetxController {
   }
 
   String getContent(ConversationInfo info) {
+    final cached = _contentPreviewCache[info.conversationID];
+    final draft = info.draftText ?? '';
+    final latestId = info.latestMsg?.clientMsgID ?? '';
+    final cacheKey = '${info.conversationID}|$draft|$latestId|${info.latestMsg?.contentType}|${info.latestMsg?.seq}';
+    if (cached != null && _contentPreviewCache.containsKey('_k_$cacheKey')) {
+      return cached;
+    }
     try {
+      String result = '';
       if (null != info.draftText && '' != info.draftText) {
         var map = json.decode(info.draftText!);
         String text = map['text'];
         if (text.isNotEmpty) {
-          return text;
+          result = text;
         }
       }
 
-      if (null == info.latestMsg) return "";
+      if (result.isEmpty) {
+        if (null == info.latestMsg) {
+          result = '';
+        } else {
+          final text = IMUtils.parseNtf(info.latestMsg!, isConversation: true);
+          if (text != null) {
+            result = text;
+          } else if (info.isSingleChat ||
+              info.latestMsg!.sendID == OpenIM.iMManager.userID) {
+            result = IMUtils.parseMsg(info.latestMsg!, isConversation: true);
+          } else {
+            result =
+                '${info.latestMsg!.senderNickname}: ${IMUtils.parseMsg(info.latestMsg!, isConversation: true)}';
+          }
+        }
+      }
 
-      final text = IMUtils.parseNtf(info.latestMsg!, isConversation: true);
-      if (text != null) return text;
-      if (info.isSingleChat ||
-          info.latestMsg!.sendID == OpenIM.iMManager.userID)
-        return IMUtils.parseMsg(info.latestMsg!, isConversation: true);
-
-      return "${info.latestMsg!.senderNickname}: ${IMUtils.parseMsg(info.latestMsg!, isConversation: true)} ";
+      _contentPreviewCache[info.conversationID] = result;
+      _contentPreviewCache['_k_$cacheKey'] = '1';
+      // Drop stale key markers for this conversation (keep map bounded).
+      _contentPreviewCache.removeWhere((k, _) =>
+          k.startsWith('_k_${info.conversationID}|') && k != '_k_$cacheKey');
+      return result;
     } catch (e, s) {
       Logger.print('------e:$e s:$s');
     }
-    return '[${StrRes.unsupportedMessage}]';
+    return '';
   }
 
   String? getAvatar(ConversationInfo info) {

@@ -536,15 +536,26 @@ class _ChatItemViewState extends State<ChatItemView> {
   Widget _buildVideoView(Message message) {
     final video = message.videoElem;
     final snapshotPath = video?.snapshotPath;
-    final snapshotUrl = video?.snapshotUrl?.adjustThumbnailAbsoluteString(960);
+    final snapshotUrl = video?.snapshotUrl?.adjustThumbnailAbsoluteString(480);
     Widget snapshot;
-    if (IMUtils.isNotNullEmptyStr(snapshotPath) &&
-        File(snapshotPath!).existsSync()) {
+    bool pathOk = false;
+    if (IMUtils.isNotNullEmptyStr(snapshotPath)) {
+      final key = 'validPath_$snapshotPath';
+      final cached = message.exMap[key];
+      if (cached is bool) {
+        pathOk = cached;
+      } else {
+        pathOk = File(snapshotPath!).existsSync();
+        message.exMap[key] = pathOk;
+      }
+    }
+    if (pathOk) {
       snapshot = ImageUtil.fileImage(
-        file: File(snapshotPath),
+        file: File(snapshotPath!),
         width: videoWidth,
         height: videoWidth,
         fit: BoxFit.cover,
+        lowMemory: true,
       );
     } else if (IMUtils.isNotNullEmptyStr(snapshotUrl)) {
       snapshot = ImageUtil.networkImage(
@@ -552,6 +563,7 @@ class _ChatItemViewState extends State<ChatItemView> {
         width: videoWidth,
         height: videoWidth,
         fit: BoxFit.cover,
+        lowMemory: true,
       );
     } else {
       snapshot = Container(

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_callkit_incoming/entities/android_params.dart';
 import 'package:flutter_callkit_incoming/entities/call_event.dart';
@@ -11,12 +12,14 @@ import 'package:flutter_callkit_incoming/entities/notification_params.dart';
 import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 import 'package:get/get.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:sprintf/sprintf.dart';
 import 'package:uuid/uuid.dart';
 
 import '../apis.dart';
 import '../bridge/package_bridge.dart';
 import '../models/signaling_info.dart';
 import '../res/strings.dart';
+import '../utils/data_sp.dart';
 import '../utils/logger.dart';
 
 /// iOS PushKit + CallKit / Android full-screen incoming-call bridge.
@@ -83,7 +86,10 @@ class VoipCallkitController extends GetxService {
       ctrl._scheduleTokenRetries();
       Logger.print('VoipCallkit login userID=$userID token=${ctrl._voipToken}');
     } else {
-      unawaited(ctrl.ensureAndroidCallPermissions());
+      // Delay until main UI is up so the Settings dialog can show.
+      Future.delayed(const Duration(seconds: 2), () {
+        unawaited(ctrl.promptAndroidCallPermissionsIfNeeded());
+      });
       Logger.print('VoipCallkit Android login userID=$userID');
     }
   }
@@ -126,6 +132,90 @@ class VoipCallkitController extends GetxService {
     } catch (e, s) {
       Logger.print('request system alert window failed: $e $s');
     }
+    try {
+      final battery = await Permission.ignoreBatteryOptimizations.status;
+      if (!battery.isGranted) {
+        await Permission.ignoreBatteryOptimizations.request();
+      }
+    } catch (e, s) {
+      Logger.print('request ignore battery optimization failed: $e $s');
+    }
+  }
+
+  /// After login: request runtime perms, then guide user to Settings if still missing.
+  /// Dialog at most once every 3 days to avoid nagging.
+  Future<void> promptAndroidCallPermissionsIfNeeded() async {
+    if (!Platform.isAndroid) return;
+    await ensureAndroidCallPermissions();
+
+    final missing = <String>[];
+    try {
+      if (!(await Permission.notification.isGranted)) {
+        missing.add(StrRes.androidCallPermNotification);
+      }
+    } catch (_) {}
+    try {
+      final can = await FlutterCallkitIncoming.canUseFullScreenIntent();
+      if (can != true) {
+        missing.add(StrRes.androidCallPermFullScreen);
+      }
+    } catch (_) {}
+    try {
+      if (!(await Permission.systemAlertWindow.isGranted)) {
+        missing.add(StrRes.androidCallPermOverlay);
+      }
+    } catch (_) {}
+    try {
+      if (!(await Permission.ignoreBatteryOptimizations.isGranted)) {
+        missing.add(StrRes.androidCallPermBattery);
+      }
+    } catch (_) {}
+
+    if (missing.isEmpty) return;
+
+    final last = DataSp.getAndroidCallPermPromptAt();
+    final now = DateTime.now().millisecondsSinceEpoch;
+    const cooldownMs = 3 * 24 * 60 * 60 * 1000;
+    if (last > 0 && now - last < cooldownMs) {
+      Logger.print('android call perm guide skipped (cooldown), missing=$missing');
+      return;
+    }
+
+    final ctx = Get.context ?? Get.overlayContext;
+    if (ctx == null) {
+      Logger.print('android call perm guide skipped (no context)');
+      return;
+    }
+
+    await DataSp.putAndroidCallPermPromptAt(now);
+    final body = sprintf(StrRes.androidCallPermBody, [missing.join('\n')]);
+
+    await showDialog<void>(
+      context: ctx,
+      barrierDismissible: true,
+      builder: (dialogCtx) {
+        return AlertDialog(
+          title: Text(StrRes.androidCallPermTitle),
+          content: Text(body),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(8),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogCtx).pop(),
+              child: Text(StrRes.androidCallPermLater),
+            ),
+            TextButton(
+              onPressed: () {
+                Navigator.of(dialogCtx).pop();
+                openAppSettings();
+              },
+              child: Text(StrRes.androidCallPermGoSettings),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   /// Reject placeholders like server test token `bbbbbb...`.

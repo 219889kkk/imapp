@@ -38,7 +38,7 @@ class _ChatPictureViewState extends State<ChatPictureView> {
 
     _sourceUrl = picture?.bigPicture?.url;
     final snap = picture?.snapshotPicture?.url;
-    _snapshotUrl = snap?.adjustThumbnailAbsoluteString(960);
+    _snapshotUrl = snap?.adjustThumbnailAbsoluteString(480);
 
     var w = picture?.sourcePicture?.width?.toDouble() ?? 1.0;
     var h = picture?.sourcePicture?.height?.toDouble() ?? 1.0;
@@ -78,12 +78,8 @@ class _ChatPictureViewState extends State<ChatPictureView> {
     if (!valid) {
       return false;
     }
-    if (Platform.isIOS) {
-      final exist = await File(_sourcePath!).exists();
-      valid = valid && exist;
-    } else {
-      valid = valid && File(_sourcePath!).existsSync();
-    }
+    final exist = await File(_sourcePath!).exists();
+    valid = valid && exist;
     _message.exMap['validPath_$_sourcePath'] = valid;
 
     return valid;
@@ -110,6 +106,7 @@ class _ChatPictureViewState extends State<ChatPictureView> {
         height: _trulyHeight,
         width: _trulyWidth,
         fit: BoxFit.fitWidth,
+        lowMemory: true,
       );
 
   Widget _buildPathPicture({required String path}) => Stack(
@@ -119,6 +116,7 @@ class _ChatPictureViewState extends State<ChatPictureView> {
             height: _trulyHeight,
             width: _trulyWidth,
             fit: BoxFit.fitWidth,
+            lowMemory: true,
           ),
         ],
       );

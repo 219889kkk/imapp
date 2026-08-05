@@ -15,29 +15,31 @@ class HttpUtil {
   HttpUtil._();
 
   static void init() {
-    dio
-      ..interceptors.add(
+    if (kDebugMode) {
+      dio.interceptors.add(
         TalkerDioLogger(
           settings: const TalkerDioLoggerSettings(
-            printRequestHeaders: kDebugMode,
-            printRequestData: kDebugMode,
-            printResponseMessage: kDebugMode,
-            printResponseData: kDebugMode,
-            printResponseHeaders: kDebugMode,
+            printRequestHeaders: true,
+            printRequestData: true,
+            printResponseMessage: true,
+            printResponseData: true,
+            printResponseHeaders: true,
           ),
         ),
-      )
-      ..interceptors.add(InterceptorsWrapper(onRequest: (options, handler) {
-        return handler.next(options); //continue
-      }, onResponse: (response, handler) {
-        return handler.next(response); // continue
-      }, onError: (DioError e, handler) {
-        return handler.next(e); //continue
-      }));
+      );
+    }
+    dio.interceptors.add(InterceptorsWrapper(onRequest: (options, handler) {
+      return handler.next(options); //continue
+    }, onResponse: (response, handler) {
+      return handler.next(response); // continue
+    }, onError: (DioError e, handler) {
+      return handler.next(e); //continue
+    }));
 
     dio.options.baseUrl = Config.imApiUrl;
-    dio.options.connectTimeout = const Duration(seconds: 30); //30s
-    dio.options.receiveTimeout = const Duration(seconds: 30);
+    // Fail fast for chat APIs; long uploads override timeouts per-request.
+    dio.options.connectTimeout = const Duration(seconds: 10);
+    dio.options.receiveTimeout = const Duration(seconds: 15);
   }
 
   static String get operationID =>

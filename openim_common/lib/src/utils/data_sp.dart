@@ -31,6 +31,7 @@ class DataSp {
   static const _enableMsgNotification = 'enableMsgNotification';
   static const _enableCallNotification = 'enableCallNotification';
   static const _showNotificationDetail = 'showNotificationDetail';
+  static const _androidCallPermPromptAt = 'androidCallPermPromptAt';
 
   DataSp._();
 
@@ -258,5 +259,14 @@ class DataSp {
 
   static bool getShowNotificationDetail() {
     return SpUtil().getBool(_showNotificationDetail, defValue: true) ?? true;
+  }
+
+  /// Last time we showed the Android call-permission guide dialog (ms).
+  static int getAndroidCallPermPromptAt() {
+    return SpUtil().getInt(_androidCallPermPromptAt, defValue: 0) ?? 0;
+  }
+
+  static Future<bool>? putAndroidCallPermPromptAt(int ms) {
+    return SpUtil().putInt(_androidCallPermPromptAt, ms);
   }
 }

@@ -472,6 +472,10 @@ class ChatLogic extends SuperController {
     if (content.isEmpty) return;
     final quoted = quoteMessage.value;
     final atUserInfoList = _validAtUserInfoList(content);
+    // Clear input immediately so send feels instant while native create runs.
+    inputCtrl.clear();
+    clearQuoteMessage();
+    atUserInfoMap.clear();
     Message message;
     if (atUserInfoList.isNotEmpty) {
       message = await OpenIM.iMManager.messageManager.createTextAtMessage(
@@ -1047,7 +1051,10 @@ class ChatLogic extends SuperController {
     bool addToUI = true,
     bool sendNotOss = false,
   }) {
-    log('send : ${json.encode(message)}');
+    assert(() {
+      log('send : ${json.encode(message)}');
+      return true;
+    }());
     userId = IMUtils.emptyStrToNull(userId);
     groupId = IMUtils.emptyStrToNull(groupId);
     if (null == userId && null == groupId ||
@@ -1058,7 +1065,6 @@ class ChatLogic extends SuperController {
         scrollBottom();
       }
     }
-    Logger.print('uid:$userID userId:$userId gid:$groupID groupId:$groupId');
     _reset(message);
     bool useOuterValue = null != userId || null != groupId;
 
@@ -1087,7 +1093,6 @@ class ChatLogic extends SuperController {
   }
 
   void _sendSucceeded(Message oldMsg, Message newMsg) {
-    Logger.print('message send success----');
     final cached = copyTextMap[oldMsg.clientMsgID];
     oldMsg.update(newMsg);
     oldMsg.fillMissingPayload(newMsg);
@@ -1103,6 +1108,7 @@ class ChatLogic extends SuperController {
       id: oldMsg.clientMsgID!,
       value: true,
     ));
+    // Single refresh on success; _completed is a no-op for list rebuild.
     messageList.refresh();
   }
 
@@ -1188,30 +1194,36 @@ class ChatLogic extends SuperController {
         }
       }
     }
+    messageList.refresh();
   }
 
   void _reset(Message message) {
+    // Text/quote/@ already cleared optimistically in sendTextMsg.
     if (message.contentType == MessageType.text ||
         message.contentType == MessageType.quote ||
         message.contentType == MessageType.atText) {
-      inputCtrl.clear();
-      clearQuoteMessage();
-      atUserInfoMap.clear();
+      if (inputCtrl.text.isNotEmpty) {
+        inputCtrl.clear();
+      }
+      if (quoteMessage.value != null) {
+        clearQuoteMessage();
+      }
+      if (atUserInfoMap.isNotEmpty) {
+        atUserInfoMap.clear();
+      }
     }
   }
 
   void _completed() {
-    messageList.refresh();
+    // Avoid double messageList.refresh(); success/fail paths refresh when needed.
   }
 
   void markMessageAsRead(Message message, bool visible) async {
-    Logger.print('markMessageAsRead: ${message.textElem?.content}, $visible');
     if (visible &&
         message.contentType! < 1000 &&
         message.contentType! != MessageType.voice) {
       var data = IMUtils.parseCustomMessage(message);
       if (null != data && data['viewType'] == CustomMessageType.call) {
-        Logger.print('markMessageAsRead: call message $data');
         return;
       }
       _markMessageAsRead(message);

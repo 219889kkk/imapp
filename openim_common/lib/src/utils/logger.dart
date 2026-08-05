@@ -1,6 +1,7 @@
 import 'dart:developer';
 
 import 'package:device_info_plus/device_info_plus.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_openim_sdk/flutter_openim_sdk.dart';
 
 class Logger {
@@ -40,6 +41,12 @@ class Logger {
       String? errorMsg,
       List<dynamic>? keyAndValues,
       bool onlyConsole = false}) {
+    // Release: skip noisy console + native channel logs on hot paths.
+    // Errors still go through so failures remain visible when debugging.
+    if (!kDebugMode && !isError && errorMsg == null) {
+      return;
+    }
+
     final time = DateTime.now().toIso8601String();
 
     log(

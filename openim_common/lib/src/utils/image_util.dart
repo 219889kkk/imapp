@@ -35,7 +35,7 @@ class ImageUtil {
     BoxFit? fit,
     bool loadProgress = true,
     bool clearMemoryCacheWhenDispose = false,
-    bool lowMemory = false,
+    bool lowMemory = true,
     Widget? errorWidget,
     BorderRadius? borderRadius,
   }) =>
@@ -47,7 +47,7 @@ class ImageUtil {
         borderRadius: borderRadius,
         cacheWidth: _calculateCacheWidth(width, cacheWidth, lowMemory),
         cacheHeight: _calculateCacheHeight(height, cacheHeight, lowMemory),
-        cacheRawData: true,
+        cacheRawData: false,
         clearMemoryCacheWhenDispose: clearMemoryCacheWhenDispose,
         handleLoadingProgress: true,
         clearMemoryCacheIfFailed: true,
@@ -98,7 +98,7 @@ class ImageUtil {
     BoxFit? fit,
     bool loadProgress = true,
     bool clearMemoryCacheWhenDispose = false,
-    bool lowMemory = false,
+    bool lowMemory = true,
     Widget? errorWidget,
     BorderRadius? borderRadius,
   }) =>
@@ -112,7 +112,7 @@ class ImageUtil {
         cacheHeight: _calculateCacheHeight(height, cacheHeight, lowMemory),
         clearMemoryCacheWhenDispose: clearMemoryCacheWhenDispose,
         clearMemoryCacheIfFailed: true,
-        cacheRawData: true,
+        cacheRawData: false,
         loadStateChanged: (ExtendedImageState state) {
           switch (state.extendedImageLoadState) {
             case LoadState.loading:

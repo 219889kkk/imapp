@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_openim_sdk/flutter_openim_sdk.dart';
@@ -176,6 +177,8 @@ class Config {
     if (null != server) {
       level = server['logLevel'];
     }
-    return level == null ? 5 : int.parse(level);
+    if (level != null) return int.parse(level);
+    // Release: quieter SDK logs (less UI-isolate / native I/O); debug stays verbose.
+    return kDebugMode ? 5 : 3;
   }
 }

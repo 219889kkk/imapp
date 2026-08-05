@@ -23,7 +23,7 @@ class AvatarView extends StatelessWidget {
     this.isCircle = true,
     this.borderRadius,
     this.enabledPreview = false,
-    this.lowMemory = false,
+    this.lowMemory = true,
     this.nineGridUrl = const [],
     this.isGroup = false,
     this.showDefaultAvatar = true,
