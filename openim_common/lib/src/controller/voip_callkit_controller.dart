@@ -10,6 +10,7 @@ import 'package:flutter_callkit_incoming/entities/ios_params.dart';
 import 'package:flutter_callkit_incoming/entities/notification_params.dart';
 import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 import 'package:get/get.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:uuid/uuid.dart';
 
 import '../apis.dart';
@@ -18,11 +19,11 @@ import '../models/signaling_info.dart';
 import '../res/strings.dart';
 import '../utils/logger.dart';
 
-/// iOS PushKit + CallKit bridge for voice/video invites.
+/// iOS PushKit + CallKit / Android full-screen incoming-call bridge.
 ///
-/// Native [AppDelegate] registers PushKit, calls Getui
-/// `registerVoipTokenCredentials`, and shows CallKit **before** VoIP
-/// completion. This controller listens to CallKit events.
+/// - iOS: native PushKit registers early; CallKit reports before VoIP completion.
+/// - Android: [showIncoming] uses flutter_callkit_incoming full-screen /
+///   high-priority call notification when the app is backgrounded (process alive).
 class VoipCallkitController extends GetxService {
   static VoipCallkitController get to => Get.find();
 
@@ -41,20 +42,23 @@ class VoipCallkitController extends GetxService {
   int _tokenRetryCount = 0;
   bool _uploading = false;
 
-  /// True while a CallKit incoming UI is active (avoid double local banners).
+  /// True while a CallKit / Android incoming UI is active (avoid double banners).
   final RxBool callKitActive = false.obs;
 
   String? get voipToken => _voipToken;
 
-  bool get ownsIncomingUi => Platform.isIOS && callKitActive.value;
+  bool get ownsIncomingUi =>
+      (Platform.isIOS || Platform.isAndroid) && callKitActive.value;
 
   @override
   void onInit() {
     super.onInit();
-    if (!Platform.isIOS) return;
-    _listenNativeVoipChannel();
+    if (!Platform.isIOS && !Platform.isAndroid) return;
     _listenEvents();
-    _refreshVoipToken();
+    if (Platform.isIOS) {
+      _listenNativeVoipChannel();
+      _refreshVoipToken();
+    }
   }
 
   @override
@@ -67,20 +71,25 @@ class VoipCallkitController extends GetxService {
 
   /// After Getui [PushController.login] / bindAlias.
   static void login(String userID) {
-    if (!Platform.isIOS) return;
+    if (!Platform.isIOS && !Platform.isAndroid) return;
     final ctrl = Get.isRegistered<VoipCallkitController>()
         ? Get.find<VoipCallkitController>()
         : Get.put(VoipCallkitController(), permanent: true);
     ctrl._boundUserID = userID;
-    // Force re-upload even if same device token was uploaded for another account.
-    ctrl._lastUploadedToken = null;
-    unawaited(ctrl._refreshVoipToken(upload: true));
-    ctrl._scheduleTokenRetries();
-    Logger.print('VoipCallkit login userID=$userID token=${ctrl._voipToken}');
+    if (Platform.isIOS) {
+      // Force re-upload even if same device token was uploaded for another account.
+      ctrl._lastUploadedToken = null;
+      unawaited(ctrl._refreshVoipToken(upload: true));
+      ctrl._scheduleTokenRetries();
+      Logger.print('VoipCallkit login userID=$userID token=${ctrl._voipToken}');
+    } else {
+      unawaited(ctrl.ensureAndroidCallPermissions());
+      Logger.print('VoipCallkit Android login userID=$userID');
+    }
   }
 
   static void logout() {
-    if (!Platform.isIOS) return;
+    if (!Platform.isIOS && !Platform.isAndroid) return;
     if (!Get.isRegistered<VoipCallkitController>()) return;
     final ctrl = Get.find<VoipCallkitController>();
     ctrl._boundUserID = null;
@@ -88,6 +97,35 @@ class VoipCallkitController extends GetxService {
     ctrl._tokenRetryTimer?.cancel();
     unawaited(FlutterCallkitIncoming.endAllCalls());
     ctrl.callKitActive.value = false;
+  }
+
+  /// Android: notification + full-screen intent (+ overlay if needed).
+  Future<void> ensureAndroidCallPermissions() async {
+    if (!Platform.isAndroid) return;
+    try {
+      final notif = await Permission.notification.status;
+      if (!notif.isGranted) {
+        await Permission.notification.request();
+      }
+    } catch (e, s) {
+      Logger.print('request notification permission failed: $e $s');
+    }
+    try {
+      final can = await FlutterCallkitIncoming.canUseFullScreenIntent();
+      if (can != true) {
+        await FlutterCallkitIncoming.requestFullIntentPermission();
+      }
+    } catch (e, s) {
+      Logger.print('request full-screen intent failed: $e $s');
+    }
+    try {
+      final overlay = await Permission.systemAlertWindow.status;
+      if (!overlay.isGranted) {
+        await Permission.systemAlertWindow.request();
+      }
+    } catch (e, s) {
+      Logger.print('request system alert window failed: $e $s');
+    }
   }
 
   /// Reject placeholders like server test token `bbbbbb...`.
@@ -288,11 +326,15 @@ class VoipCallkitController extends GetxService {
     }
   }
 
-  /// Show CallKit from Dart (online/background fallback). Prefer native PushKit when killed.
+  /// Show system-style incoming call (iOS CallKit / Android full-screen).
   Future<void> showIncoming(SignalingInfo info, {String? nameCaller}) async {
-    if (!Platform.isIOS) return;
+    if (!Platform.isIOS && !Platform.isAndroid) return;
     final invitation = info.invitation;
     if (invitation?.roomID == null) return;
+
+    if (Platform.isAndroid) {
+      await ensureAndroidCallPermissions();
+    }
 
     final isVideo = invitation!.mediaType == 'video';
     final uuid = invitation.roomID!;
@@ -328,7 +370,18 @@ class VoipCallkitController extends GetxService {
       ),
       android: const AndroidParams(
         isCustomNotification: true,
+        isCustomSmallExNotification: true,
         isShowLogo: false,
+        isShowCallID: false,
+        ringtonePath: 'notification_ring',
+        backgroundColor: '#095C37',
+        actionColor: '#4CAF50',
+        textColor: '#ffffff',
+        incomingCallNotificationChannelName: 'Incoming Calls',
+        missedCallNotificationChannelName: 'Missed Calls',
+        isShowFullLockedScreen: true,
+        isImportant: true,
+        isBot: false,
       ),
       ios: const IOSParams(
         handleType: 'generic',
@@ -344,11 +397,13 @@ class VoipCallkitController extends GetxService {
     );
 
     callKitActive.value = true;
+    Logger.print(
+        'showIncoming platform=${Platform.operatingSystem} roomID=$uuid caller=$caller video=$isVideo');
     await FlutterCallkitIncoming.showCallkitIncoming(params);
   }
 
   Future<void> endCall([String? roomID]) async {
-    if (!Platform.isIOS) return;
+    if (!Platform.isIOS && !Platform.isAndroid) return;
     try {
       if (roomID != null && roomID.isNotEmpty) {
         await FlutterCallkitIncoming.endCall(roomID);

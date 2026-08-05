@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -202,14 +203,16 @@ class IMController extends GetxController with IMCallback, OpenIMLive {
             return true;
           }
           receiveNewInvitation(signaling);
-          // iOS: CallKit owns incoming UI (PushKit when killed / background).
-          // Skip local flutter_local_notifications to avoid double UI.
+          // CallKit / Android full-screen UI owns the surface when active.
+          final voip = VoipCallkitController.toOrNull;
+          if (voip != null && voip.ownsIncomingUi) {
+            break;
+          }
           if (Platform.isIOS) {
-            final voip = VoipCallkitController.toOrNull;
-            if (voip == null || !voip.ownsIncomingUi) {
-              // Foreground in-app page is enough; background uses CallKit in live_controller.
-            }
+            // Foreground: in-app page; background: CallKit in live_controller.
           } else if (Get.isRegistered<AppController>()) {
+            // Android: high-priority call notification (backup / heads-up).
+            // Background full-screen is handled in live_controller via CallKit.
             Get.find<AppController>().showCallNotification(signaling);
           }
           break;

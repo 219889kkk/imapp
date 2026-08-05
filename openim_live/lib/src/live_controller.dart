@@ -183,17 +183,34 @@ mixin OpenIMLive {
             if (_isRunningBackground) {
               _beCalledEvent = event;
               if (Platform.isAndroid) {
-                final hasOverlay = await Permissions.checkSystemAlertWindow();
-                if (!hasOverlay) {
-                  await Permissions.request([Permission.systemAlertWindow]);
+                // Prefer flutter_callkit_incoming full-screen / call notification.
+                final voip = VoipCallkitController.toOrNull;
+                if (voip != null) {
+                  String caller = event.data.invitation?.inviterUserID ?? '';
+                  try {
+                    final uid = event.data.invitation?.inviterUserID;
+                    if (uid != null && uid.isNotEmpty) {
+                      final list = await OpenIM.iMManager.userManager
+                          .getUsersInfo(userIDList: [uid]);
+                      caller = list.firstOrNull?.simpleUserInfo.nickname ??
+                          caller;
+                    }
+                  } catch (_) {}
+                  await voip.showIncoming(event.data, nameCaller: caller);
+                } else {
+                  final hasOverlay =
+                      await Permissions.checkSystemAlertWindow();
+                  if (!hasOverlay) {
+                    await Permissions.request([Permission.systemAlertWindow]);
+                  }
+                  await FlutterOpenimLiveAlert.showLiveAlert(
+                    title: callType == CallType.video
+                        ? StrRes.videoCallNotificationTitle
+                        : StrRes.voiceCallNotificationTitle,
+                    rejectText: StrRes.reject,
+                    acceptText: StrRes.pickUp,
+                  );
                 }
-                await FlutterOpenimLiveAlert.showLiveAlert(
-                  title: callType == CallType.video
-                      ? StrRes.videoCallNotificationTitle
-                      : StrRes.voiceCallNotificationTitle,
-                  rejectText: StrRes.reject,
-                  acceptText: StrRes.pickUp,
-                );
               } else if (Platform.isIOS) {
                 // Prefer CallKit over in-app alert when backgrounded.
                 final voip = VoipCallkitController.toOrNull;

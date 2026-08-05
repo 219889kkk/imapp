@@ -8,7 +8,8 @@
 | 通道 | 用途 |
 |------|------|
 | 个推 + 普通 APNs | 文本/图片等聊天消息 |
-| PushKit VoIP + CallKit | 语音/视频来电（杀进程/锁屏系统来电页） |
+| PushKit VoIP + CallKit | iOS 语音/视频来电（杀进程/锁屏系统来电页） |
+| flutter_callkit_incoming（Android） | 后台进程仍在时全屏/高优先级来电 UI（需通知 + 全屏 Intent 权限） |
 
 ## 客户端必做
 
