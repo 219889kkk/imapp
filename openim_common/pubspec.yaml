@@ -127,10 +127,7 @@ flutter:
     - assets/anim/
     - assets/audio/
     - assets/emoji/twemoji/
-  fonts:
-    - family: NotoColorEmoji
-      fonts:
-        - asset: assets/fonts/NotoColorEmoji.ttf
+  # NotoColorEmoji.ttf (~23MB) removed: loading it on emoji tap froze the UI.
   #   - images/a_dot_burr.jpeg
   #   - images/a_dot_ham.jpeg
   #

@@ -124,7 +124,6 @@ class _ChatEmojiPanelState extends State<ChatEmojiPanel>
                     child: Text(
                       item.emoji,
                       style: TextStyle(
-                        fontFamily: Styles.emojiFontFamily,
                         fontSize: 24.sp,
                         height: 1,
                       ),

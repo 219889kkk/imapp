@@ -1,7 +1,9 @@
 import 'package:flutter/widgets.dart';
 
-import 'emoji_text_span.dart';
-
+/// Text field controller for chat input.
+///
+/// Uses the platform emoji font (no custom TTF). Splitting spans with
+/// NotoColorEmoji previously froze the UI on first emoji insert.
 class ChatEmojiTextEditingController extends TextEditingController {
   ChatEmojiTextEditingController({super.text});
 
@@ -16,8 +18,7 @@ class ChatEmojiTextEditingController extends TextEditingController {
         value.isComposingRangeValid);
 
     final text = value.text;
-    // IME composing (拼音等): keep Flutter default underline path without
-    // splitting emoji spans — major win for Chinese typing latency.
+    // IME composing (拼音等): keep Flutter default underline path.
     final composing = value.composing;
     if (withComposing && value.isComposingRangeValid) {
       final underlineStyle =
@@ -42,13 +43,6 @@ class ChatEmojiTextEditingController extends TextEditingController {
       );
     }
 
-    if (!textLikelyContainsEmoji(text)) {
-      return TextSpan(style: style, text: text);
-    }
-
-    return TextSpan(
-      style: style,
-      children: buildEmojiAwareTextSpans(text, style: style),
-    );
+    return TextSpan(style: style, text: text);
   }
 }

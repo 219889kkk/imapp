@@ -6,9 +6,6 @@ import 'theme_color.dart';
 class Styles {
   Styles._();
 
-  /// Package fonts need the package prefix when referenced by the host app.
-  static const emojiFontFamily = 'packages/openim_common/NotoColorEmoji';
-
   static bool isDark = false;
 
   static Color _accentSeed = ThemeColorPresets.defaultBlue;
