@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_openim_sdk/flutter_openim_sdk.dart';
 import 'package:get/get.dart';
 import 'package:openim_common/openim_common.dart';
@@ -444,17 +445,27 @@ class Apis {
     }
     if (token.isEmpty) {
       Logger.print('updateVoipToken skip: PushKit token is empty');
-      // ignore: avoid_print
-      print('[VOIP_TOKEN] skip: PushKit token is empty');
-      IMViews.showToast('voip_token: PushKit token empty');
+      assert(() {
+        // ignore: avoid_print
+        print('[VOIP_TOKEN] skip: PushKit token is empty');
+        return true;
+      }());
+      if (kDebugMode) {
+        IMViews.showToast('voip_token: PushKit token empty');
+      }
       throw StateError('PushKit token is empty');
     }
     final chatTok = DataSp.chatToken?.trim() ?? '';
     if (chatTok.isEmpty) {
       Logger.print('updateVoipToken skip: chat auth token empty');
-      // ignore: avoid_print
-      print('[VOIP_TOKEN] skip: chat auth token empty');
-      IMViews.showToast('voip_token: chat auth empty');
+      assert(() {
+        // ignore: avoid_print
+        print('[VOIP_TOKEN] skip: chat auth token empty');
+        return true;
+      }());
+      if (kDebugMode) {
+        IMViews.showToast('voip_token: chat auth empty');
+      }
       throw StateError('chat token empty');
     }
     final pid = platformID ?? (Platform.isIOS ? 1 : 2);
@@ -489,8 +500,11 @@ class Apis {
     final reqLog =
         'url=${Urls.voipToken} userID=$userID len=${token.length} prefix=$prefix env=${body['environment']} bundleID=$bid bodyKeys=${body.keys.toList()}';
     Logger.print('updateVoipToken request $reqLog');
-    // ignore: avoid_print
-    print('[VOIP_TOKEN] request $reqLog');
+    assert(() {
+      // ignore: avoid_print
+      print('[VOIP_TOKEN] request $reqLog');
+      return true;
+    }());
     try {
       // Use the same HttpUtil path as other chat APIs (token header + operationID).
       await HttpUtil.post(
@@ -499,16 +513,27 @@ class Apis {
         options: chatTokenOptions,
         showErrorToast: false,
       );
-      // ignore: avoid_print
-      print('[VOIP_TOKEN] ok len=${token.length} prefix=$prefix env=${body['environment']}');
+      assert(() {
+        // ignore: avoid_print
+        print(
+            '[VOIP_TOKEN] ok len=${token.length} prefix=$prefix env=${body['environment']}');
+        return true;
+      }());
       Logger.print(
           'updateVoipToken ok userID=$userID len=${token.length} prefix=$prefix');
-      IMViews.showToast('voip_token ok len=${token.length}');
+      if (kDebugMode) {
+        IMViews.showToast('voip_token ok len=${token.length}');
+      }
     } catch (e, s) {
-      // ignore: avoid_print
-      print('[VOIP_TOKEN] failed: $e');
+      assert(() {
+        // ignore: avoid_print
+        print('[VOIP_TOKEN] failed: $e');
+        return true;
+      }());
       Logger.print('updateVoipToken failed: $e $s');
-      IMViews.showToast('voip_token fail: $e');
+      if (kDebugMode) {
+        IMViews.showToast('voip_token fail: $e');
+      }
       rethrow;
     }
   }
