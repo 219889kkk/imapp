@@ -1,0 +1,13 @@
+---
+description: Bump Flutter app version after every shippable change
+alwaysApply: true
+---
+
+# Version bump on every change
+
+After finishing any user-facing code change in this Flutter app (before commit/push/build):
+
+1. Bump `pubspec.yaml` `version:` — increase **build number** every time (`+N` → `+N+1`).
+2. For meaningful fixes/features, also bump **patch** (e.g. `3.8.4+243` → `3.8.5+244`).
+3. Include the version bump in the same commit as the change (or immediately after), so CI artifacts are identifiable.
+4. Mention the new version (e.g. `3.8.4+243`) when telling the user builds are ready.
