@@ -400,10 +400,13 @@ class VoipCallkitController extends GetxService {
 
   void _onAccept(dynamic body) {
     PackageBridge.clearCallNotification?.call();
-    PackageBridge.handleCallNotificationAction?.call(true);
     final signaling = signalingFromCallKitBody(body);
     if (signaling != null) {
+      // Prefer CallKit path only — avoid double receiveNewInvitation via
+      // handleCallNotificationAction + onCallKitAccept.
       PackageBridge.onCallKitAccept?.call(signaling);
+    } else {
+      PackageBridge.handleCallNotificationAction?.call(true);
     }
   }
 

@@ -52,6 +52,13 @@ mixin OpenIMLive {
 
   bool _autoPickup = false;
 
+  /// Shared in-flight CallKit / UI pickup so lock-screen accept can send
+  /// `callingAccept` before Flutter overlay exists (avoids caller timeout).
+  Future<SignalingCertificate>? _pickupInFlight;
+  String? _pickupRoomID;
+  SignalingCertificate? _pickupCertCache;
+  String? _pickupCertRoomID;
+
   final _ring = 'assets/audio/live_ring.wav';
   final _audioPlayer = AudioPlayer(
     // Avoid fighting LiveKit's playAndRecord session (reduces connect-time noise).
@@ -73,6 +80,7 @@ mixin OpenIMLive {
     if (identical(PackageBridge.onCallKitDecline, _onCallKitDecline)) {
       PackageBridge.onCallKitDecline = null;
     }
+    _clearPickupCache();
     signalingSubject.close();
     backgroundSubject.close();
     roomParticipantDisconnectedSubject.close();
@@ -110,15 +118,21 @@ mixin OpenIMLive {
     _autoPickup = true;
     _stopSound();
     PackageBridge.clearCallNotification?.call();
-    // Keep CallKit alive as the system call session — do NOT endCall here
-    // (that looks like an immediate hangup on lock-screen slide-to-answer).
     final roomID = signaling.invitation?.roomID;
     if (roomID != null && roomID.isNotEmpty) {
       unawaited(
           VoipCallkitController.toOrNull?.setConnected(roomID) ?? Future.value());
     }
-    // Re-dispatch so in-app LiveKit UI presents and auto-picks up.
-    // _autoPickup skips the background CallKit branch (see listener).
+    // Accept + RTC token immediately — do not wait for overlay / unlock.
+    // UI autoPickup will await the same in-flight future.
+    unawaited(() async {
+      try {
+        await onTapPickup(signaling..userID = OpenIM.iMManager.userID);
+      } catch (e, s) {
+        Logger.print('CallKit early pickup failed: $e $s');
+      }
+    }());
+    // Present in-app LiveKit UI when possible (_autoPickup skips CallKit branch).
     receiveNewInvitation(signaling);
   }
 
@@ -285,6 +299,8 @@ mixin OpenIMLive {
               onError: onError,
               onRoomDisconnected: () => onRoomDisconnected(event.data),
             );
+            // UI owns the call now; keep CallKit connected until hangup.
+            _autoPickup = false;
           } else if (event.state == CallState.beRejected) {
             insertSignalingMessageSubject.add(event);
             _stopSound();
@@ -476,8 +492,49 @@ mixin OpenIMLive {
   }
 
   Future<SignalingCertificate> onTapPickup(SignalingInfo signaling) async {
+    final roomID = signaling.invitation?.roomID;
+    if (roomID != null &&
+        roomID.isNotEmpty &&
+        _pickupCertRoomID == roomID &&
+        _pickupCertCache != null) {
+      return _pickupCertCache!;
+    }
+    if (roomID != null &&
+        roomID.isNotEmpty &&
+        _pickupInFlight != null &&
+        _pickupRoomID == roomID) {
+      return _pickupInFlight!;
+    }
+
+    final future = _doPickup(signaling);
+    if (roomID != null && roomID.isNotEmpty) {
+      _pickupInFlight = future;
+      _pickupRoomID = roomID;
+    }
+    try {
+      final cert = await future;
+      if (roomID != null && roomID.isNotEmpty) {
+        _pickupCertCache = cert;
+        _pickupCertRoomID = roomID;
+      }
+      return cert;
+    } finally {
+      if (_pickupRoomID == roomID) {
+        _pickupInFlight = null;
+        _pickupRoomID = null;
+      }
+    }
+  }
+
+  void _clearPickupCache() {
+    _pickupInFlight = null;
+    _pickupRoomID = null;
+    _pickupCertCache = null;
+    _pickupCertRoomID = null;
+  }
+
+  Future<SignalingCertificate> _doPickup(SignalingInfo signaling) async {
     _beCalledEvent = null; // ios bug
-    _autoPickup = false;
     _stopSound();
     final data = {
       'customType': CustomMessageType.callingAccept,
@@ -498,6 +555,7 @@ mixin OpenIMLive {
   }
 
   onTapReject(SignalingInfo signaling) async {
+    _clearPickupCache();
     _stopSound();
     insertSignalingMessageSubject.add(CallEvent(CallState.reject, signaling));
 
@@ -520,6 +578,7 @@ mixin OpenIMLive {
   }
 
   onTapCancel(SignalingInfo signaling) async {
+    _clearPickupCache();
     _stopSound();
     insertSignalingMessageSubject.add(CallEvent(CallState.cancel, signaling));
 
