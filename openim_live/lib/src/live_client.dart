@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_openim_sdk/flutter_openim_sdk.dart';
 import 'package:openim_common/openim_common.dart';
@@ -5,6 +7,7 @@ import 'package:rxdart/rxdart.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 import 'pages/single/room.dart';
+import 'utils/call_audio_keepalive.dart';
 
 enum CallType { audio, video }
 
@@ -87,6 +90,7 @@ class OpenIMLiveClient implements RTCBridge {
     }
     isBusy = false;
     currentRoomID = null;
+    unawaited(CallAudioKeepAlive.instance.stop());
     // The next line disables the wakelock again.
     WakelockPlus.disable();
   }

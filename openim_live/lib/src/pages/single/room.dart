@@ -6,6 +6,7 @@ import 'package:livekit_client/livekit_client.dart';
 import 'package:openim_common/openim_common.dart';
 
 import '../../live_client.dart';
+import '../../utils/call_audio_keepalive.dart';
 import 'widgets/call_state.dart';
 import 'widgets/participant.dart';
 
@@ -44,6 +45,7 @@ class _SingleRoomViewState extends SignalState<SingleRoomView> {
   @override
   void dispose() {
     // always dispose listener
+    unawaited(CallAudioKeepAlive.instance.stop());
     (() async {
       _room?.removeListener(_onRoomDidUpdate);
       await _listener?.dispose();
@@ -103,8 +105,11 @@ class _SingleRoomViewState extends SignalState<SingleRoomView> {
       if (CallState.call == callState || CallState.connecting == callState) {
         widget.onWaitingAccept?.call();
       }
-      WidgetsBindingCompatible.instance?.addPostFrameCallback((_) {
-        _publish();
+      WidgetsBindingCompatible.instance?.addPostFrameCallback((_) async {
+        await _publish();
+        if (!_deferMicrophone && enabledMicrophone) {
+          await _startCallAudioKeepAlive();
+        }
       });
     } catch (error, stackTrace) {
       widget.onError?.call(error, stackTrace);
@@ -165,20 +170,39 @@ class _SingleRoomViewState extends SignalState<SingleRoomView> {
     }
   }
 
-  Future<void> _ensureMicrophonePublished() async {
+  Future<void> _ensureMicrophonePublished({bool forceRestart = false}) async {
     if (!enabledMicrophone) return;
     try {
-      if (_room?.localParticipant?.isMicrophoneEnabled() == true) return;
-      await _room?.localParticipant?.setMicrophoneEnabled(true);
+      final participant = _room?.localParticipant;
+      if (participant == null) return;
+      if (!forceRestart && participant.isMicrophoneEnabled() == true) return;
+      if (forceRestart && participant.isMicrophoneEnabled() == true) {
+        // Cycle mic to recover after OS interruption / background.
+        await participant.setMicrophoneEnabled(false);
+      }
+      await participant.setMicrophoneEnabled(true);
     } catch (error, stackTrace) {
       Logger.print('could not enable microphone: $error $stackTrace');
     }
+  }
+
+  Future<void> _startCallAudioKeepAlive() async {
+    final id = roomID ?? widget.roomID;
+    if (id == null || id.isEmpty) return;
+    final keep = CallAudioKeepAlive.instance;
+    keep.onNeedRepublishMic = () => _ensureMicrophonePublished(forceRestart: true);
+    await keep.start(
+      roomID: id,
+      isVideo: widget.callType == CallType.video,
+      peerName: userInfo?.nickname ?? widget.userID,
+    );
   }
 
   @override
   void onParticipantConnected() {
     super.onParticipantConnected();
     _ensureMicrophonePublished();
+    unawaited(_startCallAudioKeepAlive());
   }
 
   void _onRoomDidUpdate() {

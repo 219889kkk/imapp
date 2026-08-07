@@ -23,6 +23,8 @@ dependencies:
   uuid: ^4.2.1
   just_audio: ^0.10.5
   audio_session: ^0.1.25
+  flutter_background: ^1.3.0
+  flutter_callkit_incoming: ^2.5.8
   flutter_openim_sdk:
     path: ../local_plugin/flutter_openim_sdk
 

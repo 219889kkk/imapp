@@ -58,6 +58,7 @@
     <uses-permission android:name="android.permission.DISABLE_KEYGUARD" />
     <uses-permission android:name="android.permission.MANAGE_OWN_CALLS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
 
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
 
@@ -158,8 +159,9 @@
         </provider> -->
 
 
+        <!-- microphone|phoneCall: keep uplink alive when user switches apps during a call -->
         <service android:name="de.julianassmann.flutter_background.IsolateHolderService"
-            android:foregroundServiceType="mediaProjection"
+            android:foregroundServiceType="microphone|phoneCall"
             tools:targetApi="q"
             android:enabled="true"
             android:exported="false"/>
