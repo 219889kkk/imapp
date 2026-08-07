@@ -316,7 +316,8 @@ class VoipCallkitController extends GetxService {
           callKitActive.value = true;
           break;
         case Event.actionCallAccept:
-          callKitActive.value = false;
+          // Stay "active" until LiveKit connects / real hangup.
+          callKitActive.value = true;
           _onAccept(event.body);
           break;
         case Event.actionCallDecline:
@@ -492,14 +493,29 @@ class VoipCallkitController extends GetxService {
     await FlutterCallkitIncoming.showCallkitIncoming(params);
   }
 
+  /// Mark an answered CallKit call as connected (keeps system call audio session).
+  Future<void> setConnected([String? roomID]) async {
+    if (!Platform.isIOS && !Platform.isAndroid) return;
+    final id = roomID?.trim() ?? '';
+    if (id.isEmpty) return;
+    try {
+      await FlutterCallkitIncoming.setCallConnected(id);
+      callKitActive.value = true;
+      Logger.print('CallKit setConnected roomID=$id');
+    } catch (e, s) {
+      Logger.print('setConnected failed: $e $s');
+    }
+  }
+
   Future<void> endCall([String? roomID]) async {
     if (!Platform.isIOS && !Platform.isAndroid) return;
     try {
       if (roomID != null && roomID.isNotEmpty) {
         await FlutterCallkitIncoming.endCall(roomID);
+      } else {
+        // No id: clear leftovers (Android id mismatch / missed cancel race).
+        await FlutterCallkitIncoming.endAllCalls();
       }
-      // Always clear leftovers (Android id mismatch / missed cancel race).
-      await FlutterCallkitIncoming.endAllCalls();
     } catch (e, s) {
       Logger.print('endCall failed: $e $s');
     }

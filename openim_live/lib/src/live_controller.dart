@@ -110,10 +110,13 @@ mixin OpenIMLive {
     _autoPickup = true;
     _stopSound();
     PackageBridge.clearCallNotification?.call();
-    // Dismiss system incoming UI; in-app page owns the call from here.
-    unawaited(VoipCallkitController.toOrNull?.endCall(
-            signaling.invitation?.roomID) ??
-        Future.value());
+    // Keep CallKit alive as the system call session — do NOT endCall here
+    // (that looks like an immediate hangup on lock-screen slide-to-answer).
+    final roomID = signaling.invitation?.roomID;
+    if (roomID != null && roomID.isNotEmpty) {
+      unawaited(
+          VoipCallkitController.toOrNull?.setConnected(roomID) ?? Future.value());
+    }
     // Re-dispatch so in-app LiveKit UI presents and auto-picks up.
     // _autoPickup skips the background CallKit branch (see listener).
     receiveNewInvitation(signaling);
@@ -175,8 +178,18 @@ mixin OpenIMLive {
             FlutterOpenimLiveAlert.closeLiveAlert();
             PackageBridge.clearCallNotification?.call();
             final roomID = event.data.invitation?.roomID;
-            // Must stop Android full-screen / ringtone when peer cancels/hangs up.
-            if (Platform.isIOS || Platform.isAndroid) {
+            // Only tear down CallKit on terminal call states.
+            // Ending on beAccepted/connecting made lock-screen answer look hung up.
+            final endKit = event.state == CallState.beRejected ||
+                event.state == CallState.beCanceled ||
+                event.state == CallState.beHangup ||
+                event.state == CallState.reject ||
+                event.state == CallState.cancel ||
+                event.state == CallState.hangup ||
+                event.state == CallState.timeout ||
+                event.state == CallState.otherReject ||
+                event.state == CallState.otherAccepted;
+            if (endKit && (Platform.isIOS || Platform.isAndroid)) {
               unawaited(VoipCallkitController.toOrNull?.endCall(roomID) ??
                   Future.value());
             }
