@@ -4,6 +4,8 @@ import 'dart:io';
 import 'package:audio_session/audio_session.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_background/flutter_background.dart';
+import 'package:flutter_callkit_incoming/entities/call_kit_params.dart';
+import 'package:flutter_callkit_incoming/entities/ios_params.dart';
 import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 import 'package:openim_common/openim_common.dart';
 
@@ -197,7 +199,7 @@ class CallAudioKeepAlive with WidgetsBindingObserver {
             'type': 'ongoingCall',
             'roomID': roomID,
           },
-          ios: const IOSParams(
+          ios: IOSParams(
             handleType: 'generic',
             supportsVideo: true,
             audioSessionMode: 'voiceChat',

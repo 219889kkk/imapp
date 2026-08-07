@@ -153,7 +153,7 @@ class _SingleRoomViewState extends SignalState<SingleRoomView> {
     }
   }
 
-  void _publish() async {
+  Future<void> _publish() async {
     await _applySpeakerRoute();
     // video will fail when running in ios simulator
     try {
