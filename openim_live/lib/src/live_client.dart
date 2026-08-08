@@ -292,10 +292,16 @@ class OpenIMLiveClient implements RTCBridge {
       scheduleMicrotask(() => cb?.call());
     });
 
-    Logger.print('connectMedia connecting roomID=$roomID');
+    Logger.print(
+        'connectMedia connecting roomID=$roomID url=${certificate.liveURL}');
+    final liveURL = certificate.liveURL?.trim() ?? '';
+    final token = certificate.token?.trim() ?? '';
+    if (liveURL.isEmpty || token.isEmpty) {
+      throw StateError('missing liveURL/token for roomID=$roomID');
+    }
     await room.connect(
-      certificate.liveURL!,
-      certificate.token!,
+      liveURL,
+      token,
       roomOptions: RoomOptions(
         dynacast: true,
         adaptiveStream: true,

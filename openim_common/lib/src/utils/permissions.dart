@@ -148,6 +148,25 @@ class Permissions {
     }
   }
 
+  /// Returns whether call mic (+ camera for video) was granted.
+  static Future<bool> requestCallMedia({bool needCamera = false}) async {
+    final permissions = <Permission>[Permission.microphone];
+    if (needCamera) permissions.add(Permission.camera);
+    var granted = true;
+    var msg = '';
+    for (final permission in permissions) {
+      final state = await permission.request();
+      if (!state.isGranted) {
+        granted = false;
+        msg += '${permission.title}、';
+      }
+    }
+    if (!granted && msg.isNotEmpty) {
+      _showPermissionDeniedDialog(msg.substring(0, msg.length - 1));
+    }
+    return granted;
+  }
+
   static Future<bool> media() async {
     final permissions = [
       Permission.camera,

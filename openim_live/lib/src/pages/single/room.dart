@@ -65,33 +65,29 @@ class _SingleRoomViewState extends SignalState<SingleRoomView> {
       return;
     }
 
-    try {
-      final speakerOn = enabledSpeaker;
-      // Caller waiting for answer: join room but skip CallKit/keepalive so
-      // ringback isn't ducked and no lock-screen "ongoing call" is created.
-      final waitingForPeer = widget.initState == CallState.call;
-      await client.connectMedia(
-        certificate: certificate,
-        callType: widget.callType,
-        speakerOn: speakerOn,
-        enableCamera: widget.callType == CallType.video && !waitingForPeer,
-        // Waiting caller: mute mic so ringback doesn't feedback.
-        enableMicrophone: !waitingForPeer,
-        enableKeepAlive: !waitingForPeer,
-        onDisconnected: () {
-          if (!mounted) return;
-          WidgetsBindingCompatible.instance?.addPostFrameCallback((_) {
-            widget.onRoomDisconnected?.call();
-            widget.onClose?.call();
-          });
-        },
-      );
-      await _attachSharedMedia(client);
-      if (CallState.call == callState || CallState.connecting == callState) {
-        widget.onWaitingAccept?.call();
-      }
-    } catch (error, stackTrace) {
-      widget.onError?.call(error, stackTrace);
+    final speakerOn = enabledSpeaker;
+    // Caller waiting for answer: join room but skip CallKit/keepalive so
+    // ringback isn't ducked and no lock-screen "ongoing call" is created.
+    final waitingForPeer = widget.initState == CallState.call;
+    await client.connectMedia(
+      certificate: certificate,
+      callType: widget.callType,
+      speakerOn: speakerOn,
+      enableCamera: widget.callType == CallType.video && !waitingForPeer,
+      // Waiting caller: mute mic so ringback doesn't feedback.
+      enableMicrophone: !waitingForPeer,
+      enableKeepAlive: !waitingForPeer,
+      onDisconnected: () {
+        if (!mounted) return;
+        WidgetsBindingCompatible.instance?.addPostFrameCallback((_) {
+          widget.onRoomDisconnected?.call();
+          widget.onClose?.call();
+        });
+      },
+    );
+    await _attachSharedMedia(client);
+    if (CallState.call == callState || CallState.connecting == callState) {
+      widget.onWaitingAccept?.call();
     }
   }
 

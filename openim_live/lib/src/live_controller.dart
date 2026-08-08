@@ -650,12 +650,20 @@ mixin OpenIMLive {
     }
     client.close();
     _stopSound();
+    // HttpUtil already toasted API failures like (errCode, errMsg).
+    if (error is (int, String?)) {
+      return;
+    }
     if (error is PlatformException) {
       final code = int.tryParse(error.code);
       if (code == SDKErrorCode.hasBeenBlocked) {
         IMViews.showToast(StrRes.callFail);
         return;
       }
+    }
+    final msg = error?.toString() ?? '';
+    if (msg.contains('permission') || msg.contains('Permission')) {
+      return;
     }
     IMViews.showToast(StrRes.networkError);
   }

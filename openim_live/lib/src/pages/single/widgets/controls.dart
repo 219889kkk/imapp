@@ -123,6 +123,11 @@ class _ControlsViewState extends State<ControlsView> {
     widget.onChangedCallState?.call(state);
     setState(() {
       _callState = state;
+      if (_callState == CallState.beCalled) {
+        // Allow retry after a failed answer attempt.
+        _pickupPressed = false;
+        _terminalActionBusy = false;
+      }
       if (_callState == CallState.calling) {
         _startCallingTimer();
       }

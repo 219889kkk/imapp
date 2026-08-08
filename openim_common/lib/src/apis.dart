@@ -360,7 +360,22 @@ class Apis {
       },
       options: chatTokenOptions,
     ).then((value) {
-      final signaling = SignalingCertificate.fromJson(value)..roomID = roomID;
+      final map = value is Map
+          ? Map<String, dynamic>.from(value)
+          : <String, dynamic>{};
+      var signaling = SignalingCertificate.fromJson(map)..roomID = roomID;
+      // Mobile clients cannot reach the server's loopback LiveKit URL.
+      final live = signaling.liveURL?.trim() ?? '';
+      if (live.contains('127.0.0.1') || live.contains('localhost')) {
+        const fixed = 'wss://livekit.zghtchat9.top';
+        Logger.print('rewrite liveURL $live -> $fixed');
+        signaling = SignalingCertificate(
+          token: signaling.token,
+          roomID: signaling.roomID,
+          liveURL: fixed,
+          busyLineUserIDList: signaling.busyLineUserIDList,
+        );
+      }
       return signaling;
     }).catchError((e, s) {
       _catchErrorHelper(e, s);

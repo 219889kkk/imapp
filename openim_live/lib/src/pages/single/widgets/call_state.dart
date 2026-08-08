@@ -160,14 +160,19 @@ abstract class SignalState<T extends SignalView> extends State<T> {
   }
 
   onDail() async {
-    if (widget.initState == CallState.call) {
-      certificate = await widget.onDial!.call();
-      widget.onBindRoomID?.call(roomID = certificate.roomID!);
-      await connect();
-    } else if (widget.adoptExistingMedia ||
-        widget.initState == CallState.calling) {
-      // Unlock into an already-connected lock-screen call.
-      await _adoptActiveCall();
+    try {
+      if (widget.initState == CallState.call) {
+        certificate = await widget.onDial!.call();
+        widget.onBindRoomID?.call(roomID = certificate.roomID!);
+        await connect();
+      } else if (widget.adoptExistingMedia ||
+          widget.initState == CallState.calling) {
+        // Unlock into an already-connected lock-screen call.
+        await _adoptActiveCall();
+      }
+    } catch (e, s) {
+      Logger.print('onDail failed: $e $s');
+      widget.onError?.call(e, s);
     }
   }
 
@@ -205,15 +210,33 @@ abstract class SignalState<T extends SignalView> extends State<T> {
         await _adoptActiveCall();
         return;
       }
+
+      // Invitee answering in-app never went through dial permissions.
+      final ok = await Permissions.requestCallMedia(
+        needCamera: widget.callType == CallType.video,
+      );
+      if (!ok) {
+        Logger.print('onTapPickup aborted: media permission denied');
+        return;
+      }
+
       Logger.print('connecting');
-      // Show in-call controls (incl. hangup) immediately — don't stay on
-      // reject/pickup while LiveKit connects (that looked like a frozen page).
-      callState = CallState.calling;
-      callStateSubject.add(CallState.calling);
+      // Show hangup during connect — don't stay on reject/pickup.
+      callState = CallState.connecting;
+      callStateSubject.add(CallState.connecting);
       widget.onStartCalling?.call();
       certificate = await widget.onTapPickup!.call();
-      widget.onBindRoomID?.call(roomID = certificate.roomID!);
+      final rid = certificate.roomID?.trim() ?? '';
+      final liveURL = certificate.liveURL?.trim() ?? '';
+      final token = certificate.token?.trim() ?? '';
+      if (rid.isEmpty || liveURL.isEmpty || token.isEmpty) {
+        throw StateError(
+            'invalid rtc cert roomID=$rid liveURL=$liveURL tokenLen=${token.length}');
+      }
+      widget.onBindRoomID?.call(roomID = rid);
       await connect();
+      callState = CallState.calling;
+      callStateSubject.add(CallState.calling);
       unawaited(OpenIMLiveClient().ensureMediaAudible(
         speakerOn: enabledSpeaker,
         forceRestartMic: true,
@@ -231,6 +254,11 @@ abstract class SignalState<T extends SignalView> extends State<T> {
         } catch (e2, s2) {
           Logger.print('adopt after pickup error failed: $e2 $s2');
         }
+      }
+      // Restore incoming UI so user can retry (Controls resets pickup latch).
+      if (mounted && widget.initState == CallState.beCalled) {
+        callState = CallState.beCalled;
+        callStateSubject.add(CallState.beCalled);
       }
       widget.onError?.call(e, s);
     } finally {
