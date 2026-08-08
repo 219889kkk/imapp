@@ -151,6 +151,7 @@ class OpenIMLiveClient implements RTCBridge {
     required CallType callType,
     bool speakerOn = false,
     bool enableCamera = false,
+    bool enableMicrophone = true,
     /// Caller waiting for answer: skip keepalive so ringback isn't ducked.
     bool enableKeepAlive = true,
     VoidCallback? onDisconnected,
@@ -171,6 +172,7 @@ class OpenIMLiveClient implements RTCBridge {
         callType: callType,
         speakerOn: speakerOn,
         enableCamera: enableCamera,
+        enableMicrophone: enableMicrophone,
       );
       if (enableKeepAlive) {
         await _startKeepAlive(roomID, callType);
@@ -188,6 +190,7 @@ class OpenIMLiveClient implements RTCBridge {
       callType: callType,
       speakerOn: speakerOn,
       enableCamera: enableCamera,
+      enableMicrophone: enableMicrophone,
       enableKeepAlive: enableKeepAlive,
     );
     _mediaConnectInFlight = future;
@@ -207,6 +210,7 @@ class OpenIMLiveClient implements RTCBridge {
     required CallType callType,
     required bool speakerOn,
     required bool enableCamera,
+    required bool enableMicrophone,
     required bool enableKeepAlive,
   }) async {
     final roomID = certificate.roomID!;
@@ -229,6 +233,7 @@ class OpenIMLiveClient implements RTCBridge {
         callType: callType,
         speakerOn: speakerOn,
         enableCamera: enableCamera,
+        enableMicrophone: enableMicrophone,
       );
       if (enableKeepAlive) {
         await _startKeepAlive(roomID, callType);
@@ -287,6 +292,7 @@ class OpenIMLiveClient implements RTCBridge {
       callType: callType,
       speakerOn: speakerOn,
       enableCamera: enableCamera,
+      enableMicrophone: enableMicrophone,
     );
     if (enableKeepAlive) {
       await _startKeepAlive(roomID, callType);
@@ -301,6 +307,40 @@ class OpenIMLiveClient implements RTCBridge {
     final callType = _mediaCallType ?? CallType.audio;
     if (roomID == null || roomID.isEmpty) return;
     await _startKeepAlive(roomID, callType);
+  }
+
+  /// Lock-screen answer: force audible route + mic + remote audio subscribe.
+  Future<void> reinforceLockScreenAudio({bool speakerOn = true}) async {
+    final room = _mediaRoom;
+    final roomID = currentRoomID;
+    if (room == null || roomID == null || roomID.isEmpty) return;
+    await _startKeepAlive(roomID, _mediaCallType ?? CallType.audio);
+    await _ensurePublished(
+      callType: _mediaCallType ?? CallType.audio,
+      speakerOn: speakerOn,
+      enableCamera: false,
+      enableMicrophone: true,
+    );
+    try {
+      for (final participant in room.remoteParticipants.values) {
+        for (final pub in participant.audioTrackPublications) {
+          try {
+            await pub.subscribe();
+          } catch (_) {}
+        }
+      }
+    } catch (e, s) {
+      Logger.print('reinforceLockScreenAudio subscribe failed: $e $s');
+    }
+    // iOS often applies CallKit route a beat later — reinforce once more.
+    unawaited(Future<void>.delayed(const Duration(milliseconds: 400), () async {
+      if (_mediaRoom != room) return;
+      try {
+        await Hardware.instance.setSpeakerphoneOn(speakerOn);
+        await room.setSpeakerOn(speakerOn);
+        await room.localParticipant?.setMicrophoneEnabled(true);
+      } catch (_) {}
+    }));
   }
 
   Future<void> _disposeMediaRoomOnly() async {
@@ -320,6 +360,7 @@ class OpenIMLiveClient implements RTCBridge {
     required CallType callType,
     required bool speakerOn,
     required bool enableCamera,
+    required bool enableMicrophone,
   }) async {
     final room = _mediaRoom;
     if (room == null) return;
@@ -330,7 +371,7 @@ class OpenIMLiveClient implements RTCBridge {
       Logger.print('connectMedia speaker failed: $e $s');
     }
     try {
-      await room.localParticipant?.setMicrophoneEnabled(true);
+      await room.localParticipant?.setMicrophoneEnabled(enableMicrophone);
     } catch (e, s) {
       Logger.print('connectMedia mic failed: $e $s');
     }

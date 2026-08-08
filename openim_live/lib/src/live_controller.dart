@@ -234,6 +234,13 @@ mixin OpenIMLive {
           isPositive,
         );
     try {
+      // Activate VoIP audio session BEFORE joining so lock-screen has output.
+      if (roomID != null && roomID.isNotEmpty) {
+        await CallAudioKeepAlive.instance.start(
+          roomID: roomID,
+          isVideo: signaling.invitation?.mediaType == 'video',
+        );
+      }
       final cert =
           await onTapPickup(signaling..userID = OpenIM.iMManager.userID);
       if (gen != _callSessionGen || _isRoomEnded(roomID)) {
@@ -251,9 +258,11 @@ mixin OpenIMLive {
       await OpenIMLiveClient().connectMedia(
         certificate: cert,
         callType: callType,
-        speakerOn: callType == CallType.video,
-        // Camera often unavailable while locked; enable after unlock attach.
+        // Lock-screen answer must be audible without putting phone to ear.
+        speakerOn: true,
         enableCamera: false,
+        enableMicrophone: true,
+        enableKeepAlive: true,
         onDisconnected: () {
           final id = signaling.invitation?.roomID;
           if (!_isRoomEnded(id)) {
@@ -270,6 +279,7 @@ mixin OpenIMLive {
         }
         return;
       }
+      await OpenIMLiveClient().reinforceLockScreenAudio(speakerOn: true);
       Logger.print(
           'headless accept joined roomID=${cert.roomID} type=$callType');
     } catch (e, s) {

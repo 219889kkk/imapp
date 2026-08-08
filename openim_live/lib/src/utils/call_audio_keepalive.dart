@@ -119,11 +119,11 @@ class CallAudioKeepAlive with WidgetsBindingObserver {
       final session = await AudioSession.instance;
       await session.configure(AudioSessionConfiguration(
         avAudioSessionCategory: AVAudioSessionCategory.playAndRecord,
+        // Exclusive VoIP session — mixWithOthers can mute LiveKit under CallKit.
         avAudioSessionCategoryOptions:
             AVAudioSessionCategoryOptions.allowBluetooth |
                 AVAudioSessionCategoryOptions.allowBluetoothA2dp |
-                AVAudioSessionCategoryOptions.defaultToSpeaker |
-                AVAudioSessionCategoryOptions.mixWithOthers,
+                AVAudioSessionCategoryOptions.defaultToSpeaker,
         avAudioSessionMode: AVAudioSessionMode.voiceChat,
         avAudioSessionRouteSharingPolicy:
             AVAudioSessionRouteSharingPolicy.defaultPolicy,

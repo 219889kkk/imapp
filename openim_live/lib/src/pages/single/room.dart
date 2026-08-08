@@ -74,6 +74,8 @@ class _SingleRoomViewState extends SignalState<SingleRoomView> {
         callType: widget.callType,
         speakerOn: speakerOn,
         enableCamera: widget.callType == CallType.video && !waitingForPeer,
+        // Waiting caller: mute mic so ringback doesn't feedback.
+        enableMicrophone: !waitingForPeer,
         enableKeepAlive: !waitingForPeer,
         onDisconnected: () {
           if (!mounted) return;

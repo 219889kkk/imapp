@@ -232,17 +232,32 @@ class IMController extends GetxController with IMCallback, OpenIMLive {
         case CustomMessageType.callingReject:
           inviteeRejected(signaling);
           _clearCallNotification();
-          VoipCallkitController.toOrNull?.endCall(signaling.invitation?.roomID);
+          unawaited(
+              VoipCallkitController.toOrNull?.endCall(
+                      signaling.invitation?.roomID) ??
+                  Future.value());
+          unawaited(
+              VoipCallkitController.toOrNull?.endAllCalls() ?? Future.value());
           break;
         case CustomMessageType.callingCancel:
           invitationCancelled(signaling);
           _clearCallNotification();
-          VoipCallkitController.toOrNull?.endCall(signaling.invitation?.roomID);
+          unawaited(
+              VoipCallkitController.toOrNull?.endCall(
+                      signaling.invitation?.roomID) ??
+                  Future.value());
+          unawaited(
+              VoipCallkitController.toOrNull?.endAllCalls() ?? Future.value());
           break;
         case CustomMessageType.callingHungup:
           beHangup(signaling);
           _clearCallNotification();
-          VoipCallkitController.toOrNull?.endCall(signaling.invitation?.roomID);
+          unawaited(
+              VoipCallkitController.toOrNull?.endCall(
+                      signaling.invitation?.roomID) ??
+                  Future.value());
+          unawaited(
+              VoipCallkitController.toOrNull?.endAllCalls() ?? Future.value());
           break;
       }
       return true;

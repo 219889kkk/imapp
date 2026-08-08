@@ -81,8 +81,10 @@ abstract class SignalState<T extends SignalView> extends State<T> {
   void initState() {
     roomID ??= widget.roomID;
     callState = widget.initState;
-    // Voice: earpiece by default (better AEC). Video: speaker.
-    enabledSpeaker = widget.callType == CallType.video;
+    // Voice: earpiece by default. Lock-screen headless answer forced speaker —
+    // keep it when attaching the same media so audio doesn't go silent on unlock.
+    enabledSpeaker =
+        widget.callType == CallType.video || widget.adoptExistingMedia;
     callEventSub = sameRoomSignalStream.listen(_onStateDidUpdate);
     widget.onSyncUserInfo?.call(widget.userID).then(_onUpdateUserInfo);
     onDail();
