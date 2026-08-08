@@ -221,6 +221,17 @@ abstract class SignalState<T extends SignalView> extends State<T> {
       Logger.print('connected');
     } catch (e, s) {
       Logger.print('onTapPickup failed: $e $s');
+      final client = OpenIMLiveClient();
+      final target = roomID ?? widget.roomID;
+      // Parallel CallKit/headless accept may have already joined.
+      if (client.hasMediaFor(target)) {
+        try {
+          await _adoptActiveCall();
+          return;
+        } catch (e2, s2) {
+          Logger.print('adopt after pickup error failed: $e2 $s2');
+        }
+      }
       widget.onError?.call(e, s);
     } finally {
       _pickupBusy = false;

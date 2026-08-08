@@ -180,10 +180,15 @@ mixin OpenIMLive {
           final pendingRoom = pending.data.invitation?.roomID;
           if (_isRoomEnded(pendingRoom)) {
             Logger.print('skip foreground restore: room ended $pendingRoom');
-          } else if (OpenIMLiveClient()
-              .hasMediaFor(pendingRoom)) {
+          } else if (OpenIMLiveClient().hasMediaFor(pendingRoom)) {
+            // Already answered on lock-screen — attach UI, keep CallKit connected.
             _presentCallUi(pending.data, fromHeadless: true);
           } else {
+            // Unanswered: drop system incoming UI so only in-app Accept remains.
+            unawaited(
+                VoipCallkitController.toOrNull?.endCall(pendingRoom) ??
+                    Future.value());
+            PackageBridge.clearCallNotification?.call();
             signalingSubject.add(pending);
           }
         } else {
@@ -281,6 +286,11 @@ mixin OpenIMLive {
         return;
       }
       await OpenIMLiveClient().reinforceLockScreenAudio(speakerOn: true);
+      // CallKit route often settles after answer — reinforce again shortly.
+      unawaited(Future<void>.delayed(const Duration(milliseconds: 800), () async {
+        if (gen != _callSessionGen || _isRoomEnded(roomID)) return;
+        await OpenIMLiveClient().reinforceLockScreenAudio(speakerOn: true);
+      }));
       Logger.print(
           'headless accept joined roomID=${cert.roomID} type=$callType');
     } catch (e, s) {
@@ -476,6 +486,9 @@ mixin OpenIMLive {
               _beCalledEvent = event;
               return;
             }
+            // One answer surface only: in-app page owns Accept/Reject.
+            PackageBridge.clearCallNotification?.call();
+            FlutterOpenimLiveAlert.closeLiveAlert();
             // Prefer shared presenter (handles headless media / no reconnect).
             if (_autoPickup ||
                 OpenIMLiveClient().hasMediaFor(event.data.invitation?.roomID)) {
@@ -627,10 +640,19 @@ mixin OpenIMLive {
 
   onError(error, stack) {
     Logger.print('onError=====> $error $stack');
-    OpenIMLiveClient().close();
+    // Duplicate Accept (CallKit + in-app / notification) can throw on the
+    // second path while the first already joined — never kill a live call.
+    final client = OpenIMLiveClient();
+    if (client.mediaRoom?.localParticipant != null) {
+      Logger.print('onError ignored: media already connected');
+      unawaited(client.ensureMediaAudible(speakerOn: true, forceRestartMic: true));
+      return;
+    }
+    client.close();
     _stopSound();
     if (error is PlatformException) {
-      if (int.parse(error.code) == SDKErrorCode.hasBeenBlocked) {
+      final code = int.tryParse(error.code);
+      if (code == SDKErrorCode.hasBeenBlocked) {
         IMViews.showToast(StrRes.callFail);
         return;
       }

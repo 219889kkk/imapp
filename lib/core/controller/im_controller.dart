@@ -219,7 +219,12 @@ class IMController extends GetxController with IMCallback, OpenIMLive {
           if (Platform.isIOS) {
             // Foreground: in-app page; background: CallKit in live_controller.
           } else if (Get.isRegistered<AppController>()) {
-            Get.find<AppController>().showCallNotification(signaling);
+            final app = Get.find<AppController>();
+            // Android: CallKit full-screen owns Accept when registered.
+            // Never stack a second notification Accept on top.
+            if (voip == null && app.isRunningBackground) {
+              app.showCallNotification(signaling);
+            }
           }
           break;
         case CustomMessageType.callingAccept:
