@@ -25,10 +25,17 @@ class CallAudioKeepAlive with WidgetsBindingObserver {
 
   bool get isActive => _active;
 
+  /// Configure a LiveKit/WebRTC-friendly session BEFORE room.connect.
+  /// Must not use an exclusive session that steals the WebRTC audio unit.
+  Future<void> prepareForRtc({bool speakerOn = true}) async {
+    await _activateCallSession(preferSpeaker: speakerOn);
+  }
+
   Future<void> start({
     required String roomID,
     required bool isVideo,
     String? peerName,
+    bool speakerOn = true,
   }) async {
     _roomID = roomID;
     _isVideo = isVideo;
@@ -36,12 +43,12 @@ class CallAudioKeepAlive with WidgetsBindingObserver {
       _peerName = peerName.trim();
     }
     if (_active) {
-      await _activateCallSession();
+      await _activateCallSession(preferSpeaker: speakerOn);
       return;
     }
     _active = true;
     WidgetsBinding.instance.addObserver(this);
-    await _activateCallSession();
+    await _activateCallSession(preferSpeaker: speakerOn);
     await _listenInterruptions();
     if (Platform.isAndroid) {
       await _enableAndroidCallForegroundService();
@@ -71,7 +78,6 @@ class CallAudioKeepAlive with WidgetsBindingObserver {
       }
     }
     // Never endCall here — that looks like a hangup when UI remounts after unlock.
-    // CallKit teardown belongs to live hangup / _terminateCallUi only.
     Logger.print('CallAudioKeepAlive stop');
   }
 
@@ -80,7 +86,6 @@ class CallAudioKeepAlive with WidgetsBindingObserver {
     if (!_active) return;
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.hidden) {
-      // Re-assert VoIP session so OS keeps mic while another app is open.
       unawaited(_activateCallSession());
     } else if (state == AppLifecycleState.resumed) {
       unawaited(_recoverMic());
@@ -114,16 +119,20 @@ class CallAudioKeepAlive with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _activateCallSession() async {
+  Future<void> _activateCallSession({bool preferSpeaker = true}) async {
     try {
       final session = await AudioSession.instance;
+      // mixWithOthers is required so LiveKit/WebRTC can keep its audio unit.
+      // Exclusive playAndRecord (no mix) was silencing in-app call audio.
+      var options = AVAudioSessionCategoryOptions.allowBluetooth |
+          AVAudioSessionCategoryOptions.allowBluetoothA2dp |
+          AVAudioSessionCategoryOptions.mixWithOthers;
+      if (preferSpeaker) {
+        options = options | AVAudioSessionCategoryOptions.defaultToSpeaker;
+      }
       await session.configure(AudioSessionConfiguration(
         avAudioSessionCategory: AVAudioSessionCategory.playAndRecord,
-        // Exclusive VoIP session — mixWithOthers can mute LiveKit under CallKit.
-        avAudioSessionCategoryOptions:
-            AVAudioSessionCategoryOptions.allowBluetooth |
-                AVAudioSessionCategoryOptions.allowBluetoothA2dp |
-                AVAudioSessionCategoryOptions.defaultToSpeaker,
+        avAudioSessionCategoryOptions: options,
         avAudioSessionMode: AVAudioSessionMode.voiceChat,
         avAudioSessionRouteSharingPolicy:
             AVAudioSessionRouteSharingPolicy.defaultPolicy,
@@ -160,7 +169,6 @@ class CallAudioKeepAlive with WidgetsBindingObserver {
       }
     } catch (e, s) {
       Logger.print('CallAudioKeepAlive Android FGS failed: $e $s');
-      // One retry after a short delay (first-run permission dialogs).
       try {
         await Future<void>.delayed(const Duration(seconds: 1));
         if (!FlutterBackground.isBackgroundExecutionEnabled) {
@@ -170,7 +178,7 @@ class CallAudioKeepAlive with WidgetsBindingObserver {
     }
   }
 
-  /// Register an ongoing CallKit call so iOS treats us as an active voice app.
+  /// Reinforce existing CallKit only — never invent a new lock-screen call.
   Future<void> _promoteIosOngoingCall() async {
     final roomID = _roomID;
     if (roomID == null || roomID.isEmpty) return;
@@ -185,8 +193,6 @@ class CallAudioKeepAlive with WidgetsBindingObserver {
         });
       }
       if (!already) {
-        // Never startCall here — that creates a lock-screen "ongoing call"
-        // for the caller while ringing, and it can linger after in-app hangup.
         Logger.print(
             'CallAudioKeepAlive skip startCall (no existing CallKit) roomID=$roomID');
         return;

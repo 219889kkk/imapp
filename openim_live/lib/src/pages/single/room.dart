@@ -133,8 +133,9 @@ class _SingleRoomViewState extends SignalState<SingleRoomView> {
       },
     );
 
-    // Ensure tracks still published after unlock.
+    // Ensure tracks still published after unlock / in-app join.
     await _publish();
+    await OpenIMLiveClient().ensureMediaAudible(speakerOn: enabledSpeaker);
     if (!_deferMicrophone && enabledMicrophone) {
       await _startCallAudioKeepAlive();
     }
@@ -206,8 +207,9 @@ class _SingleRoomViewState extends SignalState<SingleRoomView> {
   void onParticipantConnected() {
     super.onParticipantConnected();
     _ensureMicrophonePublished();
-    unawaited(OpenIMLiveClient().ensureCallKeepAlive());
+    unawaited(OpenIMLiveClient().ensureCallKeepAlive(speakerOn: enabledSpeaker));
     unawaited(_startCallAudioKeepAlive());
+    unawaited(OpenIMLiveClient().ensureMediaAudible(speakerOn: enabledSpeaker));
   }
 
   void _onRoomDidUpdate() {
