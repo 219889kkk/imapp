@@ -40,6 +40,7 @@ class SingleRoomView extends SignalView {
 
 class _SingleRoomViewState extends SignalState<SingleRoomView> {
   Room? _room;
+  bool _peerAudioArmed = false;
 
   @override
   void dispose() {
@@ -134,10 +135,22 @@ class _SingleRoomViewState extends SignalState<SingleRoomView> {
     );
 
     // Ensure tracks still published after unlock / in-app join.
+    // If peer already joined (or we already left waiting state), unmute now.
     await _publish();
-    await OpenIMLiveClient().ensureMediaAudible(speakerOn: enabledSpeaker);
-    if (!_deferMicrophone && enabledMicrophone) {
-      await _startCallAudioKeepAlive();
+    if (!_deferMicrophone) {
+      await OpenIMLiveClient().ensureMediaAudible(
+        speakerOn: enabledSpeaker,
+        forceRestartMic: true,
+      );
+      if (enabledMicrophone) {
+        await _startCallAudioKeepAlive();
+      }
+    } else {
+      // Waiting: route only — do not unmute over deferred mic.
+      try {
+        await Hardware.instance.setSpeakerphoneOn(enabledSpeaker);
+        await room.setSpeakerOn(enabledSpeaker);
+      } catch (_) {}
     }
     if (room.remoteParticipants.isNotEmpty) {
       onParticipantConnected();
@@ -206,10 +219,19 @@ class _SingleRoomViewState extends SignalState<SingleRoomView> {
   @override
   void onParticipantConnected() {
     super.onParticipantConnected();
-    _ensureMicrophonePublished();
+    if (_peerAudioArmed) {
+      // Already unmuted after accept — avoid mic off/on flap on every room tick.
+      return;
+    }
+    _peerAudioArmed = true;
+    // Force republish: waiting caller had mic muted for ringback.
+    unawaited(_ensureMicrophonePublished(forceRestart: true));
     unawaited(OpenIMLiveClient().ensureCallKeepAlive(speakerOn: enabledSpeaker));
     unawaited(_startCallAudioKeepAlive());
-    unawaited(OpenIMLiveClient().ensureMediaAudible(speakerOn: enabledSpeaker));
+    unawaited(OpenIMLiveClient().ensureMediaAudible(
+      speakerOn: enabledSpeaker,
+      forceRestartMic: true,
+    ));
   }
 
   void _onRoomDidUpdate() {

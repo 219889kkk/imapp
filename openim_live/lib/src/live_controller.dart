@@ -140,6 +140,7 @@ mixin OpenIMLive {
     androidApplyAudioAttributes: false,
     handleAudioSessionActivation: false,
   );
+  int _ringPlayGen = 0;
 
   bool get isBusy => OpenIMLiveClient().isBusy;
 
@@ -521,14 +522,17 @@ mixin OpenIMLive {
             insertSignalingMessageSubject.add(event);
             _terminateCallUi(roomID);
           } else if (event.state == CallState.beAccepted) {
-            _stopSound();
-            // Inviter: ensure mic/audio path is live as soon as peer accepts
-            // (caller may have deferred mic while ringback played).
-            unawaited(OpenIMLiveClient().ensureCallKeepAlive());
-            unawaited(OpenIMLiveClient().ensureMediaAudible());
+            await _stopSound();
+            // Inviter: unmute mic + restore RTC session after ringback stops.
+            // (Waiting caller had mic muted; ring stop must win the race.)
+            unawaited(OpenIMLiveClient().ensureCallKeepAlive(speakerOn: true));
+            unawaited(OpenIMLiveClient().ensureMediaAudible(
+              speakerOn: true,
+              forceRestartMic: true,
+            ));
           } else if (event.state == CallState.otherReject ||
               event.state == CallState.otherAccepted) {
-            _stopSound();
+            await _stopSound();
             if (!existActiveCallFor(roomID)) {
               _terminateCallUi(roomID);
             }
@@ -950,18 +954,28 @@ mixin OpenIMLive {
   }
 
   void _playSound() async {
-    if (!_audioPlayer.playerState.playing) {
-      _audioPlayer.setAsset(_ring, package: 'openim_common');
-      _audioPlayer.setLoopMode(LoopMode.one);
-      _audioPlayer.setVolume(1.0);
-      _audioPlayer.play();
+    final gen = ++_ringPlayGen;
+    try {
+      if (_audioPlayer.playerState.playing) {
+        await _audioPlayer.stop();
+      }
+      if (gen != _ringPlayGen) return;
+      await _audioPlayer.setAsset(_ring, package: 'openim_common');
+      if (gen != _ringPlayGen) return;
+      await _audioPlayer.setLoopMode(LoopMode.one);
+      await _audioPlayer.setVolume(1.0);
+      if (gen != _ringPlayGen) return;
+      await _audioPlayer.play();
+    } catch (e, s) {
+      Logger.print('play ring failed: $e $s');
     }
   }
 
-  void _stopSound() async {
-    if (_audioPlayer.playerState.playing) {
-      _audioPlayer.stop();
-    }
+  Future<void> _stopSound() async {
+    _ringPlayGen++;
+    try {
+      await _audioPlayer.stop();
+    } catch (_) {}
   }
 
   void _insertMessage({

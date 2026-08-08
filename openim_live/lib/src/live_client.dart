@@ -156,7 +156,7 @@ class OpenIMLiveClient implements RTCBridge {
   Future<void> connectMedia({
     required SignalingCertificate certificate,
     required CallType callType,
-    bool speakerOn = false,
+    bool speakerOn = true,
     bool enableCamera = false,
     bool enableMicrophone = true,
     /// Caller waiting for answer: skip keepalive so ringback isn't ducked.
@@ -184,12 +184,30 @@ class OpenIMLiveClient implements RTCBridge {
       if (enableKeepAlive) {
         await _startKeepAlive(roomID, callType, speakerOn: speakerOn);
       }
-      await ensureMediaAudible(speakerOn: speakerOn);
+      // Respect explicit mic-off while caller still waits for answer.
+      if (enableMicrophone) {
+        await ensureMediaAudible(speakerOn: speakerOn);
+      }
       return;
     }
 
     if (_mediaConnectInFlight != null && _mediaConnectRoomID == roomID) {
       await _mediaConnectInFlight;
+      // Apply latest publish flags (e.g. unmute after peer accepts).
+      if (hasMediaFor(roomID) && _mediaRoom?.localParticipant != null) {
+        await _ensurePublished(
+          callType: callType,
+          speakerOn: speakerOn,
+          enableCamera: enableCamera,
+          enableMicrophone: enableMicrophone,
+        );
+        if (enableKeepAlive) {
+          await _startKeepAlive(roomID, callType, speakerOn: speakerOn);
+        }
+        if (enableMicrophone) {
+          await ensureMediaAudible(speakerOn: speakerOn);
+        }
+      }
       return;
     }
 
@@ -246,7 +264,9 @@ class OpenIMLiveClient implements RTCBridge {
       if (enableKeepAlive) {
         await _startKeepAlive(roomID, callType, speakerOn: speakerOn);
       }
-      await ensureMediaAudible(speakerOn: speakerOn);
+      if (enableMicrophone) {
+        await ensureMediaAudible(speakerOn: speakerOn);
+      }
       return;
     }
 
@@ -310,7 +330,16 @@ class OpenIMLiveClient implements RTCBridge {
     if (enableKeepAlive) {
       await _startKeepAlive(roomID, callType, speakerOn: speakerOn);
     }
-    await ensureMediaAudible(speakerOn: speakerOn);
+    // Waiting caller keeps mic off; unmute happens on peer accept.
+    if (enableMicrophone) {
+      await ensureMediaAudible(speakerOn: speakerOn);
+    } else {
+      try {
+        await CallAudioKeepAlive.instance.prepareForRtc(speakerOn: speakerOn);
+        await Hardware.instance.setSpeakerphoneOn(speakerOn);
+        await room.setSpeakerOn(speakerOn);
+      } catch (_) {}
+    }
     WakelockPlus.enable();
     Logger.print('connectMedia connected roomID=$roomID keepAlive=$enableKeepAlive');
   }
@@ -320,23 +349,32 @@ class OpenIMLiveClient implements RTCBridge {
     final roomID = currentRoomID;
     final callType = _mediaCallType ?? CallType.audio;
     if (roomID == null || roomID.isEmpty) return;
-    final on = speakerOn ?? _userSpeakerPreference ?? (callType == CallType.video);
+    // Match in-call UI default: speaker on unless user toggled earpiece.
+    final on = speakerOn ?? _userSpeakerPreference ?? true;
     await _startKeepAlive(roomID, callType, speakerOn: on);
-    await ensureMediaAudible(speakerOn: on);
+    await ensureMediaAudible(speakerOn: on, forceRestartMic: true);
   }
 
   /// Make sure remote audio is subscribed and local route/mic are live.
-  Future<void> ensureMediaAudible({bool? speakerOn}) async {
+  Future<void> ensureMediaAudible({
+    bool? speakerOn,
+    bool forceRestartMic = false,
+  }) async {
     final room = _mediaRoom;
     if (room == null) return;
-    final on = speakerOn ??
-        _userSpeakerPreference ??
-        (_mediaCallType == CallType.video);
+    // Default speaker on so answered calls are audible without earpiece.
+    final on = speakerOn ?? _userSpeakerPreference ?? true;
     try {
       await CallAudioKeepAlive.instance.prepareForRtc(speakerOn: on);
       await Hardware.instance.setSpeakerphoneOn(on);
       await room.setSpeakerOn(on);
-      await room.localParticipant?.setMicrophoneEnabled(true);
+      final local = room.localParticipant;
+      if (local != null) {
+        if (forceRestartMic && local.isMicrophoneEnabled() == true) {
+          await local.setMicrophoneEnabled(false);
+        }
+        await local.setMicrophoneEnabled(true);
+      }
       for (final participant in room.remoteParticipants.values) {
         for (final pub in participant.audioTrackPublications) {
           try {
@@ -345,7 +383,7 @@ class OpenIMLiveClient implements RTCBridge {
         }
       }
       Logger.print(
-          'ensureMediaAudible speaker=$on remotes=${room.remoteParticipants.length}');
+          'ensureMediaAudible speaker=$on remotes=${room.remoteParticipants.length} forceMic=$forceRestartMic');
     } catch (e, s) {
       Logger.print('ensureMediaAudible failed: $e $s');
     }
@@ -361,11 +399,16 @@ class OpenIMLiveClient implements RTCBridge {
       _mediaCallType ?? CallType.audio,
       speakerOn: prefer,
     );
-    await ensureMediaAudible(speakerOn: prefer);
+    await ensureMediaAudible(speakerOn: prefer, forceRestartMic: true);
     final room = _mediaRoom;
     // iOS often applies CallKit route a beat later — reinforce once more,
     // but never override an explicit user speaker toggle.
     unawaited(Future<void>.delayed(const Duration(milliseconds: 400), () async {
+      if (_mediaRoom != room || room == null) return;
+      final on = _userSpeakerPreference ?? prefer;
+      await ensureMediaAudible(speakerOn: on);
+    }));
+    unawaited(Future<void>.delayed(const Duration(milliseconds: 1200), () async {
       if (_mediaRoom != room || room == null) return;
       final on = _userSpeakerPreference ?? prefer;
       await ensureMediaAudible(speakerOn: on);

@@ -141,12 +141,16 @@ abstract class SignalState<T extends SignalView> extends State<T> {
       onParticipantConnected();
       unawaited(
           OpenIMLiveClient().ensureCallKeepAlive(speakerOn: enabledSpeaker));
-      unawaited(
-          OpenIMLiveClient().ensureMediaAudible(speakerOn: enabledSpeaker));
+      unawaited(OpenIMLiveClient().ensureMediaAudible(
+        speakerOn: enabledSpeaker,
+        forceRestartMic: true,
+      ));
     }
   }
 
   onParticipantConnected() {
+    // Sync field so _deferMicrophone flips off before any re-_publish.
+    callState = CallState.calling;
     callStateSubject.add(CallState.calling);
     widget.onStartCalling?.call();
   }
@@ -204,13 +208,16 @@ abstract class SignalState<T extends SignalView> extends State<T> {
       Logger.print('connecting');
       // Show in-call controls (incl. hangup) immediately — don't stay on
       // reject/pickup while LiveKit connects (that looked like a frozen page).
+      callState = CallState.calling;
       callStateSubject.add(CallState.calling);
       widget.onStartCalling?.call();
       certificate = await widget.onTapPickup!.call();
       widget.onBindRoomID?.call(roomID = certificate.roomID!);
       await connect();
-      unawaited(
-          OpenIMLiveClient().ensureMediaAudible(speakerOn: enabledSpeaker));
+      unawaited(OpenIMLiveClient().ensureMediaAudible(
+        speakerOn: enabledSpeaker,
+        forceRestartMic: true,
+      ));
       Logger.print('connected');
     } catch (e, s) {
       Logger.print('onTapPickup failed: $e $s');
