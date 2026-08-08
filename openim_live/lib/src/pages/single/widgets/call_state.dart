@@ -185,35 +185,57 @@ abstract class SignalState<T extends SignalView> extends State<T> {
     Logger.print('adoptActiveCall attached roomID=$roomID');
   }
 
+  bool _actionBusy = false;
+
   onTapPickup() async {
-    final client = OpenIMLiveClient();
-    final target = roomID ?? widget.roomID;
-    if (widget.adoptExistingMedia || client.hasMediaFor(target)) {
-      await _adoptActiveCall();
-      return;
+    if (_actionBusy) return;
+    _actionBusy = true;
+    try {
+      final client = OpenIMLiveClient();
+      final target = roomID ?? widget.roomID;
+      if (widget.adoptExistingMedia || client.hasMediaFor(target)) {
+        await _adoptActiveCall();
+        return;
+      }
+      Logger.print('connecting');
+      callStateSubject.add(CallState.connecting);
+      certificate = await widget.onTapPickup!.call();
+      widget.onBindRoomID?.call(roomID = certificate.roomID!);
+      await connect();
+      callStateSubject.add(CallState.calling);
+      widget.onStartCalling?.call();
+      Logger.print('connected');
+    } catch (e, s) {
+      _actionBusy = false;
+      Logger.print('onTapPickup failed: $e $s');
+      widget.onError?.call(e, s);
     }
-    Logger.print('connecting');
-    callStateSubject.add(CallState.connecting);
-    certificate = await widget.onTapPickup!.call();
-    widget.onBindRoomID?.call(roomID = certificate.roomID!);
-    await connect();
-    callStateSubject.add(CallState.calling);
-    widget.onStartCalling?.call();
-    Logger.print('connected');
   }
 
-  onTapHangup(bool isPositive) async {
-    await widget.onTapHangup
-        ?.call(duration, isPositive)
-        .whenComplete(() => /*isPositive ? {} : */ widget.onClose?.call());
+  onTapHangup(bool isPositive) {
+    if (_actionBusy) return;
+    _actionBusy = true;
+    // Close UI immediately — don't wait for hangup signaling / VoIP.
+    final hangup = widget.onTapHangup;
+    final d = duration;
+    unawaited(hangup?.call(d, isPositive) ?? Future.value());
+    widget.onClose?.call();
   }
 
-  onTapCancel() async {
-    await widget.onTapCancel?.call().whenComplete(() => widget.onClose?.call());
+  onTapCancel() {
+    if (_actionBusy) return;
+    _actionBusy = true;
+    final cancel = widget.onTapCancel;
+    unawaited(cancel?.call() ?? Future.value());
+    widget.onClose?.call();
   }
 
-  onTapReject() async {
-    await widget.onTapReject?.call().whenComplete(() => widget.onClose?.call());
+  onTapReject() {
+    if (_actionBusy) return;
+    _actionBusy = true;
+    final reject = widget.onTapReject;
+    unawaited(reject?.call() ?? Future.value());
+    widget.onClose?.call();
   }
 
   onTapMinimize() {

@@ -76,6 +76,7 @@ class _ControlsViewState extends State<ControlsView> {
   late bool _enabledSpeaker;
   bool _speakerRouteApplied = false;
   int _speakerApplyGen = 0;
+  bool _terminalActionBusy = false;
 
   @override
   void dispose() {
@@ -166,6 +167,30 @@ class _ControlsViewState extends State<ControlsView> {
     widget.onEnabledSpeaker?.call(next);
     OpenIMLiveClient().setUserSpeakerPreference(next);
     unawaited(_applySpeakerRoute(next));
+  }
+
+  void _onHangUpPressed() {
+    if (_terminalActionBusy) return;
+    _terminalActionBusy = true;
+    widget.onHangUp?.call(true);
+  }
+
+  void _onCancelPressed() {
+    if (_terminalActionBusy) return;
+    _terminalActionBusy = true;
+    widget.onCancel?.call();
+  }
+
+  void _onRejectPressed() {
+    if (_terminalActionBusy) return;
+    _terminalActionBusy = true;
+    widget.onReject?.call();
+  }
+
+  void _onPickUpPressed() {
+    if (_terminalActionBusy) return;
+    _terminalActionBusy = true;
+    widget.onPickUp?.call();
   }
 
   Future<void> _applySpeakerRoute(bool on) async {
@@ -278,20 +303,20 @@ class _ControlsViewState extends State<ControlsView> {
             widget.initState == CallState.call) {
       return [
         LiveButton.microphone(on: _enabledMicrophone, onTap: _toggleAudio),
-        LiveButton.cancel(onTap: widget.onCancel),
+        LiveButton.cancel(onTap: _onCancelPressed),
         LiveButton.speaker(on: _enabledSpeaker, onTap: _toggleSpeaker),
       ];
     } else if (_callState == CallState.beCalled ||
         _callState == CallState.connecting &&
             widget.initState == CallState.beCalled) {
       return [
-        LiveButton.reject(onTap: widget.onReject),
-        LiveButton.pickUp(onTap: widget.onPickUp),
+        LiveButton.reject(onTap: _onRejectPressed),
+        LiveButton.pickUp(onTap: _onPickUpPressed),
       ];
     } else if (_callState == CallState.calling) {
       return [
         LiveButton.microphone(on: _enabledMicrophone, onTap: _toggleAudio),
-        LiveButton.hungUp(onTap: () => widget.onHangUp?.call(true)),
+        LiveButton.hungUp(onTap: _onHangUpPressed),
         LiveButton.speaker(on: _enabledSpeaker, onTap: _toggleSpeaker),
       ];
     }
