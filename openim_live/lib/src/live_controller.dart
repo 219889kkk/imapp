@@ -161,6 +161,9 @@ mixin OpenIMLive {
     if (identical(PackageBridge.onCallKitDecline, _onCallKitDecline)) {
       PackageBridge.onCallKitDecline = null;
     }
+    if (identical(PackageBridge.onCallKitEnded, _onCallKitEnded)) {
+      PackageBridge.onCallKitEnded = null;
+    }
     _clearPickupCache();
     signalingSubject.close();
     backgroundSubject.close();
@@ -173,6 +176,7 @@ mixin OpenIMLive {
     PackageBridge.handleCallNotificationAction = _handleCallNotificationAction;
     PackageBridge.onCallKitAccept = _onCallKitAccept;
     PackageBridge.onCallKitDecline = _onCallKitDecline;
+    PackageBridge.onCallKitEnded = _onCallKitEnded;
     _signalingListener();
     _insertSignalingMessageListener();
     _bindLiveAlertButtons();
@@ -188,7 +192,9 @@ mixin OpenIMLive {
             Logger.print('skip foreground restore: room ended $pendingRoom');
           } else if (OpenIMLiveClient().hasMediaFor(pendingRoom)) {
             // Already answered on lock-screen — attach UI, keep CallKit connected.
-            _presentCallUi(pending.data, fromHeadless: true);
+            if (!_isRoomEnded(pendingRoom)) {
+              _presentCallUi(pending.data, fromHeadless: true);
+            }
           } else {
             // Unanswered: drop system incoming UI so only in-app Accept remains.
             unawaited(
@@ -203,6 +209,7 @@ mixin OpenIMLive {
           if (active != null &&
               !_isRoomEnded(activeRoom) &&
               OpenIMLiveClient().isBusy &&
+              OpenIMLiveClient().hasMediaFor(activeRoom) &&
               !OpenIMLiveClient().hasOverlay) {
             _presentCallUi(active, fromHeadless: true);
           }
@@ -376,10 +383,6 @@ mixin OpenIMLive {
     }
 
     await OpenIMLiveClient().reinforceLockScreenAudio(speakerOn: true);
-    unawaited(Future<void>.delayed(const Duration(milliseconds: 800), () async {
-      if (gen != _callSessionGen || _isRoomEnded(roomID)) return;
-      await OpenIMLiveClient().reinforceLockScreenAudio(speakerOn: true);
-    }));
     Logger.print('accept joined roomID=${cert.roomID} type=$callType');
     return cert;
   }
@@ -456,6 +459,40 @@ mixin OpenIMLive {
     PackageBridge.clearCallNotification?.call();
     _beCalledEvent = null;
     onTapReject(signaling..userID = OpenIM.iMManager.userID);
+  }
+
+  /// Lock-screen / system UI End — must tear down LiveKit + notify peer.
+  void _onCallKitEnded(SignalingInfo? signaling) {
+    _stopSound();
+    PackageBridge.clearCallNotification?.call();
+    _beCalledEvent = null;
+    _autoPickup = false;
+
+    final info = signaling ?? _activeCallSignaling;
+    final roomID =
+        info?.invitation?.roomID ?? OpenIMLiveClient().currentRoomID;
+    if (roomID != null && roomID.isNotEmpty && _isRoomEnded(roomID)) {
+      return;
+    }
+
+    final client = OpenIMLiveClient();
+    final inCall = client.hasMediaFor(roomID) ||
+        client.mediaRoom?.localParticipant != null;
+
+    if (inCall && info != null) {
+      Logger.print('CallKit ended active call roomID=$roomID');
+      unawaited(onTapHangup(info..userID = OpenIM.iMManager.userID, 0, true));
+      return;
+    }
+
+    if (info != null && !inCall) {
+      Logger.print('CallKit ended before connect roomID=$roomID');
+      unawaited(onTapReject(info..userID = OpenIM.iMManager.userID));
+      return;
+    }
+
+    Logger.print('CallKit ended fallback terminate roomID=$roomID');
+    _terminateCallUi(roomID);
   }
 
   void _handleCallNotificationAction(bool accept) {
@@ -694,7 +731,7 @@ mixin OpenIMLive {
     final client = OpenIMLiveClient();
     if (client.mediaRoom?.localParticipant != null) {
       Logger.print('onError ignored: media already connected');
-      unawaited(client.ensureMediaAudible(speakerOn: true, forceRestartMic: true));
+      unawaited(client.ensureMediaAudible(speakerOn: true, forceRestartMic: false));
       return;
     }
     client.close();

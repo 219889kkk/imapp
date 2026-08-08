@@ -327,6 +327,7 @@ class VoipCallkitController extends GetxService {
         case Event.actionCallEnded:
         case Event.actionCallTimeout:
           callKitActive.value = false;
+          _onEnded(event.body);
           break;
         case Event.actionDidUpdateDevicePushTokenVoip:
           final token = event.body is Map
@@ -418,6 +419,12 @@ class VoipCallkitController extends GetxService {
     } else {
       PackageBridge.handleCallNotificationAction?.call(false);
     }
+  }
+
+  void _onEnded(dynamic body) {
+    PackageBridge.clearCallNotification?.call();
+    final signaling = signalingFromCallKitBody(body);
+    PackageBridge.onCallKitEnded?.call(signaling);
   }
 
   /// Show system-style incoming call (iOS CallKit / Android full-screen).

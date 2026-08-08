@@ -147,7 +147,7 @@ class _SingleRoomViewState extends SignalState<SingleRoomView> {
     if (!_deferMicrophone) {
       await OpenIMLiveClient().ensureMediaAudible(
         speakerOn: enabledSpeaker,
-        forceRestartMic: true,
+        forceRestartMic: !widget.adoptExistingMedia,
       );
       if (enabledMicrophone) {
         await _startCallAudioKeepAlive();

@@ -22,6 +22,9 @@ class PackageBridge {
 
   /// CallKit Decline with reconstructed [SignalingInfo] (iOS VoIP path).
   static void Function(SignalingInfo signaling)? onCallKitDecline;
+
+  /// CallKit / system End during active call or timeout (lock-screen hangup).
+  static void Function(SignalingInfo? signaling)? onCallKitEnded;
 }
 
 abstract class ScanBridge {

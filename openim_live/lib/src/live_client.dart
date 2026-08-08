@@ -418,19 +418,13 @@ class OpenIMLiveClient implements RTCBridge {
       _mediaCallType ?? CallType.audio,
       speakerOn: prefer,
     );
-    await ensureMediaAudible(speakerOn: prefer, forceRestartMic: true);
+    // Once after lock-screen accept — avoid repeated mic off/on (causes harsh pops).
+    await ensureMediaAudible(speakerOn: prefer, forceRestartMic: false);
     final room = _mediaRoom;
-    // iOS often applies CallKit route a beat later — reinforce once more,
-    // but never override an explicit user speaker toggle.
-    unawaited(Future<void>.delayed(const Duration(milliseconds: 400), () async {
+    unawaited(Future<void>.delayed(const Duration(milliseconds: 600), () async {
       if (_mediaRoom != room || room == null) return;
       final on = _userSpeakerPreference ?? prefer;
-      await ensureMediaAudible(speakerOn: on);
-    }));
-    unawaited(Future<void>.delayed(const Duration(milliseconds: 1200), () async {
-      if (_mediaRoom != room || room == null) return;
-      final on = _userSpeakerPreference ?? prefer;
-      await ensureMediaAudible(speakerOn: on);
+      await ensureMediaAudible(speakerOn: on, forceRestartMic: false);
     }));
   }
 
