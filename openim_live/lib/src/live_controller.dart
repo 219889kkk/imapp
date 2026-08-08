@@ -42,7 +42,12 @@ mixin OpenIMLive {
     if (isBusy) {
       final current = OpenIMLiveClient().currentRoomID;
       if (current != null && current == roomID) {
-        Logger.print('ignore invite: already in same room $roomID');
+        // Same room — attach UI if lock-screen join has no overlay yet.
+        if (!OpenIMLiveClient().hasOverlay) {
+          _presentCallUi(info, fromHeadless: true);
+        } else {
+          Logger.print('ignore invite: already in same room $roomID');
+        }
         return;
       }
       Logger.print(
@@ -75,6 +80,7 @@ mixin OpenIMLive {
     _clearPickupCache();
     _autoPickup = false;
     _beCalledEvent = null;
+    _activeCallSignaling = null;
     _stopSound();
     PackageBridge.clearCallNotification?.call();
     FlutterOpenimLiveAlert.closeLiveAlert();
@@ -98,6 +104,8 @@ mixin OpenIMLive {
   bool _isRunningBackground = false;
 
   CallEvent? _beCalledEvent;
+  /// Signaling for the active headless/lock-screen call (for UI attach after unlock).
+  SignalingInfo? _activeCallSignaling;
 
   bool _autoPickup = false;
 
@@ -154,7 +162,18 @@ mixin OpenIMLive {
         if (_beCalledEvent != null) {
           final pending = _beCalledEvent!;
           _beCalledEvent = null;
-          signalingSubject.add(pending);
+          if (OpenIMLiveClient().hasMediaFor(pending.data.invitation?.roomID)) {
+            _presentCallUi(pending.data, fromHeadless: true);
+          } else {
+            signalingSubject.add(pending);
+          }
+        } else {
+          final active = _activeCallSignaling;
+          if (active != null &&
+              OpenIMLiveClient().isBusy &&
+              !OpenIMLiveClient().hasOverlay) {
+            _presentCallUi(active, fromHeadless: true);
+          }
         }
       }
     });
@@ -176,19 +195,101 @@ mixin OpenIMLive {
       unawaited(
           VoipCallkitController.toOrNull?.setConnected(roomID) ?? Future.value());
     }
-    // Accept + RTC token immediately — do not wait for overlay / unlock.
-    unawaited(() async {
-      try {
-        await onTapPickup(signaling..userID = OpenIM.iMManager.userID);
-      } catch (e, s) {
-        Logger.print('CallKit early pickup failed: $e $s');
-      }
-    }());
-    // Only present UI once; never re-dispatch invite if already in that call.
-    if (!isBusy) {
-      receiveNewInvitation(signaling);
-    }
+    // Accept + join LiveKit immediately so lock-screen answer can talk
+    // before Flutter UI / unlock. Unlock only attaches the same room.
+    unawaited(_headlessAcceptAndJoin(signaling));
   }
+
+  Future<void> _headlessAcceptAndJoin(SignalingInfo signaling) async {
+    _activeCallSignaling = signaling;
+    OpenIMLiveClient().onTapHangup = (duration, isPositive) => onTapHangup(
+          signaling..userID = OpenIM.iMManager.userID,
+          duration,
+          isPositive,
+        );
+    try {
+      final cert =
+          await onTapPickup(signaling..userID = OpenIM.iMManager.userID);
+      final mediaType = signaling.invitation?.mediaType;
+      final callType =
+          mediaType == 'video' ? CallType.video : CallType.audio;
+      await OpenIMLiveClient().connectMedia(
+        certificate: cert,
+        callType: callType,
+        speakerOn: callType == CallType.video,
+        // Camera often unavailable while locked; enable after unlock attach.
+        enableCamera: false,
+        onDisconnected: () {
+          final id = signaling.invitation?.roomID;
+          _terminateCallUi(id);
+        },
+      );
+      Logger.print(
+          'headless accept joined roomID=${cert.roomID} type=$callType');
+    } catch (e, s) {
+      Logger.print('CallKit early pickup/join failed: $e $s');
+    }
+    // Present in-app call UI when possible (same media, no reconnect).
+    _presentCallUi(signaling, fromHeadless: true);
+  }
+
+  /// Show call overlay if Flutter is ready. Safe to call while media already live.
+  void _presentCallUi(SignalingInfo signaling, {bool fromHeadless = false}) {
+    final client = OpenIMLiveClient();
+    if (client.hasOverlay) return;
+
+    final roomID = signaling.invitation?.roomID;
+    final mediaType = signaling.invitation?.mediaType;
+    final sessionType = signaling.invitation?.sessionType;
+    final callType = mediaType == 'audio' ? CallType.audio : CallType.video;
+    final callObj = sessionType == ConversationType.single
+        ? CallObj.single
+        : CallObj.group;
+    final overlayContext = Get.overlayContext;
+    if (overlayContext == null) {
+      // Keep pending so foreground restores UI without interrupting media.
+      _beCalledEvent = CallEvent(
+        fromHeadless || client.hasMediaFor(roomID)
+            ? CallState.calling
+            : CallState.beCalled,
+        signaling,
+      );
+      return;
+    }
+
+    final mediaReady = client.hasMediaFor(roomID);
+    OpenIMLiveClient().start(
+      overlayContext,
+      callEventSubject: signalingSubject,
+      roomID: roomID,
+      inviteeUserIDList: signaling.invitation!.inviteeUserIDList!,
+      inviterUserID: signaling.invitation!.inviterUserID!,
+      groupID: signaling.invitation!.groupID,
+      callType: callType,
+      callObj: callObj,
+      initState: mediaReady ? CallState.calling : CallState.beCalled,
+      onSyncUserInfo: onSyncUserInfo,
+      onSyncGroupInfo: onSyncGroupInfo,
+      onSyncGroupMemberInfo: onSyncGroupMemberInfo,
+      autoPickup: mediaReady ? false : _autoPickup,
+      onTapPickup: () => onTapPickup(
+        signaling..userID = OpenIM.iMManager.userID,
+      ),
+      onTapReject: () => onTapReject(
+        signaling..userID = OpenIM.iMManager.userID,
+      ),
+      onTapHangup: (duration, isPositive) => onTapHangup(
+        signaling..userID = OpenIM.iMManager.userID,
+        duration,
+        isPositive,
+      ),
+      onError: onError,
+      onRoomDisconnected: () => onRoomDisconnected(signaling),
+    );
+    _beCalledEvent = null;
+    _autoPickup = false;
+  }
+
   void _onCallKitDecline(SignalingInfo signaling) {
     _stopSound();
     PackageBridge.clearCallNotification?.call();
@@ -204,7 +305,7 @@ mixin OpenIMLive {
       final pending = _beCalledEvent;
       if (pending != null) {
         _beCalledEvent = null;
-        receiveNewInvitation(pending.data);
+        unawaited(_headlessAcceptAndJoin(pending.data));
       }
       return;
     }
@@ -220,8 +321,11 @@ mixin OpenIMLive {
     FlutterOpenimLiveAlert.buttonEvent(
       activityName: 'io.openim.MainActivity',
       onAccept: () {
-        // Keep pending invite; returning to foreground will present the call UI.
         _autoPickup = true;
+        final pending = _beCalledEvent;
+        if (pending != null) {
+          unawaited(_headlessAcceptAndJoin(pending.data));
+        }
       },
       onReject: () {
         final pending = _beCalledEvent;
@@ -306,6 +410,12 @@ mixin OpenIMLive {
             final overlayContext = Get.overlayContext;
             if (overlayContext == null) {
               _beCalledEvent = event;
+              return;
+            }
+            // Prefer shared presenter (handles headless media / no reconnect).
+            if (_autoPickup ||
+                OpenIMLiveClient().hasMediaFor(event.data.invitation?.roomID)) {
+              _presentCallUi(event.data, fromHeadless: _autoPickup);
               return;
             }
             OpenIMLiveClient().start(

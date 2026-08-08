@@ -36,6 +36,7 @@ abstract class SignalView extends StatefulWidget {
     this.onStartCalling,
     this.onError,
     this.onRoomDisconnected,
+    this.adoptExistingMedia = false,
   }) : super(key: key);
   final CallType callType;
   final CallState initState;
@@ -49,6 +50,8 @@ abstract class SignalView extends StatefulWidget {
   final Future Function()? onTapReject;
   final Function()? onClose;
   final bool autoPickup;
+  /// Lock-screen already joined LiveKit — UI only attaches, no reconnect.
+  final bool adoptExistingMedia;
   final Function(String roomID)? onBindRoomID;
   final Function()? onWaitingAccept;
   final Function()? onBusyLine;
@@ -149,10 +152,13 @@ abstract class SignalState<T extends SignalView> extends State<T> {
 
   onDail() async {
     if (widget.initState == CallState.call) {
-      // callStateSubject.add(CallState.connecting);
       certificate = await widget.onDial!.call();
       widget.onBindRoomID?.call(roomID = certificate.roomID!);
       await connect();
+    } else if (widget.adoptExistingMedia ||
+        widget.initState == CallState.calling) {
+      // Unlock into an already-connected lock-screen call.
+      await _adoptActiveCall();
     }
   }
 
@@ -162,7 +168,28 @@ abstract class SignalState<T extends SignalView> extends State<T> {
     }
   }
 
+  Future<void> _adoptActiveCall() async {
+    final client = OpenIMLiveClient();
+    final cert = client.mediaCertificate;
+    if (cert == null) {
+      Logger.print('adoptActiveCall: no media certificate');
+      return;
+    }
+    certificate = cert;
+    widget.onBindRoomID?.call(roomID = certificate.roomID!);
+    await connect();
+    callStateSubject.add(CallState.calling);
+    widget.onStartCalling?.call();
+    Logger.print('adoptActiveCall attached roomID=$roomID');
+  }
+
   onTapPickup() async {
+    final client = OpenIMLiveClient();
+    final target = roomID ?? widget.roomID;
+    if (widget.adoptExistingMedia || client.hasMediaFor(target)) {
+      await _adoptActiveCall();
+      return;
+    }
     Logger.print('connecting');
     callStateSubject.add(CallState.connecting);
     certificate = await widget.onTapPickup!.call();

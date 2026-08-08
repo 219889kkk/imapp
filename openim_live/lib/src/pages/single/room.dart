@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:collection/collection.dart';
 import 'package:livekit_client/livekit_client.dart';
@@ -32,6 +31,7 @@ class SingleRoomView extends SignalView {
     super.onSyncUserInfo,
     super.onError,
     super.onRoomDisconnected,
+    super.adoptExistingMedia = false,
   });
 
   @override
@@ -39,104 +39,103 @@ class SingleRoomView extends SignalView {
 }
 
 class _SingleRoomViewState extends SignalState<SingleRoomView> {
-  EventsListener<RoomEvent>? _listener;
   Room? _room;
 
   @override
   void dispose() {
-    // always dispose listener
-    unawaited(CallAudioKeepAlive.instance.stop());
-    (() async {
-      _room?.removeListener(_onRoomDidUpdate);
-      await _listener?.dispose();
-      await _room?.remoteParticipants.values.firstOrNull?.dispose();
-      await _room?.localParticipant?.dispose();
-      await _room?.disconnect();
-      await _room?.dispose();
-    })();
+    // Media room is owned by OpenIMLiveClient — do not disconnect here.
+    // Otherwise unlocking into the app would tear down an active lock-screen call.
+    final room = _room;
+    if (room != null) {
+      room.removeListener(_onRoomDidUpdate);
+    }
+    _room = null;
     super.dispose();
   }
 
   @override
   Future<void> connect() async {
-    final url = certificate.liveURL!;
-    final token = certificate.token!;
-    final busyLineUsers = certificate.busyLineUserIDList ?? [];
-    if (busyLineUsers.isNotEmpty) {
-      widget.onBusyLine?.call();
-      widget.onClose?.call();
+    final client = OpenIMLiveClient();
+    final targetRoomID = certificate.roomID ?? roomID ?? widget.roomID;
+
+    // Already talking from lock-screen / headless accept — attach only.
+    if (widget.adoptExistingMedia || client.hasMediaFor(targetRoomID)) {
+      await _attachSharedMedia(client);
       return;
     }
-    // Try to connect to a room
-    // This will throw an Exception if it fails for any reason.
-    try {
-      //create new room
-      _room = Room();
 
-      // Create a Listener before connecting
-      _listener = _room?.createListener();
-      // Try to connect to the room
-      // This will throw an Exception if it fails for any reason.
+    try {
       final speakerOn = enabledSpeaker;
-      await _room?.connect(url, token,
-          roomOptions: RoomOptions(
-              dynacast: true,
-              adaptiveStream: true,
-              defaultAudioCaptureOptions: const AudioCaptureOptions(
-                echoCancellation: true,
-                noiseSuppression: true,
-                autoGainControl: true,
-                highPassFilter: true,
-              ),
-              defaultAudioOutputOptions: AudioOutputOptions(speakerOn: speakerOn),
-              defaultCameraCaptureOptions: const CameraCaptureOptions(params: VideoParametersPresets.h720_169),
-              defaultVideoPublishOptions: VideoPublishOptions(
-                  simulcast: true,
-                  videoCodec: 'VP9',
-                  videoEncoding: const VideoEncoding(
-                    maxBitrate: 5 * 1000 * 1000,
-                    maxFramerate: 15,
-                  ))));
-      if (!mounted) return;
-      _room?.addListener(_onRoomDidUpdate);
-      if (null != _listener) _setUpListeners();
-      if (null != _room) roomDidUpdateSubject.add(_room!);
-      _sortParticipants();
+      await client.connectMedia(
+        certificate: certificate,
+        callType: widget.callType,
+        speakerOn: speakerOn,
+        enableCamera: widget.callType == CallType.video,
+        onDisconnected: () {
+          if (!mounted) return;
+          WidgetsBindingCompatible.instance?.addPostFrameCallback((_) {
+            widget.onRoomDisconnected?.call();
+            widget.onClose?.call();
+          });
+        },
+      );
+      await _attachSharedMedia(client);
       if (CallState.call == callState || CallState.connecting == callState) {
         widget.onWaitingAccept?.call();
       }
-      WidgetsBindingCompatible.instance?.addPostFrameCallback((_) async {
-        await _publish();
-        if (!_deferMicrophone && enabledMicrophone) {
-          await _startCallAudioKeepAlive();
-        }
-      });
     } catch (error, stackTrace) {
       widget.onError?.call(error, stackTrace);
     }
   }
 
-  void _setUpListeners() => _listener!
-    ..on<RoomDisconnectedEvent>((event) async {
-      Logger.print('Room disconnected: reason => ${event.reason}');
-      WidgetsBindingCompatible.instance?.addPostFrameCallback((_) {
-        widget.onRoomDisconnected?.call();
-        widget.onClose?.call();
-      });
-    })
-    ..on<RoomRecordingStatusChanged>((event) {})
-    ..on<LocalTrackPublishedEvent>((_) => _sortParticipants())
-    ..on<LocalTrackUnpublishedEvent>((_) => _sortParticipants())
-    ..on<ParticipantConnectedEvent>((_) => onParticipantConnected())
-    ..on<ParticipantDisconnectedEvent>((_) => onParticipantDisconnected())
-    ..on<DataReceivedEvent>((event) {
-      String decoded = 'Failed to decode';
-      try {
-        decoded = utf8.decode(event.data);
-      } catch (_) {
-        Logger.print('Failed to decode: $_');
-      }
-    });
+  Future<void> _attachSharedMedia(OpenIMLiveClient client) async {
+    final room = client.mediaRoom;
+    final cert = client.mediaCertificate;
+    if (room == null || cert == null) {
+      throw StateError('no shared media room to attach');
+    }
+    certificate = cert;
+    roomID = cert.roomID ?? roomID;
+    widget.onBindRoomID?.call(roomID!);
+    _room = room;
+
+    room.addListener(_onRoomDidUpdate);
+    _sortParticipants();
+    roomDidUpdateSubject.add(room);
+
+    client.bindUiToMediaRoom(
+      onRoom: (r) {
+        if (!mounted) return;
+        _room = r;
+        _sortParticipants();
+        roomDidUpdateSubject.add(r);
+      },
+      onRemotePresent: () {
+        if (!mounted) return;
+        onParticipantConnected();
+      },
+      onRemoteLeft: () {
+        if (!mounted) return;
+        onParticipantDisconnected();
+      },
+      onDisconnected: () {
+        if (!mounted) return;
+        WidgetsBindingCompatible.instance?.addPostFrameCallback((_) {
+          widget.onRoomDisconnected?.call();
+          widget.onClose?.call();
+        });
+      },
+    );
+
+    // Ensure tracks still published after unlock.
+    await _publish();
+    if (!_deferMicrophone && enabledMicrophone) {
+      await _startCallAudioKeepAlive();
+    }
+    if (room.remoteParticipants.isNotEmpty) {
+      onParticipantConnected();
+    }
+  }
 
   /// Caller still waiting: keep mic off while ring plays to avoid feedback noise.
   bool get _deferMicrophone =>
@@ -155,7 +154,6 @@ class _SingleRoomViewState extends SignalState<SingleRoomView> {
 
   Future<void> _publish() async {
     await _applySpeakerRoute();
-    // video will fail when running in ios simulator
     try {
       final enabled = widget.callType == CallType.video;
       await _room?.localParticipant?.setCameraEnabled(enabled);
@@ -177,7 +175,6 @@ class _SingleRoomViewState extends SignalState<SingleRoomView> {
       if (participant == null) return;
       if (!forceRestart && participant.isMicrophoneEnabled() == true) return;
       if (forceRestart && participant.isMicrophoneEnabled() == true) {
-        // Cycle mic to recover after OS interruption / background.
         await participant.setMicrophoneEnabled(false);
       }
       await participant.setMicrophoneEnabled(true);
@@ -190,7 +187,8 @@ class _SingleRoomViewState extends SignalState<SingleRoomView> {
     final id = roomID ?? widget.roomID;
     if (id == null || id.isEmpty) return;
     final keep = CallAudioKeepAlive.instance;
-    keep.onNeedRepublishMic = () => _ensureMicrophonePublished(forceRestart: true);
+    keep.onNeedRepublishMic =
+        () => _ensureMicrophonePublished(forceRestart: true);
     await keep.start(
       roomID: id,
       isVideo: widget.callType == CallType.video,
@@ -248,7 +246,7 @@ class _SingleRoomViewState extends SignalState<SingleRoomView> {
     if (null != remoteParticipantTrack) {
       onParticipantConnected();
     }
-    setState(() {});
+    if (mounted) setState(() {});
   }
 
   @override

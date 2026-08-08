@@ -55,7 +55,6 @@ class CallAudioKeepAlive with WidgetsBindingObserver {
 
   Future<void> stop() async {
     if (!_active && _roomID == null) return;
-    final roomID = _roomID;
     _active = false;
     _roomID = null;
     WidgetsBinding.instance.removeObserver(this);
@@ -71,11 +70,9 @@ class CallAudioKeepAlive with WidgetsBindingObserver {
       } catch (e, s) {
         Logger.print('CallAudioKeepAlive disable FGS failed: $e $s');
       }
-    } else if (Platform.isIOS && roomID != null && roomID.isNotEmpty) {
-      try {
-        await FlutterCallkitIncoming.endCall(roomID);
-      } catch (_) {}
     }
+    // Never endCall here — that looks like a hangup when UI remounts after unlock.
+    // CallKit teardown belongs to live hangup / _terminateCallUi only.
     Logger.print('CallAudioKeepAlive stop');
   }
 
