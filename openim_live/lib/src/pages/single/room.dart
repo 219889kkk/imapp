@@ -101,6 +101,7 @@ class _SingleRoomViewState extends SignalState<SingleRoomView> {
     if (_sharedMediaAttached) {
       _room = room;
       _sortParticipants();
+      _syncMicStateFromRoom();
       roomDidUpdateSubject.add(room);
       if (room.remoteParticipants.isNotEmpty) {
         onParticipantConnected();
@@ -144,11 +145,13 @@ class _SingleRoomViewState extends SignalState<SingleRoomView> {
     // Ensure tracks still published after unlock / in-app join.
     // If peer already joined (or we already left waiting state), unmute now.
     await _publish();
+    _syncMicStateFromRoom();
     if (!_deferMicrophone) {
       await OpenIMLiveClient().ensureMediaAudible(
         speakerOn: enabledSpeaker,
         forceRestartMic: !widget.adoptExistingMedia,
       );
+      _syncMicStateFromRoom();
       if (enabledMicrophone) {
         await _startCallAudioKeepAlive();
       }
@@ -161,7 +164,22 @@ class _SingleRoomViewState extends SignalState<SingleRoomView> {
     }
     if (room.remoteParticipants.isNotEmpty) {
       onParticipantConnected();
+    } else if (callState == CallState.connecting) {
+      // Callee: LiveKit is up even if peer track arrives a moment later.
+      _promoteInCallUi(reason: 'attach-no-remote-yet');
     }
+    _notifyRoomUi();
+  }
+
+  void _syncMicStateFromRoom() {
+    final mic = _room?.localParticipant?.isMicrophoneEnabled();
+    if (mic == null) return;
+    enabledMicrophone = mic;
+  }
+
+  void _notifyRoomUi() {
+    final room = _room;
+    if (room != null) roomDidUpdateSubject.add(room);
   }
 
   /// Caller still waiting: keep mic off while ring plays to avoid feedback noise.
@@ -227,18 +245,27 @@ class _SingleRoomViewState extends SignalState<SingleRoomView> {
   void onParticipantConnected() {
     super.onParticipantConnected();
     if (_peerAudioArmed) {
-      // Already unmuted after accept — avoid mic off/on flap on every room tick.
       return;
     }
     _peerAudioArmed = true;
-    // Force republish: waiting caller had mic muted for ringback.
-    unawaited(_ensureMicrophonePublished(forceRestart: true));
+    final adopt = widget.adoptExistingMedia;
+    // Lock-screen / headless accept: mic is already live — avoid off/on flap
+    // that makes the mute button briefly show "muted".
+    if (!adopt) {
+      unawaited(_ensureMicrophonePublished(forceRestart: true));
+    }
     unawaited(OpenIMLiveClient().ensureCallKeepAlive(speakerOn: enabledSpeaker));
     unawaited(_startCallAudioKeepAlive());
-    unawaited(OpenIMLiveClient().ensureMediaAudible(
-      speakerOn: enabledSpeaker,
-      forceRestartMic: true,
-    ));
+    unawaited(OpenIMLiveClient()
+        .ensureMediaAudible(
+          speakerOn: enabledSpeaker,
+          forceRestartMic: !adopt,
+        )
+        .then((_) {
+      if (!mounted) return;
+      _syncMicStateFromRoom();
+      _notifyRoomUi();
+    }));
   }
 
   void _onRoomDidUpdate() {

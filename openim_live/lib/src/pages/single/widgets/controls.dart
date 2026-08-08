@@ -18,6 +18,7 @@ class ControlsView extends StatefulWidget {
     this.initState = CallState.call,
     this.callType = CallType.video,
     this.initialSpeakerOn,
+    this.initialMicOn,
     required this.callStateStream,
     required this.roomDidUpdateStream,
     this.userInfo,
@@ -37,6 +38,8 @@ class ControlsView extends StatefulWidget {
   final CallType callType;
   /// Prefer parent call-page speaker state (e.g. lock-screen forced speaker).
   final bool? initialSpeakerOn;
+  /// Prefer parent / LiveKit mic state when attaching to an existing room.
+  final bool? initialMicOn;
   final UserInfo? userInfo;
   final Function()? onMinimize;
   final Function(int duration)? onCallingDuration;
@@ -95,6 +98,7 @@ class _ControlsViewState extends State<ControlsView> {
   void initState() {
     _enabledSpeaker =
         widget.initialSpeakerOn ?? (widget.callType == CallType.video);
+    _enabledMicrophone = widget.initialMicOn ?? true;
     _enabledCamera = widget.callType == CallType.video;
     _onChangedCallState(widget.initState);
     _callStateChangedSub = widget.callStateStream.listen(_onChangedCallState);
@@ -116,6 +120,27 @@ class _ControlsViewState extends State<ControlsView> {
       _participant = room.localParticipant;
       _participant?.addListener(_onChange);
     }
+    _syncMicFromParticipant();
+  }
+
+  void _syncMicFromParticipant() {
+    final p = _participant ?? _room?.localParticipant;
+    if (p == null) return;
+    final live = p.isMicrophoneEnabled();
+    if (live == null) return;
+    if (_enabledMicrophone == live) return;
+    _enabledMicrophone = live;
+    widget.onEnabledMicrophone?.call(live);
+  }
+
+  void _scheduleMicUiResync() {
+    for (final delay in const [200, 600]) {
+      Future<void>.delayed(Duration(milliseconds: delay), () {
+        if (!mounted) return;
+        _syncMicFromParticipant();
+        setState(() {});
+      });
+    }
   }
 
   _onChangedCallState(CallState state) {
@@ -130,6 +155,8 @@ class _ControlsViewState extends State<ControlsView> {
       }
       if (_callState == CallState.calling) {
         _startCallingTimer();
+        _syncMicFromParticipant();
+        _scheduleMicUiResync();
       }
     });
   }
@@ -151,6 +178,7 @@ class _ControlsViewState extends State<ControlsView> {
   }
 
   void _onChange() {
+    _syncMicFromParticipant();
     setState(() {});
   }
 

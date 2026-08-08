@@ -547,6 +547,13 @@ mixin OpenIMLive {
             _beCalledEvent = null;
             FlutterOpenimLiveAlert.closeLiveAlert();
             PackageBridge.clearCallNotification?.call();
+            // Stop ring on any non-ringing state (accept/hangup/etc.).
+            if (event.state == CallState.beAccepted ||
+                event.state == CallState.beRejected ||
+                event.state == CallState.beCanceled ||
+                event.state == CallState.beHangup) {
+              unawaited(_stopSound());
+            }
           }
           if (event.state == CallState.beCalled) {            if (!_autoPickup) {
               _playSound();

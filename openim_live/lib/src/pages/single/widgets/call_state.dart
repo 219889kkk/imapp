@@ -141,11 +141,24 @@ abstract class SignalState<T extends SignalView> extends State<T> {
     }
   }
 
-  onParticipantConnected() {
-    // Sync field so _deferMicrophone flips off before any re-_publish.
+  String? get _callRoomID => roomID ?? widget.roomID;
+
+  /// Move UI off "connecting" once shared LiveKit media is live.
+  void _promoteInCallUi({String? reason}) {
+    if (!mounted) return;
+    if (callState == CallState.calling) return;
+    final client = OpenIMLiveClient();
+    if (!client.isConnectedMedia(_callRoomID)) return;
+    Logger.print(
+        'promote in-call UI reason=$reason from=$callState roomID=$_callRoomID');
     callState = CallState.calling;
     callStateSubject.add(CallState.calling);
     widget.onStartCalling?.call();
+  }
+
+  onParticipantConnected() {
+    // Sync field so _deferMicrophone flips off before any re-_publish.
+    _promoteInCallUi(reason: 'peer-joined');
   }
 
   onParticipantDisconnected() {
@@ -178,15 +191,15 @@ abstract class SignalState<T extends SignalView> extends State<T> {
   Future<void> _adoptActiveCall() async {
     final client = OpenIMLiveClient();
     final cert = client.mediaCertificate;
-    if (cert == null) {
-      Logger.print('adoptActiveCall: no media certificate');
+    if (cert != null) {
+      certificate = cert;
+      widget.onBindRoomID?.call(roomID = certificate.roomID!);
+    } else if (!client.isConnectedMedia(_callRoomID)) {
+      Logger.print('adoptActiveCall: no media to attach roomID=$_callRoomID');
       return;
     }
-    certificate = cert;
-    widget.onBindRoomID?.call(roomID = certificate.roomID!);
     await connect();
-    callStateSubject.add(CallState.calling);
-    widget.onStartCalling?.call();
+    _promoteInCallUi(reason: 'adopt');
     Logger.print('adoptActiveCall attached roomID=$roomID');
   }
 
@@ -209,10 +222,14 @@ abstract class SignalState<T extends SignalView> extends State<T> {
       callStateSubject.add(CallState.connecting);
       // Unified pipeline: permissions + accept signal + token + LiveKit join.
       await widget.onTapPickup!.call();
-      await _adoptActiveCall();
-      callState = CallState.calling;
-      callStateSubject.add(CallState.calling);
-      widget.onStartCalling?.call();
+      // Media is live after accept — leave "connecting" even if UI attach is slow.
+      _promoteInCallUi(reason: 'after-accept');
+      try {
+        await _adoptActiveCall();
+      } catch (e, s) {
+        Logger.print('adopt after accept failed: $e $s');
+        _promoteInCallUi(reason: 'adopt-error-fallback');
+      }
       Logger.print('accept from UI attached roomID=$roomID');
     } catch (e, s) {
       Logger.print('onTapPickup failed: $e $s');
@@ -224,6 +241,8 @@ abstract class SignalState<T extends SignalView> extends State<T> {
           return;
         } catch (e2, s2) {
           Logger.print('adopt after pickup error failed: $e2 $s2');
+          _promoteInCallUi(reason: 'pickup-error-fallback');
+          return;
         }
       }
       if (mounted && widget.initState == CallState.beCalled) {
@@ -233,6 +252,7 @@ abstract class SignalState<T extends SignalView> extends State<T> {
       widget.onError?.call(e, s);
     } finally {
       _pickupBusy = false;
+      _promoteInCallUi(reason: 'pickup-finally');
     }
   }
 
@@ -354,6 +374,7 @@ abstract class SignalState<T extends SignalView> extends State<T> {
                     initState: widget.initState,
                     callType: widget.callType,
                     initialSpeakerOn: enabledSpeaker,
+                    initialMicOn: enabledMicrophone,
                     userInfo: userInfo,
                     onMinimize: onTapMinimize,
                     onCallingDuration: callingDuration,
