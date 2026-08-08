@@ -74,6 +74,13 @@ mixin OpenIMLive {
     _endedRoomUntilMs.removeWhere((_, until) => until <= now);
   }
 
+  bool _isRoomEnded(String? roomID) {
+    final id = roomID?.trim() ?? '';
+    if (id.isEmpty) return false;
+    _pruneEndedRooms();
+    return _endedRoomUntilMs.containsKey(id);
+  }
+
   /// Tear down in-app + system call UI for [roomID] (peer hangup / cancel).
   void _terminateCallUi(String? roomID) {
     _markRoomEnded(roomID);
@@ -81,6 +88,7 @@ mixin OpenIMLive {
     _autoPickup = false;
     _beCalledEvent = null;
     _activeCallSignaling = null;
+    _callSessionGen++; // invalidate in-flight headless accept/present
     _stopSound();
     PackageBridge.clearCallNotification?.call();
     FlutterOpenimLiveAlert.closeLiveAlert();
@@ -106,6 +114,8 @@ mixin OpenIMLive {
   CallEvent? _beCalledEvent;
   /// Signaling for the active headless/lock-screen call (for UI attach after unlock).
   SignalingInfo? _activeCallSignaling;
+  /// Bumped on hangup/terminate so late async accept cannot reopen UI.
+  int _callSessionGen = 0;
 
   bool _autoPickup = false;
 
@@ -162,14 +172,20 @@ mixin OpenIMLive {
         if (_beCalledEvent != null) {
           final pending = _beCalledEvent!;
           _beCalledEvent = null;
-          if (OpenIMLiveClient().hasMediaFor(pending.data.invitation?.roomID)) {
+          final pendingRoom = pending.data.invitation?.roomID;
+          if (_isRoomEnded(pendingRoom)) {
+            Logger.print('skip foreground restore: room ended $pendingRoom');
+          } else if (OpenIMLiveClient()
+              .hasMediaFor(pendingRoom)) {
             _presentCallUi(pending.data, fromHeadless: true);
           } else {
             signalingSubject.add(pending);
           }
         } else {
           final active = _activeCallSignaling;
+          final activeRoom = active?.invitation?.roomID;
           if (active != null &&
+              !_isRoomEnded(activeRoom) &&
               OpenIMLiveClient().isBusy &&
               !OpenIMLiveClient().hasOverlay) {
             _presentCallUi(active, fromHeadless: true);
@@ -201,6 +217,12 @@ mixin OpenIMLive {
   }
 
   Future<void> _headlessAcceptAndJoin(SignalingInfo signaling) async {
+    final roomID = signaling.invitation?.roomID;
+    if (_isRoomEnded(roomID)) {
+      Logger.print('skip headless accept: room already ended $roomID');
+      return;
+    }
+    final gen = _callSessionGen;
     _activeCallSignaling = signaling;
     OpenIMLiveClient().onTapHangup = (duration, isPositive) => onTapHangup(
           signaling..userID = OpenIM.iMManager.userID,
@@ -210,6 +232,15 @@ mixin OpenIMLive {
     try {
       final cert =
           await onTapPickup(signaling..userID = OpenIM.iMManager.userID);
+      if (gen != _callSessionGen || _isRoomEnded(roomID)) {
+        Logger.print('abort headless join after hangup roomID=$roomID');
+        if (roomID != null && roomID.isNotEmpty) {
+          OpenIMLiveClient().closeByRoomID(roomID);
+        } else {
+          OpenIMLiveClient().close();
+        }
+        return;
+      }
       final mediaType = signaling.invitation?.mediaType;
       final callType =
           mediaType == 'video' ? CallType.video : CallType.audio;
@@ -221,24 +252,42 @@ mixin OpenIMLive {
         enableCamera: false,
         onDisconnected: () {
           final id = signaling.invitation?.roomID;
-          _terminateCallUi(id);
+          if (!_isRoomEnded(id)) {
+            _terminateCallUi(id);
+          }
         },
       );
+      if (gen != _callSessionGen || _isRoomEnded(roomID)) {
+        Logger.print('abort headless present after hangup roomID=$roomID');
+        if (roomID != null && roomID.isNotEmpty) {
+          OpenIMLiveClient().closeByRoomID(roomID);
+        } else {
+          OpenIMLiveClient().close();
+        }
+        return;
+      }
       Logger.print(
           'headless accept joined roomID=${cert.roomID} type=$callType');
     } catch (e, s) {
       Logger.print('CallKit early pickup/join failed: $e $s');
+      return;
     }
     // Present in-app call UI when possible (same media, no reconnect).
-    _presentCallUi(signaling, fromHeadless: true);
+    if (gen == _callSessionGen && !_isRoomEnded(roomID)) {
+      _presentCallUi(signaling, fromHeadless: true);
+    }
   }
 
   /// Show call overlay if Flutter is ready. Safe to call while media already live.
   void _presentCallUi(SignalingInfo signaling, {bool fromHeadless = false}) {
+    final roomID = signaling.invitation?.roomID;
+    if (_isRoomEnded(roomID)) {
+      Logger.print('skip present UI: room ended $roomID');
+      return;
+    }
     final client = OpenIMLiveClient();
     if (client.hasOverlay) return;
 
-    final roomID = signaling.invitation?.roomID;
     final mediaType = signaling.invitation?.mediaType;
     final sessionType = signaling.invitation?.sessionType;
     final callType = mediaType == 'audio' ? CallType.audio : CallType.video;
@@ -800,7 +849,12 @@ mixin OpenIMLive {
 
   onTapHangup(SignalingInfo signaling, int duration, bool isPositive) async {
     final roomID = signaling.invitation?.roomID;
+    // Mark ended + bump session gen FIRST so late invite/accept cannot reopen UI.
     _markRoomEnded(roomID);
+    _callSessionGen++;
+    _activeCallSignaling = null;
+    _beCalledEvent = null;
+    _autoPickup = false;
     _clearPickupCache();
     if (isPositive) {
       final data = {
@@ -825,9 +879,16 @@ mixin OpenIMLive {
       ));
     }
     _stopSound();
+    PackageBridge.clearCallNotification?.call();
+    FlutterOpenimLiveAlert.closeLiveAlert();
     unawaited(CallAudioKeepAlive.instance.stop());
     unawaited(
         VoipCallkitController.toOrNull?.endCall(roomID) ?? Future.value());
+    if (roomID != null && roomID.isNotEmpty) {
+      OpenIMLiveClient().closeByRoomID(roomID);
+    } else {
+      OpenIMLiveClient().close();
+    }
 
     insertSignalingMessageSubject.add(CallEvent(
       CallState.hangup,

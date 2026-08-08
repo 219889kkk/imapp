@@ -204,6 +204,10 @@ class IMController extends GetxController with IMCallback, OpenIMLive {
           if (sendTime > 0 && now - sendTime > 60 * 1000) {
             return true;
           }
+          // Own outbound invite echoed/synced must not open incoming UI.
+          if (msg.sendID == OpenIM.iMManager.userID) {
+            return true;
+          }
           // Busy / same-room: receiveNewInvitation no-ops; skip extra banners.
           final busy = OpenIMLiveClient().isBusy;
           receiveNewInvitation(signaling);
