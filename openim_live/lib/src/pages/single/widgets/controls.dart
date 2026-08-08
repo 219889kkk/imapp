@@ -72,11 +72,13 @@ class _ControlsViewState extends State<ControlsView> {
   LocalParticipant? _participant;
 
   bool _enabledMicrophone = true;
+  bool _enabledCamera = true;
 
   late bool _enabledSpeaker;
   bool _speakerRouteApplied = false;
   int _speakerApplyGen = 0;
   bool _terminalActionBusy = false;
+  bool _cameraBusy = false;
 
   @override
   void dispose() {
@@ -92,6 +94,7 @@ class _ControlsViewState extends State<ControlsView> {
   void initState() {
     _enabledSpeaker =
         widget.initialSpeakerOn ?? (widget.callType == CallType.video);
+    _enabledCamera = widget.callType == CallType.video;
     _onChangedCallState(widget.initState);
     _callStateChangedSub = widget.callStateStream.listen(_onChangedCallState);
     _roomDidUpdateSub = widget.roomDidUpdateStream.listen(_roomDidUpdate);
@@ -228,10 +231,50 @@ class _ControlsViewState extends State<ControlsView> {
         cameraCaptureOptions: CameraCaptureOptions(cameraPosition: position));
   }
 
-  void _toggleCamera() async {
+  void _toggleCameraEnabled() {
+    if (_cameraBusy) return;
+    final next = !_enabledCamera;
+    setState(() => _enabledCamera = next);
+    _cameraBusy = true;
+    unawaited(() async {
+      try {
+        if (next) {
+          await _enableVideo();
+        } else {
+          await _disableVideo();
+        }
+      } catch (e, s) {
+        Logger.print('toggle camera failed: $e $s');
+        if (mounted) setState(() => _enabledCamera = !next);
+      } finally {
+        _cameraBusy = false;
+      }
+    }());
+  }
+
+  void _toggleCamera() {
     final track = _participant?.videoTrackPublications.firstOrNull?.track;
     if (track == null) return;
-    Helper.switchCamera(track.mediaStreamTrack);
+    unawaited(Helper.switchCamera(track.mediaStreamTrack));
+  }
+
+  Widget _topIconButton({
+    required String icon,
+    required VoidCallback? onTap,
+  }) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(22.r),
+        child: Padding(
+          padding: EdgeInsets.all(10.w),
+          child: icon.toImage
+            ..width = 30.w
+            ..height = 30.h,
+        ),
+      ),
+    );
   }
 
   @override
@@ -239,36 +282,32 @@ class _ControlsViewState extends State<ControlsView> {
         child: Stack(
           children: [
             Positioned(
-              left: 16.w,
-              top: 7.h,
-              child: ImageRes.liveClose.toImage
-                ..width = 30.w
-                ..height = 30.h
-                ..onTap = widget.onMinimize,
+              left: 6.w,
+              top: 0,
+              child: _topIconButton(
+                icon: ImageRes.liveClose,
+                onTap: widget.onMinimize,
+              ),
             ),
             if (null != _participant)
               Positioned(
-                right: 16.w,
-                top: 7.h,
+                right: 6.w,
+                top: 0,
                 child: Visibility(
                   visible: isVideo,
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      (_participant!.isCameraEnabled()
-                              ? ImageRes.liveCameraOff
-                              : ImageRes.liveCameraOn)
-                          .toImage
-                        ..width = 30.w
-                        ..height = 30.h
-                        ..onTap = (_participant!.isCameraEnabled()
-                            ? _disableVideo
-                            : _enableVideo),
-                      16.horizontalSpace,
-                      ImageRes.liveSwitchCamera.toImage
-                        ..width = 30.w
-                        ..height = 30.h
-                        ..onTap = _toggleCamera,
+                      _topIconButton(
+                        icon: _enabledCamera
+                            ? ImageRes.liveCameraOff
+                            : ImageRes.liveCameraOn,
+                        onTap: _toggleCameraEnabled,
+                      ),
+                      _topIconButton(
+                        icon: ImageRes.liveSwitchCamera,
+                        onTap: _toggleCamera,
+                      ),
                     ],
                   ),
                 ),
