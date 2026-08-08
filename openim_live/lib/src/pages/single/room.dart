@@ -66,11 +66,15 @@ class _SingleRoomViewState extends SignalState<SingleRoomView> {
 
     try {
       final speakerOn = enabledSpeaker;
+      // Caller waiting for answer: join room but skip CallKit/keepalive so
+      // ringback isn't ducked and no lock-screen "ongoing call" is created.
+      final waitingForPeer = widget.initState == CallState.call;
       await client.connectMedia(
         certificate: certificate,
         callType: widget.callType,
         speakerOn: speakerOn,
-        enableCamera: widget.callType == CallType.video,
+        enableCamera: widget.callType == CallType.video && !waitingForPeer,
+        enableKeepAlive: !waitingForPeer,
         onDisconnected: () {
           if (!mounted) return;
           WidgetsBindingCompatible.instance?.addPostFrameCallback((_) {
@@ -200,6 +204,7 @@ class _SingleRoomViewState extends SignalState<SingleRoomView> {
   void onParticipantConnected() {
     super.onParticipantConnected();
     _ensureMicrophonePublished();
+    unawaited(OpenIMLiveClient().ensureCallKeepAlive());
     unawaited(_startCallAudioKeepAlive());
   }
 

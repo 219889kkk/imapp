@@ -151,6 +151,8 @@ class OpenIMLiveClient implements RTCBridge {
     required CallType callType,
     bool speakerOn = false,
     bool enableCamera = false,
+    /// Caller waiting for answer: skip keepalive so ringback isn't ducked.
+    bool enableKeepAlive = true,
     VoidCallback? onDisconnected,
   }) async {
     final roomID = certificate.roomID?.trim() ?? '';
@@ -170,7 +172,9 @@ class OpenIMLiveClient implements RTCBridge {
         speakerOn: speakerOn,
         enableCamera: enableCamera,
       );
-      await _startKeepAlive(roomID, callType);
+      if (enableKeepAlive) {
+        await _startKeepAlive(roomID, callType);
+      }
       return;
     }
 
@@ -184,6 +188,7 @@ class OpenIMLiveClient implements RTCBridge {
       callType: callType,
       speakerOn: speakerOn,
       enableCamera: enableCamera,
+      enableKeepAlive: enableKeepAlive,
     );
     _mediaConnectInFlight = future;
     _mediaConnectRoomID = roomID;
@@ -202,6 +207,7 @@ class OpenIMLiveClient implements RTCBridge {
     required CallType callType,
     required bool speakerOn,
     required bool enableCamera,
+    required bool enableKeepAlive,
   }) async {
     final roomID = certificate.roomID!;
     final busyLineUsers = certificate.busyLineUserIDList ?? [];
@@ -224,7 +230,9 @@ class OpenIMLiveClient implements RTCBridge {
         speakerOn: speakerOn,
         enableCamera: enableCamera,
       );
-      await _startKeepAlive(roomID, callType);
+      if (enableKeepAlive) {
+        await _startKeepAlive(roomID, callType);
+      }
       return;
     }
 
@@ -280,9 +288,19 @@ class OpenIMLiveClient implements RTCBridge {
       speakerOn: speakerOn,
       enableCamera: enableCamera,
     );
-    await _startKeepAlive(roomID, callType);
+    if (enableKeepAlive) {
+      await _startKeepAlive(roomID, callType);
+    }
     WakelockPlus.enable();
-    Logger.print('connectMedia connected roomID=$roomID');
+    Logger.print('connectMedia connected roomID=$roomID keepAlive=$enableKeepAlive');
+  }
+
+  /// Start mic/CallKit keepalive after peer joins (caller left wait-ring state).
+  Future<void> ensureCallKeepAlive() async {
+    final roomID = currentRoomID;
+    final callType = _mediaCallType ?? CallType.audio;
+    if (roomID == null || roomID.isEmpty) return;
+    await _startKeepAlive(roomID, callType);
   }
 
   Future<void> _disposeMediaRoomOnly() async {

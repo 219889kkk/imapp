@@ -5,7 +5,6 @@ import 'package:audio_session/audio_session.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_background/flutter_background.dart';
 import 'package:flutter_callkit_incoming/entities/call_kit_params.dart';
-import 'package:flutter_callkit_incoming/entities/ios_params.dart';
 import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 import 'package:openim_common/openim_common.dart';
 
@@ -124,7 +123,7 @@ class CallAudioKeepAlive with WidgetsBindingObserver {
             AVAudioSessionCategoryOptions.allowBluetooth |
                 AVAudioSessionCategoryOptions.allowBluetoothA2dp |
                 AVAudioSessionCategoryOptions.defaultToSpeaker |
-                AVAudioSessionCategoryOptions.duckOthers,
+                AVAudioSessionCategoryOptions.mixWithOthers,
         avAudioSessionMode: AVAudioSessionMode.voiceChat,
         avAudioSessionRouteSharingPolicy:
             AVAudioSessionRouteSharingPolicy.defaultPolicy,
@@ -186,25 +185,11 @@ class CallAudioKeepAlive with WidgetsBindingObserver {
         });
       }
       if (!already) {
-        await FlutterCallkitIncoming.startCall(CallKitParams(
-          id: roomID,
-          nameCaller: _peerName,
-          appName: '航讯',
-          handle: roomID,
-          type: _isVideo ? 1 : 0,
-          extra: <String, dynamic>{
-            'type': 'ongoingCall',
-            'roomID': roomID,
-          },
-          ios: IOSParams(
-            handleType: 'generic',
-            supportsVideo: true,
-            audioSessionMode: 'voiceChat',
-            audioSessionActive: true,
-            audioSessionPreferredSampleRate: 44100.0,
-            audioSessionPreferredIOBufferDuration: 0.005,
-          ),
-        ));
+        // Never startCall here — that creates a lock-screen "ongoing call"
+        // for the caller while ringing, and it can linger after in-app hangup.
+        Logger.print(
+            'CallAudioKeepAlive skip startCall (no existing CallKit) roomID=$roomID');
+        return;
       }
       await FlutterCallkitIncoming.setCallConnected(roomID);
       Logger.print('CallAudioKeepAlive iOS CallKit connected roomID=$roomID');

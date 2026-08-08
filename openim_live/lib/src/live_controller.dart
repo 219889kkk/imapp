@@ -92,15 +92,19 @@ mixin OpenIMLive {
     _stopSound();
     PackageBridge.clearCallNotification?.call();
     FlutterOpenimLiveAlert.closeLiveAlert();
+    unawaited(CallAudioKeepAlive.instance.stop());
+    unawaited(
+        VoipCallkitController.toOrNull?.endCall(roomID) ?? Future.value());
+    // Clear any leftover lock-screen / notification CallKit (id mismatch).
+    unawaited(
+        VoipCallkitController.toOrNull?.endAllCalls() ?? Future.value());
     if (roomID != null && roomID.isNotEmpty) {
       OpenIMLiveClient().closeByRoomID(roomID);
     } else {
       OpenIMLiveClient().close();
     }
-    unawaited(CallAudioKeepAlive.instance.stop());
-    unawaited(
-        VoipCallkitController.toOrNull?.endCall(roomID) ?? Future.value());
   }
+
   final backgroundSubject = PublishSubject<bool>();
 
   final insertSignalingMessageSubject = PublishSubject<CallEvent>();
@@ -793,6 +797,8 @@ mixin OpenIMLive {
     }
     unawaited(
         VoipCallkitController.toOrNull?.endCall(roomID) ?? Future.value());
+    unawaited(
+        VoipCallkitController.toOrNull?.endAllCalls() ?? Future.value());
     return result;
   }
   onTapCancel(SignalingInfo signaling) async {
@@ -884,6 +890,8 @@ mixin OpenIMLive {
     unawaited(CallAudioKeepAlive.instance.stop());
     unawaited(
         VoipCallkitController.toOrNull?.endCall(roomID) ?? Future.value());
+    unawaited(
+        VoipCallkitController.toOrNull?.endAllCalls() ?? Future.value());
     if (roomID != null && roomID.isNotEmpty) {
       OpenIMLiveClient().closeByRoomID(roomID);
     } else {
