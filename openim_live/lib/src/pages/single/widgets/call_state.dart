@@ -144,7 +144,7 @@ abstract class SignalState<T extends SignalView> extends State<T> {
   String? get _callRoomID => roomID ?? widget.roomID;
 
   /// Move UI off "connecting" once shared LiveKit media is live.
-  void _promoteInCallUi({String? reason}) {
+  void promoteInCallUi({String? reason}) {
     if (!mounted) return;
     if (callState == CallState.calling) return;
     final client = OpenIMLiveClient();
@@ -158,7 +158,7 @@ abstract class SignalState<T extends SignalView> extends State<T> {
 
   onParticipantConnected() {
     // Sync field so _deferMicrophone flips off before any re-_publish.
-    _promoteInCallUi(reason: 'peer-joined');
+    promoteInCallUi(reason: 'peer-joined');
   }
 
   onParticipantDisconnected() {
@@ -199,7 +199,7 @@ abstract class SignalState<T extends SignalView> extends State<T> {
       return;
     }
     await connect();
-    _promoteInCallUi(reason: 'adopt');
+    promoteInCallUi(reason: 'adopt');
     Logger.print('adoptActiveCall attached roomID=$roomID');
   }
 
@@ -223,12 +223,12 @@ abstract class SignalState<T extends SignalView> extends State<T> {
       // Unified pipeline: permissions + accept signal + token + LiveKit join.
       await widget.onTapPickup!.call();
       // Media is live after accept — leave "connecting" even if UI attach is slow.
-      _promoteInCallUi(reason: 'after-accept');
+      promoteInCallUi(reason: 'after-accept');
       try {
         await _adoptActiveCall();
       } catch (e, s) {
         Logger.print('adopt after accept failed: $e $s');
-        _promoteInCallUi(reason: 'adopt-error-fallback');
+        promoteInCallUi(reason: 'adopt-error-fallback');
       }
       Logger.print('accept from UI attached roomID=$roomID');
     } catch (e, s) {
@@ -241,7 +241,7 @@ abstract class SignalState<T extends SignalView> extends State<T> {
           return;
         } catch (e2, s2) {
           Logger.print('adopt after pickup error failed: $e2 $s2');
-          _promoteInCallUi(reason: 'pickup-error-fallback');
+          promoteInCallUi(reason: 'pickup-error-fallback');
           return;
         }
       }
@@ -252,7 +252,7 @@ abstract class SignalState<T extends SignalView> extends State<T> {
       widget.onError?.call(e, s);
     } finally {
       _pickupBusy = false;
-      _promoteInCallUi(reason: 'pickup-finally');
+      promoteInCallUi(reason: 'pickup-finally');
     }
   }
 

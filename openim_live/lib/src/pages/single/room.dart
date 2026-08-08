@@ -166,7 +166,7 @@ class _SingleRoomViewState extends SignalState<SingleRoomView> {
       onParticipantConnected();
     } else if (callState == CallState.connecting) {
       // Callee: LiveKit is up even if peer track arrives a moment later.
-      _promoteInCallUi(reason: 'attach-no-remote-yet');
+      promoteInCallUi(reason: 'attach-no-remote-yet');
     }
     _notifyRoomUi();
   }
