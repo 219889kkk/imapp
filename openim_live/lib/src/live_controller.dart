@@ -14,6 +14,7 @@ import 'package:rxdart/rxdart.dart';
 import 'package:uuid/uuid.dart';
 
 import '../openim_live.dart';
+import 'utils/call_audio_keepalive.dart';
 
 mixin OpenIMLive {
   final signalingSubject = PublishSubject<CallEvent>();
@@ -31,13 +32,61 @@ mixin OpenIMLive {
   }
 
   void receiveNewInvitation(SignalingInfo info) {
+    final roomID = info.invitation?.roomID?.trim() ?? '';
+    _pruneEndedRooms();
+    if (roomID.isNotEmpty && _endedRoomUntilMs.containsKey(roomID)) {
+      Logger.print('ignore invite: room already ended $roomID');
+      return;
+    }
+    // Already in a call: never re-open invite UI (fixes looping invite sheets).
+    if (isBusy) {
+      final current = OpenIMLiveClient().currentRoomID;
+      if (current != null && current == roomID) {
+        Logger.print('ignore invite: already in same room $roomID');
+        return;
+      }
+      Logger.print(
+          'ignore invite: busy current=$current incoming=$roomID');
+      return;
+    }
     signalingSubject.add(CallEvent(CallState.beCalled, info));
   }
 
   void beHangup(SignalingInfo info) {
+    final roomID = info.invitation?.roomID;
+    _markRoomEnded(roomID);
     signalingSubject.add(CallEvent(CallState.beHangup, info));
   }
 
+  void _markRoomEnded(String? roomID) {
+    final id = roomID?.trim() ?? '';
+    if (id.isEmpty) return;
+    _endedRoomUntilMs[id] = DateTime.now().millisecondsSinceEpoch + _endedRoomTtlMs;
+  }
+
+  void _pruneEndedRooms() {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    _endedRoomUntilMs.removeWhere((_, until) => until <= now);
+  }
+
+  /// Tear down in-app + system call UI for [roomID] (peer hangup / cancel).
+  void _terminateCallUi(String? roomID) {
+    _markRoomEnded(roomID);
+    _clearPickupCache();
+    _autoPickup = false;
+    _beCalledEvent = null;
+    _stopSound();
+    PackageBridge.clearCallNotification?.call();
+    FlutterOpenimLiveAlert.closeLiveAlert();
+    if (roomID != null && roomID.isNotEmpty) {
+      OpenIMLiveClient().closeByRoomID(roomID);
+    } else {
+      OpenIMLiveClient().close();
+    }
+    unawaited(CallAudioKeepAlive.instance.stop());
+    unawaited(
+        VoipCallkitController.toOrNull?.endCall(roomID) ?? Future.value());
+  }
   final backgroundSubject = PublishSubject<bool>();
 
   final insertSignalingMessageSubject = PublishSubject<CallEvent>();
@@ -59,6 +108,9 @@ mixin OpenIMLive {
   SignalingCertificate? _pickupCertCache;
   String? _pickupCertRoomID;
 
+  /// Recently ended roomIDs — ignore late/synced invites (WeChat-like).
+  final Map<String, int> _endedRoomUntilMs = {};
+  static const _endedRoomTtlMs = 120 * 1000;
   final _ring = 'assets/audio/live_ring.wav';
   final _audioPlayer = AudioPlayer(
     // Avoid fighting LiveKit's playAndRecord session (reduces connect-time noise).
@@ -109,7 +161,8 @@ mixin OpenIMLive {
 
     roomParticipantDisconnectedSubject.listen((info) {
       if (null == info.participant || info.participant!.length == 1) {
-        OpenIMLiveClient().closeByRoomID(info.invitation!.roomID!);
+        final roomID = info.invitation?.roomID;
+        _terminateCallUi(roomID);
       }
     });
   }
@@ -124,7 +177,6 @@ mixin OpenIMLive {
           VoipCallkitController.toOrNull?.setConnected(roomID) ?? Future.value());
     }
     // Accept + RTC token immediately — do not wait for overlay / unlock.
-    // UI autoPickup will await the same in-flight future.
     unawaited(() async {
       try {
         await onTapPickup(signaling..userID = OpenIM.iMManager.userID);
@@ -132,10 +184,11 @@ mixin OpenIMLive {
         Logger.print('CallKit early pickup failed: $e $s');
       }
     }());
-    // Present in-app LiveKit UI when possible (_autoPickup skips CallKit branch).
-    receiveNewInvitation(signaling);
+    // Only present UI once; never re-dispatch invite if already in that call.
+    if (!isBusy) {
+      receiveNewInvitation(signaling);
+    }
   }
-
   void _onCallKitDecline(SignalingInfo signaling) {
     _stopSound();
     PackageBridge.clearCallNotification?.call();
@@ -187,29 +240,13 @@ mixin OpenIMLive {
 
   _signalingListener() => _stream.listen(
         (event) async {
+          final roomID = event.data.invitation?.roomID;
           if (event.state != CallState.beCalled) {
             _beCalledEvent = null;
             FlutterOpenimLiveAlert.closeLiveAlert();
             PackageBridge.clearCallNotification?.call();
-            final roomID = event.data.invitation?.roomID;
-            // Only tear down CallKit on terminal call states.
-            // Ending on beAccepted/connecting made lock-screen answer look hung up.
-            final endKit = event.state == CallState.beRejected ||
-                event.state == CallState.beCanceled ||
-                event.state == CallState.beHangup ||
-                event.state == CallState.reject ||
-                event.state == CallState.cancel ||
-                event.state == CallState.hangup ||
-                event.state == CallState.timeout ||
-                event.state == CallState.otherReject ||
-                event.state == CallState.otherAccepted;
-            if (endKit && (Platform.isIOS || Platform.isAndroid)) {
-              unawaited(VoipCallkitController.toOrNull?.endCall(roomID) ??
-                  Future.value());
-            }
           }
-          if (event.state == CallState.beCalled) {
-            if (!_autoPickup) {
+          if (event.state == CallState.beCalled) {            if (!_autoPickup) {
               _playSound();
             } else {
               _stopSound();
@@ -303,23 +340,25 @@ mixin OpenIMLive {
             _autoPickup = false;
           } else if (event.state == CallState.beRejected) {
             insertSignalingMessageSubject.add(event);
-            _stopSound();
+            _terminateCallUi(roomID);
           } else if (event.state == CallState.beHangup) {
-            _stopSound();
+            // Peer hung up — force close LiveKit + CallKit (WeChat-like).
+            _terminateCallUi(roomID);
           } else if (event.state == CallState.beCanceled) {
             insertSignalingMessageSubject.add(event);
-            _stopSound();
+            _terminateCallUi(roomID);
           } else if (event.state == CallState.beAccepted) {
             _stopSound();
           } else if (event.state == CallState.otherReject ||
               event.state == CallState.otherAccepted) {
             _stopSound();
+            if (!existActiveCallFor(roomID)) {
+              _terminateCallUi(roomID);
+            }
           } else if (event.state == CallState.timeout) {
             insertSignalingMessageSubject.add(event);
-
-            _stopSound();
+            _terminateCallUi(roomID);
             final sessionType = event.data.invitation!.sessionType;
-
             if (sessionType == 1) {
               onTimeoutCancelled(event.data);
             }
@@ -327,6 +366,12 @@ mixin OpenIMLive {
         },
       );
 
+  bool existActiveCallFor(String? roomID) {
+    if (!isBusy) return false;
+    final current = OpenIMLiveClient().currentRoomID;
+    if (roomID == null || roomID.isEmpty) return isBusy;
+    return current == roomID;
+  }
   _insertSignalingMessageListener() {
     insertSignalingMessageSubject.listen((value) {
       _insertMessage(
@@ -469,18 +514,22 @@ mixin OpenIMLive {
   Future<void> _triggerVoipPush(
     SignalingInfo signaling, {
     required String action,
+    List<String>? toUserIDs,
   }) async {
     if (!Platform.isIOS && !Platform.isAndroid) return;
-    // Server sends iOS VoIP only; safe to call from any caller platform.
     final inv = signaling.invitation;
     if (inv == null) return;
+    final targets = (toUserIDs ?? inv.inviteeUserIDList ?? const [])
+        .where((e) => e.trim().isNotEmpty)
+        .toList();
+    if (targets.isEmpty) return;
     String nickname = '';
     try {
       nickname = OpenIM.iMManager.userInfo.nickname?.trim() ?? '';
     } catch (_) {}
     await Apis.voipPush(
       action: action,
-      inviteeUserIDList: inv.inviteeUserIDList ?? const [],
+      inviteeUserIDList: targets,
       roomID: inv.roomID ?? '',
       inviterUserID: inv.inviterUserID ?? OpenIM.iMManager.userID,
       mediaType: inv.mediaType ?? 'audio',
@@ -555,6 +604,8 @@ mixin OpenIMLive {
   }
 
   onTapReject(SignalingInfo signaling) async {
+    final roomID = signaling.invitation?.roomID;
+    _markRoomEnded(roomID);
     _clearPickupCache();
     _stopSound();
     insertSignalingMessageSubject.add(CallEvent(CallState.reject, signaling));
@@ -569,14 +620,22 @@ mixin OpenIMLive {
         signaling.invitation!.inviterUserID == OpenIM.iMManager.userID
             ? signaling.invitation!.inviteeUserIDList!.first
             : signaling.invitation!.inviterUserID;
-    return OpenIM.iMManager.messageManager.sendMessage(
+    final result = await OpenIM.iMManager.messageManager.sendMessage(
         message: message,
         offlinePushInfo: OfflinePushInfo(),
         userID: recvUserID,
-        // Must not drop when peer WS briefly offline (else caller keeps ringing).
         isOnlineOnly: false);
+    if (recvUserID != null && recvUserID.isNotEmpty) {
+      unawaited(_triggerVoipPush(
+        signaling,
+        action: 'reject',
+        toUserIDs: [recvUserID],
+      ));
+    }
+    unawaited(
+        VoipCallkitController.toOrNull?.endCall(roomID) ?? Future.value());
+    return result;
   }
-
   onTapCancel(SignalingInfo signaling) async {
     _clearPickupCache();
     _stopSound();
@@ -598,7 +657,10 @@ mixin OpenIMLive {
           // WS-dead while CallKit still rings → ringtone never stops.
           isOnlineOnly: false);
     }
-    unawaited(_triggerVoipPush(signaling, action: 'cancel'));
+    final peers = _recvUserIDList(signaling);
+    unawaited(
+        _triggerVoipPush(signaling, action: 'cancel', toUserIDs: peers));
+    _terminateCallUi(signaling.invitation?.roomID);
     return true;
   }
 
@@ -615,11 +677,21 @@ mixin OpenIMLive {
         offlinePushInfo: OfflinePushInfo(),
         userID: signaling.invitation!.inviterUserID,
         isOnlineOnly: false);
-
+    unawaited(_triggerVoipPush(
+      signaling,
+      action: 'cancel',
+      toUserIDs: [
+        if (signaling.invitation?.inviterUserID != null)
+          signaling.invitation!.inviterUserID!,
+      ],
+    ));
     return true;
   }
 
   onTapHangup(SignalingInfo signaling, int duration, bool isPositive) async {
+    final roomID = signaling.invitation?.roomID;
+    _markRoomEnded(roomID);
+    _clearPickupCache();
     if (isPositive) {
       final data = {
         'customType': CustomMessageType.callingHungup,
@@ -635,8 +707,17 @@ mixin OpenIMLive {
             userID: userID,
             isOnlineOnly: false);
       }
+      // End peer CallKit even if IM is slow / app backgrounded.
+      unawaited(_triggerVoipPush(
+        signaling,
+        action: 'hungup',
+        toUserIDs: recvUserIDList,
+      ));
     }
     _stopSound();
+    unawaited(CallAudioKeepAlive.instance.stop());
+    unawaited(
+        VoipCallkitController.toOrNull?.endCall(roomID) ?? Future.value());
 
     insertSignalingMessageSubject.add(CallEvent(
       CallState.hangup,
@@ -644,7 +725,6 @@ mixin OpenIMLive {
       fields: duration,
     ));
   }
-
   onBusyLine() {
     _stopSound();
     IMViews.showToast(StrRes.busyVideoCallHint);

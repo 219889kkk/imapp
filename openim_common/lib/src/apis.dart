@@ -389,11 +389,8 @@ class Apis {
     String? callUUID,
   }) async {
     if (inviteeUserIDList.isEmpty || roomID.isEmpty) return;
-    // cancel/end: server currently only handles wake-up invite; skip no-op.
-    if (action != 'invite') {
-      Logger.print('voipPush skip action=$action');
-      return;
-    }
+    final act = action.trim().isEmpty ? 'invite' : action.trim().toLowerCase();
+    // invite | cancel | hungup | end | reject — native CallKit ends on non-invite.
     final media = mediaType.trim().isEmpty ? 'audio' : mediaType.trim();
     for (final toUserID in inviteeUserIDList) {
       final uid = toUserID.trim();
@@ -408,9 +405,8 @@ class Apis {
             'inviterNickname': nickname ?? '',
             'mediaType': media,
             if (callUUID != null && callUUID.isNotEmpty) 'callUUID': callUUID,
-            // Keep legacy keys for older server builds.
             'inviteeUserIDList': [uid],
-            'action': action,
+            'action': act,
             'sessionType': sessionType ?? 1,
             'groupID': groupID ?? '',
             'timeout': timeout,
@@ -420,7 +416,7 @@ class Apis {
           showErrorToast: false,
         );
       } catch (e, s) {
-        Logger.print('voipPush failed toUserID=$uid: $e $s');
+        Logger.print('voipPush failed toUserID=$uid action=$act: $e $s');
       }
     }
   }

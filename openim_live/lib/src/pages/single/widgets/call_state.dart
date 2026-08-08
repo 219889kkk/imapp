@@ -115,15 +115,20 @@ abstract class SignalState<T extends SignalView> extends State<T> {
       callStateSubject.add(event.state);
     }
 
-    if (event.state == CallState.beRejected || event.state == CallState.beCanceled) {
+    if (event.state == CallState.beRejected ||
+        event.state == CallState.beCanceled ||
+        event.state == CallState.beHangup) {
+      // Peer ended the call — close local UI (do not send another hungup).
       widget.onClose?.call();
-    } else if (event.state == CallState.otherReject || event.state == CallState.otherAccepted) {
+    } else if (event.state == CallState.otherReject ||
+        event.state == CallState.otherAccepted) {
       if (existParticipants()) {
         return;
       }
       widget.onClose?.call();
-      IMViews.showToast(
-          sprintf(StrRes.otherCallHandle, [event.state == CallState.otherReject ? StrRes.rejectCall : StrRes.accept]));
+      IMViews.showToast(sprintf(StrRes.otherCallHandle, [
+        event.state == CallState.otherReject ? StrRes.rejectCall : StrRes.accept
+      ]));
     } else if (event.state == CallState.timeout) {
       widget.onClose?.call();
     } else if (event.state == CallState.beAccepted) {

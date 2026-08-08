@@ -204,8 +204,10 @@ class IMController extends GetxController with IMCallback, OpenIMLive {
           if (sendTime > 0 && now - sendTime > 60 * 1000) {
             return true;
           }
+          // Busy / same-room: receiveNewInvitation no-ops; skip extra banners.
+          final busy = OpenIMLiveClient().isBusy;
           receiveNewInvitation(signaling);
-          // CallKit / Android full-screen UI owns the surface when active.
+          if (busy) break;
           final voip = VoipCallkitController.toOrNull;
           if (voip != null && voip.ownsIncomingUi) {
             break;
@@ -213,8 +215,6 @@ class IMController extends GetxController with IMCallback, OpenIMLive {
           if (Platform.isIOS) {
             // Foreground: in-app page; background: CallKit in live_controller.
           } else if (Get.isRegistered<AppController>()) {
-            // Android: high-priority call notification (backup / heads-up).
-            // Background full-screen is handled in live_controller via CallKit.
             Get.find<AppController>().showCallNotification(signaling);
           }
           break;
