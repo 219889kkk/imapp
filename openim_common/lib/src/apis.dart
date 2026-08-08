@@ -367,7 +367,7 @@ class Apis {
       // Mobile clients cannot reach the server's loopback LiveKit URL.
       final live = signaling.liveURL?.trim() ?? '';
       if (live.contains('127.0.0.1') || live.contains('localhost')) {
-        const fixed = 'wss://livekit.zghtchat9.top';
+        final fixed = Config.liveKitWsUrl;
         Logger.print('rewrite liveURL $live -> $fixed');
         signaling = SignalingCertificate(
           token: signaling.token,

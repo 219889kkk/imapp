@@ -81,6 +81,12 @@ class OpenIMLiveClient implements RTCBridge {
   VoidCallback? _onMediaDisconnected;
   /// Last speaker choice from the in-call button (wins over delayed reinforce).
   bool? _userSpeakerPreference;
+  String? _uiBoundRoomID;
+
+  void Function(Room room)? _uiOnRoom;
+  VoidCallback? _uiOnRemotePresent;
+  VoidCallback? _uiOnRemoteLeft;
+  VoidCallback? _uiOnDisconnected;
 
   Room? get mediaRoom => _mediaRoom;
   SignalingCertificate? get mediaCertificate => _mediaCert;
@@ -126,6 +132,11 @@ class OpenIMLiveClient implements RTCBridge {
     onTapHangup = null;
     _onMediaDisconnected = null;
     _userSpeakerPreference = null;
+    _uiBoundRoomID = null;
+    _uiOnRoom = null;
+    _uiOnRemotePresent = null;
+    _uiOnRemoteLeft = null;
+    _uiOnDisconnected = null;
     // The next line disables the wakelock again.
     WakelockPlus.disable();
   }
@@ -287,10 +298,12 @@ class OpenIMLiveClient implements RTCBridge {
 
     listener.on<RoomDisconnectedEvent>((event) {
       Logger.print('Headless room disconnected: ${event.reason}');
+      _uiOnDisconnected?.call();
       final cb = _onMediaDisconnected;
-      // Defer so callers can hang up cleanly.
       scheduleMicrotask(() => cb?.call());
     });
+
+    _wireRoomEvents(listener, room);
 
     Logger.print(
         'connectMedia connecting roomID=$roomID url=${certificate.liveURL}');
@@ -487,6 +500,16 @@ class OpenIMLiveClient implements RTCBridge {
     );
   }
 
+  void _wireRoomEvents(EventsListener<RoomEvent> listener, Room room) {
+    listener
+      ..on<LocalTrackPublishedEvent>((_) => _uiOnRoom?.call(room))
+      ..on<LocalTrackUnpublishedEvent>((_) => _uiOnRoom?.call(room))
+      ..on<ParticipantConnectedEvent>((_) => _uiOnRemotePresent?.call())
+      ..on<ParticipantDisconnectedEvent>((_) => _uiOnRemoteLeft?.call())
+      ..on<TrackSubscribedEvent>((_) => _uiOnRoom?.call(room))
+      ..on<TrackUnsubscribedEvent>((_) => _uiOnRoom?.call(room));
+  }
+
   /// Bind UI listeners onto the shared media room (no second connect).
   void bindUiToMediaRoom({
     required void Function(Room room) onRoom,
@@ -495,26 +518,28 @@ class OpenIMLiveClient implements RTCBridge {
     required VoidCallback onDisconnected,
   }) {
     final room = _mediaRoom;
-    final listener = _mediaListener;
-    if (room == null || listener == null) return;
+    if (room == null) return;
+
+    _uiOnRoom = onRoom;
+    _uiOnRemotePresent = onRemotePresent;
+    _uiOnRemoteLeft = onRemoteLeft;
+    _uiOnDisconnected = onDisconnected;
+
+    if (_uiBoundRoomID == currentRoomID) {
+      onRoom(room);
+      if (room.remoteParticipants.isNotEmpty) {
+        onRemotePresent();
+      }
+      return;
+    }
+    _uiBoundRoomID = currentRoomID;
 
     onRoom(room);
     if (room.remoteParticipants.isNotEmpty) {
       onRemotePresent();
     }
 
-    listener
-      ..on<RoomDisconnectedEvent>((event) {
-        onDisconnected();
-      })
-      ..on<LocalTrackPublishedEvent>((_) => onRoom(room))
-      ..on<LocalTrackUnpublishedEvent>((_) => onRoom(room))
-      ..on<ParticipantConnectedEvent>((_) => onRemotePresent())
-      ..on<ParticipantDisconnectedEvent>((_) => onRemoteLeft())
-      ..on<TrackSubscribedEvent>((_) => onRoom(room))
-      ..on<TrackUnsubscribedEvent>((_) => onRoom(room));
-
-    room.addListener(() => onRoom(room));
+    room.addListener(() => _uiOnRoom?.call(room));
   }
 
   start(

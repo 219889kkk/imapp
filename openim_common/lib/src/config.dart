@@ -171,6 +171,15 @@ class Config {
     return url ?? (_isIP ? "ws://$_host:10001" : "wss://$_host/msg_gateway");
   }
 
+  /// Public WebSocket URL for LiveKit — phones cannot use 127.0.0.1 from API.
+  static String get liveKitWsUrl {
+    final server = DataSp.getServerConfig();
+    final fromConfig = server?['liveKitUrl']?.toString().trim();
+    if (fromConfig != null && fromConfig.isNotEmpty) return fromConfig;
+    if (!_isIP) return 'wss://livekit.$_host';
+    return 'wss://livekit.zghtchat9.top';
+  }
+
   static int get logLevel {
     String? level;
     var server = DataSp.getServerConfig();

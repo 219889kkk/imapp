@@ -41,6 +41,7 @@ class SingleRoomView extends SignalView {
 class _SingleRoomViewState extends SignalState<SingleRoomView> {
   Room? _room;
   bool _peerAudioArmed = false;
+  bool _sharedMediaAttached = false;
 
   @override
   void dispose() {
@@ -97,6 +98,16 @@ class _SingleRoomViewState extends SignalState<SingleRoomView> {
     if (room == null || cert == null) {
       throw StateError('no shared media room to attach');
     }
+    if (_sharedMediaAttached) {
+      _room = room;
+      _sortParticipants();
+      roomDidUpdateSubject.add(room);
+      if (room.remoteParticipants.isNotEmpty) {
+        onParticipantConnected();
+      }
+      return;
+    }
+    _sharedMediaAttached = true;
     certificate = cert;
     roomID = cert.roomID ?? roomID;
     widget.onBindRoomID?.call(roomID!);

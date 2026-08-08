@@ -136,15 +136,8 @@ abstract class SignalState<T extends SignalView> extends State<T> {
     } else if (event.state == CallState.timeout) {
       widget.onClose?.call();
     } else if (event.state == CallState.beAccepted) {
-      // Peer accepted — leave "waiting/connecting" immediately.
-      // Do NOT wait for remote LiveKit track (that caused inviter stuck UI).
+      // Caller: leave waiting UI — audio unmute handled in room/controller.
       onParticipantConnected();
-      unawaited(
-          OpenIMLiveClient().ensureCallKeepAlive(speakerOn: enabledSpeaker));
-      unawaited(OpenIMLiveClient().ensureMediaAudible(
-        speakerOn: enabledSpeaker,
-        forceRestartMic: true,
-      ));
     }
   }
 
@@ -211,42 +204,20 @@ abstract class SignalState<T extends SignalView> extends State<T> {
         return;
       }
 
-      // Invitee answering in-app never went through dial permissions.
-      final ok = await Permissions.requestCallMedia(
-        needCamera: widget.callType == CallType.video,
-      );
-      if (!ok) {
-        Logger.print('onTapPickup aborted: media permission denied');
-        return;
-      }
-
-      Logger.print('connecting');
-      // Show hangup during connect — don't stay on reject/pickup.
+      Logger.print('accept from UI roomID=$target');
       callState = CallState.connecting;
       callStateSubject.add(CallState.connecting);
-      widget.onStartCalling?.call();
-      certificate = await widget.onTapPickup!.call();
-      final rid = certificate.roomID?.trim() ?? '';
-      final liveURL = certificate.liveURL?.trim() ?? '';
-      final token = certificate.token?.trim() ?? '';
-      if (rid.isEmpty || liveURL.isEmpty || token.isEmpty) {
-        throw StateError(
-            'invalid rtc cert roomID=$rid liveURL=$liveURL tokenLen=${token.length}');
-      }
-      widget.onBindRoomID?.call(roomID = rid);
-      await connect();
+      // Unified pipeline: permissions + accept signal + token + LiveKit join.
+      await widget.onTapPickup!.call();
+      await _adoptActiveCall();
       callState = CallState.calling;
       callStateSubject.add(CallState.calling);
-      unawaited(OpenIMLiveClient().ensureMediaAudible(
-        speakerOn: enabledSpeaker,
-        forceRestartMic: true,
-      ));
-      Logger.print('connected');
+      widget.onStartCalling?.call();
+      Logger.print('accept from UI attached roomID=$roomID');
     } catch (e, s) {
       Logger.print('onTapPickup failed: $e $s');
       final client = OpenIMLiveClient();
       final target = roomID ?? widget.roomID;
-      // Parallel CallKit/headless accept may have already joined.
       if (client.hasMediaFor(target)) {
         try {
           await _adoptActiveCall();
@@ -255,7 +226,6 @@ abstract class SignalState<T extends SignalView> extends State<T> {
           Logger.print('adopt after pickup error failed: $e2 $s2');
         }
       }
-      // Restore incoming UI so user can retry (Controls resets pickup latch).
       if (mounted && widget.initState == CallState.beCalled) {
         callState = CallState.beCalled;
         callStateSubject.add(CallState.beCalled);
