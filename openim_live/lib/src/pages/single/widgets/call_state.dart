@@ -188,11 +188,12 @@ abstract class SignalState<T extends SignalView> extends State<T> {
     Logger.print('adoptActiveCall attached roomID=$roomID');
   }
 
-  bool _actionBusy = false;
+  bool _hangupBusy = false;
+  bool _pickupBusy = false;
 
   onTapPickup() async {
-    if (_actionBusy) return;
-    _actionBusy = true;
+    if (_pickupBusy || _hangupBusy) return;
+    _pickupBusy = true;
     try {
       final client = OpenIMLiveClient();
       final target = roomID ?? widget.roomID;
@@ -201,23 +202,27 @@ abstract class SignalState<T extends SignalView> extends State<T> {
         return;
       }
       Logger.print('connecting');
-      callStateSubject.add(CallState.connecting);
+      // Show in-call controls (incl. hangup) immediately — don't stay on
+      // reject/pickup while LiveKit connects (that looked like a frozen page).
+      callStateSubject.add(CallState.calling);
+      widget.onStartCalling?.call();
       certificate = await widget.onTapPickup!.call();
       widget.onBindRoomID?.call(roomID = certificate.roomID!);
       await connect();
-      callStateSubject.add(CallState.calling);
-      widget.onStartCalling?.call();
+      unawaited(
+          OpenIMLiveClient().ensureMediaAudible(speakerOn: enabledSpeaker));
       Logger.print('connected');
     } catch (e, s) {
-      _actionBusy = false;
       Logger.print('onTapPickup failed: $e $s');
       widget.onError?.call(e, s);
+    } finally {
+      _pickupBusy = false;
     }
   }
 
   onTapHangup(bool isPositive) {
-    if (_actionBusy) return;
-    _actionBusy = true;
+    if (_hangupBusy) return;
+    _hangupBusy = true;
     // Close UI immediately — don't wait for hangup signaling / VoIP.
     final hangup = widget.onTapHangup;
     final d = duration;
@@ -226,16 +231,16 @@ abstract class SignalState<T extends SignalView> extends State<T> {
   }
 
   onTapCancel() {
-    if (_actionBusy) return;
-    _actionBusy = true;
+    if (_hangupBusy) return;
+    _hangupBusy = true;
     final cancel = widget.onTapCancel;
     unawaited(cancel?.call() ?? Future.value());
     widget.onClose?.call();
   }
 
   onTapReject() {
-    if (_actionBusy) return;
-    _actionBusy = true;
+    if (_hangupBusy) return;
+    _hangupBusy = true;
     final reject = widget.onTapReject;
     unawaited(reject?.call() ?? Future.value());
     widget.onClose?.call();

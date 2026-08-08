@@ -78,6 +78,7 @@ class _ControlsViewState extends State<ControlsView> {
   bool _speakerRouteApplied = false;
   int _speakerApplyGen = 0;
   bool _terminalActionBusy = false;
+  bool _pickupPressed = false;
   bool _cameraBusy = false;
 
   @override
@@ -191,8 +192,10 @@ class _ControlsViewState extends State<ControlsView> {
   }
 
   void _onPickUpPressed() {
-    if (_terminalActionBusy) return;
-    _terminalActionBusy = true;
+    // Do NOT set _terminalActionBusy — user must still be able to hang up
+    // if LiveKit connect is slow/stuck after answering.
+    if (_pickupPressed) return;
+    _pickupPressed = true;
     widget.onPickUp?.call();
   }
 
@@ -341,22 +344,26 @@ class _ControlsViewState extends State<ControlsView> {
       );
 
   List<Widget> get _buttonGroup {
+    // Outbound ringing / connecting as caller.
     if (_callState == CallState.call ||
-        _callState == CallState.connecting &&
-            widget.initState == CallState.call) {
+        (_callState == CallState.connecting &&
+            widget.initState == CallState.call)) {
       return [
         LiveButton.microphone(on: _enabledMicrophone, onTap: _toggleAudio),
         LiveButton.cancel(onTap: _onCancelPressed),
         LiveButton.speaker(on: _enabledSpeaker, onTap: _toggleSpeaker),
       ];
-    } else if (_callState == CallState.beCalled ||
-        _callState == CallState.connecting &&
-            widget.initState == CallState.beCalled) {
+    }
+    // Incoming ringing — not yet answered.
+    if (_callState == CallState.beCalled) {
       return [
         LiveButton.reject(onTap: _onRejectPressed),
         LiveButton.pickUp(onTap: _onPickUpPressed),
       ];
-    } else if (_callState == CallState.calling) {
+    }
+    // Answered / in-call (incl. connecting after pickup) — always show hangup.
+    if (_callState == CallState.calling ||
+        _callState == CallState.connecting) {
       return [
         LiveButton.microphone(on: _enabledMicrophone, onTap: _toggleAudio),
         LiveButton.hungUp(onTap: _onHangUpPressed),
