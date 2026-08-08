@@ -4,30 +4,20 @@ import 'package:collection/collection.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_openim_sdk/flutter_openim_sdk.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
-import 'package:livekit_client/livekit_client.dart';
-import 'package:openim_common/openim_common.dart';
-import 'package:openim_live/src/widgets/live_button.dart';
-import 'package:synchronized/synchronized.dart';
-
-import '../../../live_client.dart';
-import '../../../widgets/loading_view.dart';
-
-import 'package:collection/collection.dart';
-import 'package:flutter/material.dart';
-import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:livekit_client/livekit_client.dart';
 import 'package:openim_common/openim_common.dart';
 import 'package:openim_live/src/widgets/live_button.dart';
-import 'package:synchronized/synchronized.dart';
 
 import '../../../live_client.dart';
+import '../../../widgets/loading_view.dart';
 
 class ControlsView extends StatefulWidget {
   const ControlsView({
     Key? key,
     this.initState = CallState.call,
     this.callType = CallType.video,
+    this.initialSpeakerOn,
     required this.callStateStream,
     required this.roomDidUpdateStream,
     this.userInfo,
@@ -45,6 +35,8 @@ class ControlsView extends StatefulWidget {
   final Stream<CallState> callStateStream;
   final CallState initState;
   final CallType callType;
+  /// Prefer parent call-page speaker state (e.g. lock-screen forced speaker).
+  final bool? initialSpeakerOn;
   final UserInfo? userInfo;
   final Function()? onMinimize;
   final Function(int duration)? onCallingDuration;
@@ -66,7 +58,6 @@ class _ControlsViewState extends State<ControlsView> {
   int _callingDuration = 0;
   String _callingDurationStr = "00:00";
 
-  //
   CameraPosition position = CameraPosition.front;
 
   List<MediaDevice>? _audioInputs;
@@ -84,9 +75,7 @@ class _ControlsViewState extends State<ControlsView> {
 
   late bool _enabledSpeaker;
   bool _speakerRouteApplied = false;
-
-  final _lockAudio = Lock();
-  final _lockSpeaker = Lock();
+  int _speakerApplyGen = 0;
 
   @override
   void dispose() {
@@ -100,13 +89,14 @@ class _ControlsViewState extends State<ControlsView> {
 
   @override
   void initState() {
-    _enabledSpeaker = widget.callType == CallType.video;
+    _enabledSpeaker =
+        widget.initialSpeakerOn ?? (widget.callType == CallType.video);
     _onChangedCallState(widget.initState);
     _callStateChangedSub = widget.callStateStream.listen(_onChangedCallState);
     _roomDidUpdateSub = widget.roomDidUpdateStream.listen(_roomDidUpdate);
-    // _queryUserInfo();
 
-    _deviceChangeSub = Hardware.instance.onDeviceChange.stream.listen(_loadDevices);
+    _deviceChangeSub =
+        Hardware.instance.onDeviceChange.stream.listen(_loadDevices);
     Hardware.instance.enumerateDevices().then(_loadDevices);
     super.initState();
   }
@@ -115,11 +105,7 @@ class _ControlsViewState extends State<ControlsView> {
     _room ??= room;
     if (!_speakerRouteApplied) {
       _speakerRouteApplied = true;
-      if (_enabledSpeaker) {
-        _enableSpeaker();
-      } else {
-        _disableSpeaker();
-      }
+      unawaited(_applySpeakerRoute(_enabledSpeaker));
     }
     if (room.localParticipant != null && _participant == null) {
       _participant = room.localParticipant;
@@ -152,45 +138,52 @@ class _ControlsViewState extends State<ControlsView> {
     _audioInputs = devices.where((d) => d.kind == 'audioinput').toList();
     _audioOutputs = devices.where((d) => d.kind == 'audiooutput').toList();
     _videoInputs = devices.where((d) => d.kind == 'videoinput').toList();
-    // setState(() {});
   }
 
   void _onChange() {
-    // trigger refresh
     setState(() {});
   }
 
   void _toggleAudio() async {
-    await _lockAudio.synchronized(() async {
-      _enabledMicrophone = !_enabledMicrophone;
-      widget.onEnabledMicrophone?.call(_enabledMicrophone);
-      if (_enabledMicrophone) {
+    final next = !_enabledMicrophone;
+    setState(() => _enabledMicrophone = next);
+    widget.onEnabledMicrophone?.call(next);
+    try {
+      if (next) {
         await _enableAudio();
       } else {
         await _disableAudio();
       }
-    });
-
-    // if (null != _participant) {
-    //   if (_participant!.isMicrophoneEnabled()) {
-    //     _disableAudio();
-    //   } else {
-    //     _enableAudio();
-    //   }
-    // }
+    } catch (e, s) {
+      Logger.print('toggle mic failed: $e $s');
+    }
   }
 
-  void _toggleSpeaker() async {
-    await _lockSpeaker.synchronized(() async {
-      _enabledSpeaker = !_enabledSpeaker;
-      widget.onEnabledSpeaker?.call(_enabledSpeaker);
-      if (_enabledSpeaker) {
-        await _enableSpeaker();
-      } else {
-        await _disableSpeaker();
-      }
-      setState(() {});
-    });
+  void _toggleSpeaker() {
+    final next = !_enabledSpeaker;
+    // Optimistic UI — don't wait for native route before flipping the icon.
+    setState(() => _enabledSpeaker = next);
+    widget.onEnabledSpeaker?.call(next);
+    OpenIMLiveClient().setUserSpeakerPreference(next);
+    unawaited(_applySpeakerRoute(next));
+  }
+
+  Future<void> _applySpeakerRoute(bool on) async {
+    final gen = ++_speakerApplyGen;
+    try {
+      await Hardware.instance.setSpeakerphoneOn(on);
+      if (gen != _speakerApplyGen) return;
+      await _room?.setSpeakerOn(on);
+      if (gen != _speakerApplyGen) return;
+      // iOS/CallKit sometimes snaps route back — reinforce once.
+      await Future<void>.delayed(const Duration(milliseconds: 120));
+      if (gen != _speakerApplyGen || !mounted) return;
+      if (_enabledSpeaker != on) return;
+      await Hardware.instance.setSpeakerphoneOn(on);
+      await _room?.setSpeakerOn(on);
+    } catch (e, s) {
+      Logger.print('apply speaker failed: $e $s');
+    }
   }
 
   Future<void> _disableAudio() async {
@@ -206,47 +199,14 @@ class _ControlsViewState extends State<ControlsView> {
   }
 
   Future<void> _enableVideo() async {
-    await _participant?.setCameraEnabled(true, cameraCaptureOptions: CameraCaptureOptions(cameraPosition: position));
-  }
-
-  Future<void> _disableSpeaker() async {
-    await Hardware.instance.setSpeakerphoneOn(false);
-  }
-
-  Future<void> _enableSpeaker() async {
-    await Hardware.instance.setSpeakerphoneOn(true);
-  }
-
-  void _selectAudioOutput(MediaDevice device) async {
-    await _room?.setAudioOutputDevice(device);
-    setState(() {});
-  }
-
-  void _selectAudioInput(MediaDevice device) async {
-    await _room?.setAudioInputDevice(device);
-    setState(() {});
-  }
-
-  void _selectVideoInput(MediaDevice device) async {
-    await _room?.setVideoInputDevice(device);
-    setState(() {});
+    await _participant?.setCameraEnabled(true,
+        cameraCaptureOptions: CameraCaptureOptions(cameraPosition: position));
   }
 
   void _toggleCamera() async {
-    //
     final track = _participant?.videoTrackPublications.firstOrNull?.track;
     if (track == null) return;
     Helper.switchCamera(track.mediaStreamTrack);
-    // try {
-    //   final newPosition = position.switched();
-    //   await track.setCameraPosition(newPosition);
-    //   // setState(() {
-    //   //   position = newPosition;
-    //   // });
-    // } catch (error, stack) {
-    //   Logger.print('could not restart track: $error $stack');
-    //   return;
-    // }
   }
 
   @override
@@ -270,10 +230,15 @@ class _ControlsViewState extends State<ControlsView> {
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      (_participant!.isCameraEnabled() ? ImageRes.liveCameraOff : ImageRes.liveCameraOn).toImage
+                      (_participant!.isCameraEnabled()
+                              ? ImageRes.liveCameraOff
+                              : ImageRes.liveCameraOn)
+                          .toImage
                         ..width = 30.w
                         ..height = 30.h
-                        ..onTap = (_participant!.isCameraEnabled() ? _disableVideo : _enableVideo),
+                        ..onTap = (_participant!.isCameraEnabled()
+                            ? _disableVideo
+                            : _enableVideo),
                       16.horizontalSpace,
                       ImageRes.liveSwitchCamera.toImage
                         ..width = 30.w
@@ -308,14 +273,17 @@ class _ControlsViewState extends State<ControlsView> {
       );
 
   List<Widget> get _buttonGroup {
-    if (_callState == CallState.call || _callState == CallState.connecting && widget.initState == CallState.call) {
+    if (_callState == CallState.call ||
+        _callState == CallState.connecting &&
+            widget.initState == CallState.call) {
       return [
         LiveButton.microphone(on: _enabledMicrophone, onTap: _toggleAudio),
         LiveButton.cancel(onTap: widget.onCancel),
         LiveButton.speaker(on: _enabledSpeaker, onTap: _toggleSpeaker),
       ];
     } else if (_callState == CallState.beCalled ||
-        _callState == CallState.connecting && widget.initState == CallState.beCalled) {
+        _callState == CallState.connecting &&
+            widget.initState == CallState.beCalled) {
       return [
         LiveButton.reject(onTap: widget.onReject),
         LiveButton.pickUp(onTap: widget.onPickUp),
@@ -336,7 +304,8 @@ class _ControlsViewState extends State<ControlsView> {
 
   Widget get _videoCallingDurationView => Visibility(
         visible: isVideo && isCalling,
-        child: _callingDurationStr.toText..style = Styles.ts_FFFFFF_opacity70_17sp,
+        child: _callingDurationStr.toText
+          ..style = Styles.ts_FFFFFF_opacity70_17sp,
       );
 
   Widget get _userInfoView {
@@ -351,7 +320,9 @@ class _ControlsViewState extends State<ControlsView> {
       text = isVideo ? '' : _callingDurationStr;
     }
 
-    String? nickname = IMUtils.emptyStrToNull(widget.userInfo!.remark) ?? widget.userInfo!.nickname;
+    String? nickname =
+        IMUtils.emptyStrToNull(widget.userInfo!.remark) ??
+            widget.userInfo!.nickname;
     String? faceURL = widget.userInfo!.faceURL;
 
     return Visibility(

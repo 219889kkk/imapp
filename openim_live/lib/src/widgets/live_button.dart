@@ -15,15 +15,26 @@ class LiveButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: [
-        icon.toImage
-          ..width = 62.w
-          ..height = 62.h
-          ..onTap = onTap,
-        10.verticalSpace,
-        text.toText..style = Styles.ts_FFFFFF_opacity70_14sp,
-      ],
+    // Whole column is tappable with a larger hit box — icon-only taps felt sluggish.
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(40.r),
+        child: Padding(
+          padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 8.h),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              icon.toImage
+                ..width = 62.w
+                ..height = 62.h,
+              10.verticalSpace,
+              text.toText..style = Styles.ts_FFFFFF_opacity70_14sp,
+            ],
+          ),
+        ),
+      ),
     );
   }
 

@@ -238,6 +238,7 @@ abstract class SignalState<T extends SignalView> extends State<T> {
 
   onChangedSpeakerStatus(bool enabled) {
     enabledSpeaker = enabled;
+    OpenIMLiveClient().setUserSpeakerPreference(enabled);
   }
 
   //Alignment(0.9, -0.9),
@@ -306,6 +307,7 @@ abstract class SignalState<T extends SignalView> extends State<T> {
                     roomDidUpdateStream: roomDidUpdateSubject.stream,
                     initState: widget.initState,
                     callType: widget.callType,
+                    initialSpeakerOn: enabledSpeaker,
                     userInfo: userInfo,
                     onMinimize: onTapMinimize,
                     onCallingDuration: callingDuration,

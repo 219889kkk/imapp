@@ -79,10 +79,16 @@ class OpenIMLiveClient implements RTCBridge {
   Future<void>? _mediaConnectInFlight;
   String? _mediaConnectRoomID;
   VoidCallback? _onMediaDisconnected;
+  /// Last speaker choice from the in-call button (wins over delayed reinforce).
+  bool? _userSpeakerPreference;
 
   Room? get mediaRoom => _mediaRoom;
   SignalingCertificate? get mediaCertificate => _mediaCert;
   CallType? get mediaCallType => _mediaCallType;
+
+  void setUserSpeakerPreference(bool on) {
+    _userSpeakerPreference = on;
+  }
 
   bool get hasOverlay => _holder != null;
 
@@ -119,6 +125,7 @@ class OpenIMLiveClient implements RTCBridge {
     currentRoomID = null;
     onTapHangup = null;
     _onMediaDisconnected = null;
+    _userSpeakerPreference = null;
     // The next line disables the wakelock again.
     WakelockPlus.disable();
   }
@@ -314,10 +321,11 @@ class OpenIMLiveClient implements RTCBridge {
     final room = _mediaRoom;
     final roomID = currentRoomID;
     if (room == null || roomID == null || roomID.isEmpty) return;
+    final prefer = _userSpeakerPreference ?? speakerOn;
     await _startKeepAlive(roomID, _mediaCallType ?? CallType.audio);
     await _ensurePublished(
       callType: _mediaCallType ?? CallType.audio,
-      speakerOn: speakerOn,
+      speakerOn: prefer,
       enableCamera: false,
       enableMicrophone: true,
     );
@@ -332,12 +340,14 @@ class OpenIMLiveClient implements RTCBridge {
     } catch (e, s) {
       Logger.print('reinforceLockScreenAudio subscribe failed: $e $s');
     }
-    // iOS often applies CallKit route a beat later — reinforce once more.
+    // iOS often applies CallKit route a beat later — reinforce once more,
+    // but never override an explicit user speaker toggle.
     unawaited(Future<void>.delayed(const Duration(milliseconds: 400), () async {
       if (_mediaRoom != room) return;
+      final on = _userSpeakerPreference ?? prefer;
       try {
-        await Hardware.instance.setSpeakerphoneOn(speakerOn);
-        await room.setSpeakerOn(speakerOn);
+        await Hardware.instance.setSpeakerphoneOn(on);
+        await room.setSpeakerOn(on);
         await room.localParticipant?.setMicrophoneEnabled(true);
       } catch (_) {}
     }));
