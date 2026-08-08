@@ -136,9 +136,13 @@ abstract class SignalState<T extends SignalView> extends State<T> {
     } else if (event.state == CallState.timeout) {
       widget.onClose?.call();
     } else if (event.state == CallState.beAccepted) {
-      if (null != remoteParticipantTrack) {
-        onParticipantConnected();
-      }
+      // Peer accepted — leave "waiting/connecting" immediately.
+      // Do NOT wait for remote LiveKit track (that caused inviter stuck UI).
+      onParticipantConnected();
+      unawaited(
+          OpenIMLiveClient().ensureCallKeepAlive(speakerOn: enabledSpeaker));
+      unawaited(
+          OpenIMLiveClient().ensureMediaAudible(speakerOn: enabledSpeaker));
     }
   }
 

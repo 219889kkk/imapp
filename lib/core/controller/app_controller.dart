@@ -286,8 +286,11 @@ class AppController extends GetxController
   Future<void> promptSoundOrNotification(im.Message message) async {
     final status =
         Get.find<IMController>().imSdkStatusSubject.values.lastOrNull?.status;
-    // Skip beep storms during sync while app is in foreground.
-    if (!isRunningBackground && status != IMSdkStatus.syncEnded) {
+    // Only suppress during active sync — previously required syncEnded and
+    // silently dropped ALL foreground alerts after reconnect/connectionSucceeded.
+    final syncing = status == IMSdkStatus.syncStart ||
+        status == IMSdkStatus.syncProgress;
+    if (!isRunningBackground && syncing) {
       return;
     }
     if (!isRunningBackground) {

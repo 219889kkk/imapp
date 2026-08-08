@@ -522,6 +522,10 @@ mixin OpenIMLive {
             _terminateCallUi(roomID);
           } else if (event.state == CallState.beAccepted) {
             _stopSound();
+            // Inviter: ensure mic/audio path is live as soon as peer accepts
+            // (caller may have deferred mic while ringback played).
+            unawaited(OpenIMLiveClient().ensureCallKeepAlive());
+            unawaited(OpenIMLiveClient().ensureMediaAudible());
           } else if (event.state == CallState.otherReject ||
               event.state == CallState.otherAccepted) {
             _stopSound();

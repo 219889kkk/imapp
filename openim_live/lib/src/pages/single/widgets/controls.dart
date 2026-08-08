@@ -331,7 +331,11 @@ class _ControlsViewState extends State<ControlsView> {
               width: 1.sw,
               child: Center(child: _videoCallingDurationView),
             ),
-            if (_callState == CallState.connecting) const LiveLoadingView(),
+            if (_callState == CallState.connecting)
+              const Positioned.fill(
+                // Must not block cancel/hangup taps underneath.
+                child: IgnorePointer(child: LiveLoadingView()),
+              ),
           ],
         ),
       );
