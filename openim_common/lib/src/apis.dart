@@ -409,7 +409,7 @@ class Apis {
     String? nickname,
     int? sessionType,
     String? groupID,
-    int timeout = 60,
+    int timeout = 30,
     String action = 'invite',
     String? callUUID,
   }) async {

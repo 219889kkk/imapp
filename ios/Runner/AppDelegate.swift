@@ -120,6 +120,13 @@ import flutter_callkit_incoming
             return
         }
 
+        // Foreground: in-app / WS invite UI is primary — skip duplicate CallKit.
+        if UIApplication.shared.applicationState == .active {
+            NSLog("HangXun VoIP: skip CallKit (app foreground, room=%@)", roomID)
+            DispatchQueue.main.async { completion() }
+            return
+        }
+
         let mediaType = (dict["mediaType"] as? String) ?? "audio"
         let isVideo = mediaType == "video"
         let nameCaller = (dict["nickname"] as? String)
@@ -135,7 +142,16 @@ import flutter_callkit_incoming
         info["appName"] = "航讯"
         info["handle"] = handle
         info["type"] = isVideo ? 1 : 0
-        info["duration"] = 60000
+        var timeoutSec = 30
+        if let t = dict["timeout"] as? Int {
+            timeoutSec = t
+        } else if let t = dict["timeout"] as? String, let v = Int(t) {
+            timeoutSec = v
+        } else if let t = dict["timeout"] as? Double {
+            timeoutSec = Int(t)
+        }
+        if timeoutSec <= 0 { timeoutSec = 30 }
+        info["duration"] = timeoutSec * 1000
         info["extra"] = dict
 
         let data = flutter_callkit_incoming.Data(args: info)

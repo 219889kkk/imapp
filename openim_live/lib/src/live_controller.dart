@@ -94,6 +94,7 @@ mixin OpenIMLive {
     _acceptJoinInFlight = null;
     _acceptJoinRoomID = null;
     _autoPickup = false;
+    _pendingHeadlessMicPermission = false;
     _beCalledEvent = null;
     _activeCallSignaling = null;
     _callSessionGen++; // invalidate in-flight headless accept/present
@@ -104,9 +105,6 @@ mixin OpenIMLive {
     unawaited(CallAudioKeepAlive.instance.stop());
     unawaited(
         VoipCallkitController.toOrNull?.endCall(roomID) ?? Future.value());
-    // Clear any leftover lock-screen / notification CallKit (id mismatch).
-    unawaited(
-        VoipCallkitController.toOrNull?.endAllCalls() ?? Future.value());
     if (roomID != null && roomID.isNotEmpty) {
       OpenIMLiveClient().closeByRoomID(roomID);
     } else {
@@ -131,6 +129,7 @@ mixin OpenIMLive {
   int _callSessionGen = 0;
 
   bool _autoPickup = false;
+  bool _pendingHeadlessMicPermission = false;
 
   /// Shared in-flight accept+join (CallKit, notification, in-app — one pipeline).
   Future<SignalingCertificate>? _acceptJoinInFlight;
@@ -222,6 +221,7 @@ mixin OpenIMLive {
     backgroundSubject.listen((background) {
       _isRunningBackground = background;
       if (!_isRunningBackground) {
+        unawaited(_ensureMicPermissionAfterHeadlessAccept());
         FlutterOpenimLiveAlert.closeLiveAlert();
         if (_beCalledEvent != null) {
           final pending = _beCalledEvent!;
@@ -275,6 +275,7 @@ mixin OpenIMLive {
 
   void _onCallKitAccept(SignalingInfo signaling) {
     _autoPickup = true;
+    _pendingHeadlessMicPermission = true;
     _stopSound();
     PackageBridge.clearCallNotification?.call();
     final resolved = _resolveIncomingSignaling(signaling) ?? signaling;
@@ -349,6 +350,28 @@ mixin OpenIMLive {
         _acceptJoinInFlight = null;
         _acceptJoinRoomID = null;
       }
+    }
+  }
+
+  Future<void> _ensureMicPermissionAfterHeadlessAccept() async {
+    if (!_pendingHeadlessMicPermission) return;
+    if (!OpenIMLiveClient().isBusy) {
+      _pendingHeadlessMicPermission = false;
+      return;
+    }
+    final mic = await Permission.microphone.status;
+    if (mic.isGranted) {
+      _pendingHeadlessMicPermission = false;
+      return;
+    }
+    _pendingHeadlessMicPermission = false;
+    final isVideo =
+        _activeCallSignaling?.invitation?.mediaType == 'video';
+    Logger.print('headless accept: request mic permission on foreground');
+    final ok = await Permissions.requestCallMedia(needCamera: isVideo);
+    if (ok) {
+      unawaited(
+          OpenIMLiveClient().onCallActive(speakerOn: true, unmuteMic: true));
     }
   }
 
@@ -992,7 +1015,7 @@ mixin OpenIMLive {
       nickname: nickname,
       sessionType: inv.sessionType,
       groupID: inv.groupID,
-      timeout: inv.timeout ?? 60,
+      timeout: inv.timeout ?? 30,
     );
   }
 
@@ -1112,8 +1135,6 @@ mixin OpenIMLive {
     }
     unawaited(
         VoipCallkitController.toOrNull?.endCall(roomID) ?? Future.value());
-    unawaited(
-        VoipCallkitController.toOrNull?.endAllCalls() ?? Future.value());
     return result;
   }
   onTapCancel(SignalingInfo signaling) async {
@@ -1130,8 +1151,6 @@ mixin OpenIMLive {
     unawaited(CallAudioKeepAlive.instance.stop());
     unawaited(
         VoipCallkitController.toOrNull?.endCall(roomID) ?? Future.value());
-    unawaited(
-        VoipCallkitController.toOrNull?.endAllCalls() ?? Future.value());
     if (roomID != null && roomID.isNotEmpty) {
       OpenIMLiveClient().closeByRoomID(roomID);
     } else {
@@ -1222,8 +1241,6 @@ mixin OpenIMLive {
     unawaited(CallAudioKeepAlive.instance.stop());
     unawaited(
         VoipCallkitController.toOrNull?.endCall(roomID) ?? Future.value());
-    unawaited(
-        VoipCallkitController.toOrNull?.endAllCalls() ?? Future.value());
     if (roomID != null && roomID.isNotEmpty) {
       OpenIMLiveClient().closeByRoomID(roomID);
     } else {

@@ -494,8 +494,6 @@ class IMController extends GetxController with IMCallback, OpenIMLive {
               VoipCallkitController.toOrNull?.endCall(
                       signaling.invitation?.roomID) ??
                   Future.value());
-          unawaited(
-              VoipCallkitController.toOrNull?.endAllCalls() ?? Future.value());
           break;
         case CustomMessageType.callingCancel:
           invitationCancelled(signaling);
@@ -504,8 +502,6 @@ class IMController extends GetxController with IMCallback, OpenIMLive {
               VoipCallkitController.toOrNull?.endCall(
                       signaling.invitation?.roomID) ??
                   Future.value());
-          unawaited(
-              VoipCallkitController.toOrNull?.endAllCalls() ?? Future.value());
           break;
         case CustomMessageType.callingHungup:
           beHangup(signaling);
@@ -514,8 +510,6 @@ class IMController extends GetxController with IMCallback, OpenIMLive {
               VoipCallkitController.toOrNull?.endCall(
                       signaling.invitation?.roomID) ??
                   Future.value());
-          unawaited(
-              VoipCallkitController.toOrNull?.endAllCalls() ?? Future.value());
           break;
       }
       return true;

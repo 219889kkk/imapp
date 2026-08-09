@@ -418,7 +418,7 @@ class VoipCallkitController extends GetxService {
         mediaType: mediaType ?? 'audio',
         sessionType: int.tryParse('${extra['sessionType'] ?? 1}') ?? 1,
         groupID: extra['groupID']?.toString(),
-        timeout: int.tryParse('${extra['timeout'] ?? 60}') ?? 60,
+        timeout: int.tryParse('${extra['timeout'] ?? 30}') ?? 30,
       ),
     );
   }
@@ -483,7 +483,7 @@ class VoipCallkitController extends GetxService {
       'mediaType': invitation.mediaType ?? (isVideo ? 'video' : 'audio'),
       'sessionType': invitation.sessionType,
       'groupID': invitation.groupID,
-      'timeout': invitation.timeout ?? 60,
+      'timeout': invitation.timeout ?? 30,
       'nickname': caller,
     };
 
@@ -493,7 +493,7 @@ class VoipCallkitController extends GetxService {
       appName: '航讯',
       handle: invitation.inviterUserID ?? '',
       type: isVideo ? 1 : 0,
-      duration: (invitation.timeout ?? 60) * 1000,
+      duration: (invitation.timeout ?? 30) * 1000,
       textAccept: StrRes.pickUp,
       textDecline: StrRes.reject,
       extra: extra,
