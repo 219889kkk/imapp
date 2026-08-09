@@ -168,15 +168,23 @@ abstract class SignalState<T extends SignalView> extends State<T> {
   onDail() async {
     try {
       if (widget.initState == CallState.call) {
+        if (!_isSessionActive()) return;
         certificate = await widget.onDial!.call();
+        if (!_isSessionActive()) return;
         widget.onBindRoomID?.call(roomID = certificate.roomID!);
+        if (!_isSessionActive()) return;
         await connect();
       } else if (widget.adoptExistingMedia ||
           widget.initState == CallState.calling) {
         // Unlock into an already-connected lock-screen call.
+        if (!_isSessionActive()) return;
         await _adoptActiveCall();
       }
     } catch (e, s) {
+      if (_sessionClosed) {
+        Logger.print('onDail ignored after cancel/hangup: $e');
+        return;
+      }
       Logger.print('onDail failed: $e $s');
       widget.onError?.call(e, s);
     }
@@ -205,6 +213,9 @@ abstract class SignalState<T extends SignalView> extends State<T> {
 
   bool _hangupBusy = false;
   bool _pickupBusy = false;
+  bool _sessionClosed = false;
+
+  bool _isSessionActive() => mounted && !_sessionClosed;
 
   onTapPickup() async {
     if (_pickupBusy || _hangupBusy) return;
@@ -259,6 +270,7 @@ abstract class SignalState<T extends SignalView> extends State<T> {
   onTapHangup(bool isPositive) {
     if (_hangupBusy) return;
     _hangupBusy = true;
+    _sessionClosed = true;
     // Close UI immediately — don't wait for hangup signaling / VoIP.
     final hangup = widget.onTapHangup;
     final d = duration;
@@ -269,6 +281,7 @@ abstract class SignalState<T extends SignalView> extends State<T> {
   onTapCancel() {
     if (_hangupBusy) return;
     _hangupBusy = true;
+    _sessionClosed = true;
     final cancel = widget.onTapCancel;
     unawaited(cancel?.call() ?? Future.value());
     widget.onClose?.call();
@@ -277,6 +290,7 @@ abstract class SignalState<T extends SignalView> extends State<T> {
   onTapReject() {
     if (_hangupBusy) return;
     _hangupBusy = true;
+    _sessionClosed = true;
     final reject = widget.onTapReject;
     unawaited(reject?.call() ?? Future.value());
     widget.onClose?.call();

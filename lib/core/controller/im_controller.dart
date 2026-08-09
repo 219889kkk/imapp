@@ -20,6 +20,8 @@ class IMController extends GetxController with IMCallback, OpenIMLive {
 
   bool _failoverInFlight = false;
   DateTime? _lastFailoverAt;
+  bool _reconnectInFlight = false;
+  DateTime? _lastReconnectAt;
 
   @override
   void onClose() {
@@ -54,6 +56,7 @@ class IMController extends GetxController with IMCallback, OpenIMLive {
           onConnectFailed: (code, error) {
             imSdkStatus(IMSdkStatus.connectionFailed);
             unawaited(_tryFailoverOnConnectFailed());
+            unawaited(_softReconnectAfterDisconnect());
           },
           onConnectSuccess: () {
             imSdkStatus(IMSdkStatus.connectionSucceeded);
@@ -196,6 +199,32 @@ class IMController extends GetxController with IMCallback, OpenIMLive {
     }
   }
 
+  /// Best-effort relogin when the WS drops without a clean SDK callback.
+  Future<void> _softReconnectAfterDisconnect() async {
+    if (_reconnectInFlight || _failoverInFlight) return;
+    final now = DateTime.now();
+    if (_lastReconnectAt != null &&
+        now.difference(_lastReconnectAt!) < const Duration(seconds: 15)) {
+      return;
+    }
+    _reconnectInFlight = true;
+    try {
+      await Future.delayed(const Duration(seconds: 2));
+      if (!OpenIM.iMManager.isLogined) return;
+      final cert = DataSp.getLoginCertificate();
+      if (cert == null || cert.userID.isEmpty || cert.imToken.isEmpty) {
+        return;
+      }
+      Logger.print('IM soft reconnect after disconnect');
+      await login(cert.userID, cert.imToken);
+      _lastReconnectAt = now;
+    } catch (e, s) {
+      Logger.print('IM soft reconnect failed: $e $s');
+    } finally {
+      _reconnectInFlight = false;
+    }
+  }
+
   Future login(String userID, String token) async {
     try {
       var user = await OpenIM.iMManager.login(
@@ -251,6 +280,11 @@ class IMController extends GetxController with IMCallback, OpenIMLive {
           if (msg.sendID == OpenIM.iMManager.userID) {
             return true;
           }
+          final inviteRoomID = signaling.invitation?.roomID;
+          if (PackageBridge.isCallRoomEnded?.call(inviteRoomID) == true) {
+            Logger.print('ignore invite: room ended $inviteRoomID');
+            return true;
+          }
           // Busy / same-room: receiveNewInvitation no-ops; skip extra banners.
           final busy = OpenIMLiveClient().isBusy;
           receiveNewInvitation(signaling);
@@ -265,7 +299,9 @@ class IMController extends GetxController with IMCallback, OpenIMLive {
             final app = Get.find<AppController>();
             // Android: CallKit full-screen owns Accept when registered.
             // Never stack a second notification Accept on top.
-            if (voip == null && app.isRunningBackground) {
+            if (voip == null &&
+                app.isRunningBackground &&
+                PackageBridge.rtcBridge?.hasCallOverlay != true) {
               app.showCallNotification(signaling);
             }
           }

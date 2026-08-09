@@ -236,6 +236,16 @@ class AppController extends GetxController
       await OpenIM.iMManager.conversationManager.getTotalUnreadMsgCount();
     } catch (e, s) {
       Logger.print('IM nudge failed: $e $s');
+      try {
+        final cert = DataSp.getLoginCertificate();
+        if (cert == null || cert.userID.isEmpty || cert.imToken.isEmpty) {
+          return;
+        }
+        Logger.print('IM nudge: retry login after ping failure');
+        await imLogic.login(cert.userID, cert.imToken);
+      } catch (e2, s2) {
+        Logger.print('IM nudge retry login failed: $e2 $s2');
+      }
     }
   }
 
@@ -393,6 +403,10 @@ class AppController extends GetxController
     if (!SessionGuard.shouldNotify) return;
     // iOS CallKit owns the system incoming-call UI; skip local banners.
     if (Platform.isIOS) return;
+    if (PackageBridge.rtcBridge?.hasCallOverlay == true) return;
+    if (PackageBridge.isCallRoomEnded?.call(info.invitation?.roomID) == true) {
+      return;
+    }
     if (!DataSp.getEnableCallNotification()) return;
 
     final invitation = info.invitation;

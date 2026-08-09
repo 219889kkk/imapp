@@ -25,6 +25,9 @@ class PackageBridge {
 
   /// CallKit / system End during active call or timeout (lock-screen hangup).
   static void Function(SignalingInfo? signaling)? onCallKitEnded;
+
+  /// True when [roomID] was cancelled/hung up recently — ignore late invites.
+  static bool Function(String? roomID)? isCallRoomEnded;
 }
 
 abstract class ScanBridge {
@@ -74,6 +77,7 @@ abstract class SelectContactsBridge {
 
 abstract class RTCBridge {
   bool get hasConnection;
+  bool get hasCallOverlay;
   void dismiss();
 }
 

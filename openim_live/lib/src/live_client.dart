@@ -61,6 +61,9 @@ class OpenIMLiveClient implements RTCBridge {
   bool get hasConnection => isBusy;
 
   @override
+  bool get hasCallOverlay => _holder != null;
+
+  @override
   void dismiss() {
     close();
   }
@@ -178,6 +181,10 @@ class OpenIMLiveClient implements RTCBridge {
     if (roomID.isEmpty) {
       throw StateError('connectMedia: empty roomID');
     }
+    if (PackageBridge.isCallRoomEnded?.call(roomID) == true) {
+      Logger.print('connectMedia skipped: room ended $roomID');
+      return;
+    }
 
     if (onDisconnected != null) {
       _onMediaDisconnected = onDisconnected;
@@ -251,6 +258,10 @@ class OpenIMLiveClient implements RTCBridge {
     required bool enableKeepAlive,
   }) async {
     final roomID = certificate.roomID!;
+    if (PackageBridge.isCallRoomEnded?.call(roomID) == true) {
+      Logger.print('_doConnectMedia aborted: room ended $roomID');
+      return;
+    }
     final busyLineUsers = certificate.busyLineUserIDList ?? [];
     if (busyLineUsers.isNotEmpty) {
       throw StateError('busy line');
@@ -258,6 +269,11 @@ class OpenIMLiveClient implements RTCBridge {
 
     if (_mediaRoom != null && currentRoomID != roomID) {
       await _disposeMedia();
+    }
+
+    if (PackageBridge.isCallRoomEnded?.call(roomID) == true) {
+      Logger.print('_doConnectMedia aborted before join: room ended $roomID');
+      return;
     }
 
     isBusy = true;
@@ -286,6 +302,14 @@ class OpenIMLiveClient implements RTCBridge {
     // Audio session MUST be ready before LiveKit connects, otherwise both
     // lock-screen and in-app calls can join a room with silent playback.
     await CallAudioKeepAlive.instance.prepareForRtc(speakerOn: speakerOn);
+
+    if (PackageBridge.isCallRoomEnded?.call(roomID) == true) {
+      Logger.print('_doConnectMedia aborted before LiveKit: room ended $roomID');
+      await _disposeMedia();
+      isBusy = false;
+      currentRoomID = null;
+      return;
+    }
 
     final room = Room();
     final listener = room.createListener();

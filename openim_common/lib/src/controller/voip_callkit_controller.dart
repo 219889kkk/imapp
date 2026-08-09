@@ -332,6 +332,12 @@ class VoipCallkitController extends GetxService {
       switch (event.event) {
         case Event.actionCallIncoming:
           callKitActive.value = true;
+          // WS invite may have already opened in-app UI — drop duplicate banner.
+          if (PackageBridge.rtcBridge?.hasCallOverlay == true) {
+            final signaling = signalingFromCallKitBody(event.body);
+            unawaited(endCall(signaling?.invitation?.roomID));
+            callKitActive.value = false;
+          }
           break;
         case Event.actionCallAccept:
           // Stay "active" until LiveKit connects / real hangup.
@@ -448,6 +454,14 @@ class VoipCallkitController extends GetxService {
   /// Show system-style incoming call (iOS CallKit / Android full-screen).
   Future<void> showIncoming(SignalingInfo info, {String? nameCaller}) async {
     if (!Platform.isIOS && !Platform.isAndroid) return;
+    if (PackageBridge.rtcBridge?.hasCallOverlay == true) {
+      Logger.print('showIncoming skipped: in-app overlay already visible');
+      return;
+    }
+    if (PackageBridge.isCallRoomEnded?.call(info.invitation?.roomID) == true) {
+      Logger.print('showIncoming skipped: room ended ${info.invitation?.roomID}');
+      return;
+    }
     final invitation = info.invitation;
     if (invitation?.roomID == null) return;
 

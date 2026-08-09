@@ -59,6 +59,10 @@ class _SingleRoomViewState extends SignalState<SingleRoomView> {
   Future<void> connect() async {
     final client = OpenIMLiveClient();
     final targetRoomID = certificate.roomID ?? roomID ?? widget.roomID;
+    if (PackageBridge.isCallRoomEnded?.call(targetRoomID) == true) {
+      Logger.print('connect aborted: room ended $targetRoomID');
+      return;
+    }
 
     // Already talking from lock-screen / headless accept — attach only.
     if (widget.adoptExistingMedia || client.hasMediaFor(targetRoomID)) {
