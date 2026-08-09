@@ -99,25 +99,18 @@ class HomeLogic extends SuperController {
     });
 
     imLogic.imSdkStatusPublishSubject.listen((value) {
-      if (value.status == IMSdkStatus.syncStart) {
-        _getRTCInvitationStart();
+      if (value.status == IMSdkStatus.syncEnded) {
+        imLogic.recoverPendingRtcInvitations();
       }
     });
 
-    Apis.kickoffController.stream.listen((event) async {
-      await SessionLogout.runFromKickoff(
-        im: imLogic,
-        onConversationsCleared: () => conversationsAtFirstPage.clear(),
-      );
-      AppNavigator.startLogin();
-    });
     super.onInit();
   }
 
   @override
   void onReady() {
     EasyLoading.dismiss();
-    _getRTCInvitationStart();
+    imLogic.recoverPendingRtcInvitations();
     _getUnreadMsgCount();
     getUnhandledFriendApplicationCount();
     getUnhandledGroupApplicationCount();
@@ -220,8 +213,6 @@ class HomeLogic extends SuperController {
 
   @override
   void onResumed() {}
-
-  void _getRTCInvitationStart() async {}
 
   @override
   void onHidden() {}

@@ -29,6 +29,7 @@ class AppController extends GetxController
   final flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
   StreamSubscription<List<ConnectivityResult>>? _connectivitySub;
   DateTime? _lastImNudgeAt;
+  Timer? _backgroundDebounce;
 
   final initializationSettingsAndroid =
       const AndroidInitializationSettings('@mipmap/ic_launcher');
@@ -93,14 +94,22 @@ class AppController extends GetxController
   final clientConfigMap = <String, dynamic>{}.obs;
 
   Future<void> runningBackground(bool run) async {
-    isRunningBackground = run;
-    if (Get.isRegistered<IMController>()) {
-      Get.find<IMController>().backgroundSubject.add(run);
-    }
+    _backgroundDebounce?.cancel();
     if (!run) {
-      // Keep incoming-call notification (id 900001) when returning from background.
+      isRunningBackground = false;
+      if (Get.isRegistered<IMController>()) {
+        Get.find<IMController>().backgroundSubject.add(false);
+      }
       _nudgeImConnection();
+      return;
     }
+    // Debounce: permission dialogs briefly fire onForegroundLost — ignore blips.
+    _backgroundDebounce = Timer(const Duration(milliseconds: 450), () {
+      isRunningBackground = true;
+      if (Get.isRegistered<IMController>()) {
+        Get.find<IMController>().backgroundSubject.add(true);
+      }
+    });
   }
 
   @override
@@ -240,6 +249,10 @@ class AppController extends GetxController
       await OpenIM.iMManager.conversationManager.getTotalUnreadMsgCount();
     } catch (e, s) {
       Logger.print('IM nudge failed: $e $s');
+      if (OpenIMLiveClient().isBusy) {
+        Logger.print('IM nudge retry skipped: active call');
+        return;
+      }
       try {
         final cert = DataSp.getLoginCertificate();
         if (cert == null || cert.userID.isEmpty || cert.imToken.isEmpty) {
@@ -593,6 +606,7 @@ class AppController extends GetxController
       PackageBridge.clearCallNotification = null;
     }
     _connectivitySub?.cancel();
+    _backgroundDebounce?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     closeSubject();
     _audioPlayer.dispose();

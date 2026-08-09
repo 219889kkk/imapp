@@ -1244,6 +1244,8 @@ class StrRes {
   static String get editGroupName => 'edit_group_name'.tr;
   static String get editGroupTips => 'edit_group_tips'.tr;
   static String get tokenInvalid => 'tokenInvalid'.tr;
+
+  static String get tokenExpired => 'tokenExpired'.tr;
   static String get supportsTypeHint => 'supportsTypeHint'.tr;
   static String get permissionDeniedTitle => 'permissionDeniedTitle'.tr;
   static String get permissionDeniedHint => 'permissionDeniedHint'.tr;

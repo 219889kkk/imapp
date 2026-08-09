@@ -18,6 +18,7 @@ class Apis {
 
   static void _kickoff(int? errCode) {
     if (errCode == 1501 ||
+        errCode == 1502 ||
         errCode == 1503 ||
         errCode == 1504 ||
         errCode == 1505) {

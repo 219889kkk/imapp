@@ -619,6 +619,7 @@ const Map<String, String> zh_CN = {
   'edit_group_tips': '修改群聊名称后，将在群内通知其他成员。',
   'logLevel': '日志级别',
   'tokenInvalid': '无效的token，请重新登录。',
+  'tokenExpired': '登录已过期，请重新登录。',
   'supportsTypeHint': '仅支持png、jpg、jpeg、gif、bmp及webp格式。',
   'permissionDeniedTitle': '权限被拒绝',
   'permissionDeniedHint': '请在设置中允许使用%s权限。',

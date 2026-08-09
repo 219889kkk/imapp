@@ -26,13 +26,17 @@ class IMController extends GetxController with IMCallback, OpenIMLive {
   bool _reconnectInFlight = false;
   DateTime? _lastReconnectAt;
   StreamSubscription<KickoffType>? _kickedOfflineSub;
+  StreamSubscription<int>? _httpKickoffSub;
   bool _kickoffInFlight = false;
+  bool _rtcRecoveryInFlight = false;
+  DateTime? _lastRtcRecoveryAt;
 
   static bool _isActiveCallInProgress() => OpenIMLiveClient().isBusy;
 
   @override
   void onClose() {
     _kickedOfflineSub?.cancel();
+    _httpKickoffSub?.cancel();
     close();
     onCloseLive();
     super.onClose();
@@ -50,6 +54,17 @@ class IMController extends GetxController with IMCallback, OpenIMLive {
   void _bindKickoffListener() {
     _kickedOfflineSub?.cancel();
     _kickedOfflineSub = onKickedOfflineSubject.listen(_handleKickoff);
+    _httpKickoffSub?.cancel();
+    _httpKickoffSub = Apis.kickoffController.stream.listen(_handleHttpKickoff);
+  }
+
+  Future<void> _handleHttpKickoff(int errCode) async {
+    final type = switch (errCode) {
+      1501 => KickoffType.userTokenExpired,
+      1502 || 1503 || 1504 || 1505 => KickoffType.userTokenInvalid,
+      _ => KickoffType.userTokenInvalid,
+    };
+    await _handleKickoff(type);
   }
 
   Future<void> _handleKickoff(KickoffType type) async {
@@ -58,7 +73,7 @@ class IMController extends GetxController with IMCallback, OpenIMLive {
     try {
       final tips = switch (type) {
         KickoffType.userTokenInvalid => StrRes.tokenInvalid,
-        KickoffType.userTokenExpired => StrRes.accountException,
+        KickoffType.userTokenExpired => StrRes.tokenExpired,
         KickoffType.kickedOffline => StrRes.accountException,
       };
       IMViews.showToast('${StrRes.accountWarn}: $tips');
@@ -292,6 +307,110 @@ class IMController extends GetxController with IMCallback, OpenIMLive {
       await _handleLoginRepeatError(e);
 
       return Future.error(e, s);
+    }
+  }
+
+  /// After IM sync / cold start: replay a pending invite missed while offline.
+  Future<void> recoverPendingRtcInvitations() async {
+    if (!SessionGuard.shouldNotify) return;
+    if (_rtcRecoveryInFlight || !OpenIM.iMManager.isLogined) return;
+    if (_isActiveCallInProgress()) return;
+
+    final now = DateTime.now();
+    if (_lastRtcRecoveryAt != null &&
+        now.difference(_lastRtcRecoveryAt!) < const Duration(seconds: 2)) {
+      return;
+    }
+    _rtcRecoveryInFlight = true;
+    _lastRtcRecoveryAt = now;
+    try {
+      final result = await OpenIM.iMManager.messageManager.searchLocalMessages(
+        messageTypeList: [MessageType.custom],
+        searchTimePeriod: 120,
+        count: 200,
+      );
+      final messages = <Message>[];
+      for (final item in result.searchResultItems ?? const []) {
+        messages.addAll(item.messageList ?? const []);
+      }
+      if (messages.isEmpty) return;
+
+      messages.sort((a, b) => (a.sendTime ?? 0).compareTo(b.sendTime ?? 0));
+      final nowMs = now.millisecondsSinceEpoch;
+      final selfID = OpenIM.iMManager.userID;
+      final pending = <String, ({SignalingInfo signaling, int sendTime})>{};
+
+      for (final msg in messages) {
+        final parsed = _parseCallingCustomMessage(msg);
+        if (parsed == null) continue;
+        final roomID = parsed.signaling.invitation?.roomID?.trim() ?? '';
+        if (roomID.isEmpty) continue;
+
+        switch (parsed.customType) {
+          case CustomMessageType.callingInvite:
+            if (msg.sendID == selfID) break;
+            final sendTime = msg.sendTime ?? 0;
+            if (sendTime > 0 && nowMs - sendTime > 60 * 1000) break;
+            if (PackageBridge.isCallRoomEnded?.call(roomID) == true) break;
+            pending[roomID] = (signaling: parsed.signaling, sendTime: sendTime);
+            break;
+          case CustomMessageType.callingAccept:
+          case CustomMessageType.callingReject:
+          case CustomMessageType.callingCancel:
+          case CustomMessageType.callingHungup:
+            pending.remove(roomID);
+            break;
+        }
+      }
+
+      if (pending.isEmpty) return;
+
+      SignalingInfo? latest;
+      var latestTime = 0;
+      for (final entry in pending.entries) {
+        if (entry.value.sendTime >= latestTime) {
+          latestTime = entry.value.sendTime;
+          latest = entry.value.signaling;
+        }
+      }
+      if (latest == null) return;
+
+      Logger.print(
+          'RTC recovery: replay pending invite room=${latest.invitation?.roomID}');
+      receiveNewInvitation(latest);
+    } catch (e, s) {
+      Logger.print('recoverPendingRtcInvitations failed: $e $s');
+    } finally {
+      _rtcRecoveryInFlight = false;
+    }
+  }
+
+  ({int customType, SignalingInfo signaling})? _parseCallingCustomMessage(
+      Message msg) {
+    if (!msg.isCustomType) return null;
+    final raw = msg.customElem?.data;
+    if (raw == null || raw.isEmpty) return null;
+    try {
+      final map = jsonDecode(raw);
+      if (map is! Map) return null;
+      final customType = map['customType'];
+      if (customType is! int) return null;
+      if (customType != CustomMessageType.callingInvite &&
+          customType != CustomMessageType.callingAccept &&
+          customType != CustomMessageType.callingReject &&
+          customType != CustomMessageType.callingCancel &&
+          customType != CustomMessageType.callingHungup) {
+        return null;
+      }
+      final data = map['data'];
+      if (data is! Map) return null;
+      final signaling = SignalingInfo(
+        invitation: InvitationInfo.fromJson(Map<String, dynamic>.from(data)),
+      );
+      signaling.userID = signaling.invitation?.inviterUserID;
+      return (customType: customType, signaling: signaling);
+    } catch (_) {
+      return null;
     }
   }
 

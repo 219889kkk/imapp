@@ -640,6 +640,7 @@ const Map<String, String> en_US = {
       'After modifying the group chat name, other members will be notified in the group.',
   'logLevel': 'Log Level',
   'tokenInvalid': 'Invalid token, please log in again.',
+  'tokenExpired': 'Login expired, please log in again.',
   'supportsTypeHint':
       'Only png, jpg, jpeg, gif, bmp and webp formats are supported.',
   'permissionDeniedTitle': 'Permission denied',
