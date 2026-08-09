@@ -200,7 +200,7 @@ class _SingleRoomViewState extends SignalState<SingleRoomView> {
   Future<void> _publish() async {
     await _applySpeakerRoute();
     try {
-      final enabled = widget.callType == CallType.video;
+      final enabled = widget.callType == CallType.video && !_deferMicrophone;
       await _room?.localParticipant?.setCameraEnabled(enabled);
     } catch (error, stackTrace) {
       Logger.print('could not publish video: $error $stackTrace');
@@ -252,6 +252,10 @@ class _SingleRoomViewState extends SignalState<SingleRoomView> {
       return;
     }
     _peerAudioArmed = true;
+    // Video: open camera as soon as peer joins (same moment as mic unmute).
+    if (widget.callType == CallType.video) {
+      unawaited(_publish());
+    }
     final adopt = widget.adoptExistingMedia;
     // Lock-screen / headless accept: mic is already live — avoid off/on flap
     // that makes the mute button briefly show "muted".

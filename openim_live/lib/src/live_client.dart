@@ -400,6 +400,12 @@ class OpenIMLiveClient implements RTCBridge {
             await pub.subscribe();
           } catch (_) {}
         }
+        for (final pub in participant.videoTrackPublications) {
+          if (pub.isScreenShare) continue;
+          try {
+            await pub.subscribe();
+          } catch (_) {}
+        }
       }
       Logger.print(
           'ensureMediaAudible speaker=$on remotes=${room.remoteParticipants.length} forceMic=$forceRestartMic');
@@ -508,7 +514,7 @@ class OpenIMLiveClient implements RTCBridge {
       ..on<ParticipantDisconnectedEvent>((_) => _uiOnRemoteLeft?.call())
       ..on<TrackSubscribedEvent>((event) {
         _uiOnRoom?.call(room);
-        if (event.track is AudioTrack) {
+        if (event.track is AudioTrack || event.track is VideoTrack) {
           unawaited(_armRemoteAudio());
         }
       })
