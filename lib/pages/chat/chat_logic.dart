@@ -447,6 +447,7 @@ class ChatLogic extends SuperController {
 
     imLogic.onSignalingMessage = (value) {
       if (value.userID == userID) {
+        _normalizeCallRecordMessage(value.message);
         messageList.add(value.message);
         scrollBottom();
       }
@@ -1938,7 +1939,19 @@ class ChatLogic extends SuperController {
     );
   }
 
+  /// Local call-record inserts are never sent over WS; SDK may keep status=sending.
+  void _normalizeCallRecordMessage(Message message) {
+    if (!message.isCallRecordType) return;
+    if (message.status == MessageStatus.sending) {
+      message.status = MessageStatus.succeeded;
+    }
+    message.isRead ??= true;
+  }
+
   List<Message> _mergeHistoryWithLocal(List<Message> remote) {
+    for (final m in remote) {
+      _normalizeCallRecordMessage(m);
+    }
     final localById = <String, Message>{};
     for (final m in messageList) {
       final id = m.clientMsgID;
@@ -1986,6 +1999,9 @@ class ChatLogic extends SuperController {
     list = result.messageList!
         .where((e) => !e.isCallingSignalingType)
         .toList();
+    for (final m in list) {
+      _normalizeCallRecordMessage(m);
+    }
     if (_isFirstLoad) {
       _isFirstLoad = false;
       // remove the message that has been timed down
@@ -2032,6 +2048,9 @@ class ChatLogic extends SuperController {
 
     hasMoreHistory = !isEnd;
     final visible = value.where((e) => !e.isCallingSignalingType).toList();
+    for (final m in visible) {
+      _normalizeCallRecordMessage(m);
+    }
     if (visible.isEmpty) {
       // Keep auto-load so we fetch from SDK instead of sticking on empty cache.
       return;

@@ -93,6 +93,17 @@ extension MessageExt on Message {
 
   bool get isCustomType => contentType == MessageType.custom;
 
+  /// Local call history bubble (customType 901), not RTC signaling packets.
+  bool get isCallRecordType {
+    if (!isCustomType) return false;
+    try {
+      final map = json.decode(customElem!.data!);
+      return map['customType'] == CustomMessageType.call;
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// RTC signaling messages (invite/accept/reject/cancel/hangup).
   /// They should not render as normal chat bubbles.
   bool get isCallingSignalingType {

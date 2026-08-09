@@ -297,7 +297,7 @@ class _ChatItemViewState extends State<ChatItemView> {
       showRightNickname: widget.showRightNickname,
       timelineStr: widget.timelineStr,
       hasRead: _message.isRead!,
-      isSending: _message.isVideoType
+      isSending: _message.isVideoType || _isCallRecordMessage()
           ? false
           : _message.status == MessageStatus.sending,
       isSendFailed: _message.status == MessageStatus.failed,
@@ -317,10 +317,7 @@ class _ChatItemViewState extends State<ChatItemView> {
     );
   }
 
-  bool _isCallRecordMessage() {
-    final data = IMUtils.parseCustomMessage(_message);
-    return data != null && data['viewType'] == CustomMessageType.call;
-  }
+  bool _isCallRecordMessage() => _message.isCallRecordType;
 
   Widget? _buildReadTag() {
     if (!widget.showReadTag ||

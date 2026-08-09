@@ -131,6 +131,20 @@ mixin OpenIMLive {
   bool _autoPickup = false;
   bool _pendingHeadlessMicPermission = false;
 
+  /// True while lock-screen / CallKit accept → LiveKit join has not finished.
+  bool _isAcceptInProgressForRoom(String? roomID) {
+    final id = roomID?.trim() ?? '';
+    if (_acceptJoinInFlight != null) {
+      final joinRoom = _acceptJoinRoomID?.trim() ?? '';
+      if (joinRoom.isEmpty || id.isEmpty || joinRoom == id) return true;
+    }
+    if (!_autoPickup) return false;
+    if (id.isEmpty) return true;
+    final active = _activeCallSignaling?.invitation?.roomID?.trim() ?? '';
+    final joinRoom = _acceptJoinRoomID?.trim() ?? '';
+    return active == id || joinRoom == id;
+  }
+
   /// Shared in-flight accept+join (CallKit, notification, in-app — one pipeline).
   Future<SignalingCertificate>? _acceptJoinInFlight;
   String? _acceptJoinRoomID;
@@ -240,6 +254,10 @@ mixin OpenIMLive {
                 VoipCallkitController.toOrNull?.endCall(pendingRoom) ??
                     Future.value());
             PackageBridge.clearCallNotification?.call();
+          } else if (_isAcceptInProgressForRoom(pendingRoom)) {
+            // Lock-screen accept is joining LiveKit — do not endCall (iOS fires ended on accept).
+            Logger.print(
+                'foreground: accept in flight, skip endCall roomID=$pendingRoom');
           } else {
             // Unanswered: drop system incoming UI so only in-app Accept remains.
             unawaited(
@@ -337,6 +355,7 @@ mixin OpenIMLive {
     try {
       final cert = await future;
       if (gen == _callSessionGen && !_isRoomEnded(roomID)) {
+        _autoPickup = false;
         unawaited(
             VoipCallkitController.toOrNull?.setConnected(roomID) ??
                 Future.value());
@@ -597,12 +616,22 @@ mixin OpenIMLive {
   void _onCallKitEnded(SignalingInfo? signaling) {
     _stopSound();
     PackageBridge.clearCallNotification?.call();
-    _beCalledEvent = null;
-    _autoPickup = false;
 
     final info = signaling ?? _activeCallSignaling;
     final roomID =
         info?.invitation?.roomID ?? OpenIMLiveClient().currentRoomID;
+
+    // iOS/Android CallKit dismisses incoming UI after Accept and emits "ended".
+    // That is not a user hangup — ignore while accept/join is in flight.
+    if (_isAcceptInProgressForRoom(roomID)) {
+      Logger.print(
+          'CallKit ended ignored: accept in progress roomID=$roomID');
+      return;
+    }
+
+    _beCalledEvent = null;
+    _autoPickup = false;
+
     if (roomID != null && roomID.isNotEmpty && _isRoomEnded(roomID)) {
       return;
     }
@@ -779,7 +808,11 @@ mixin OpenIMLive {
             insertSignalingMessageSubject.add(event);
             _terminateCallUi(roomID);
           } else if (event.state == CallState.beHangup) {
-            // Peer hung up — force close LiveKit + CallKit (WeChat-like).
+            insertSignalingMessageSubject.add(CallEvent(
+              CallState.beHangup,
+              event.data,
+              fields: event.fields ?? 0,
+            ));
             _terminateCallUi(roomID);
           } else if (event.state == CallState.beCanceled) {
             insertSignalingMessageSubject.add(event);
@@ -1341,8 +1374,13 @@ mixin OpenIMLive {
           .insertSingleMessageToLocalStorage(
         receiverID: inviteeUserID,
         senderID: inviterUserID,
-        message: message..status = 2,
+        message: message
+          ..status = MessageStatus.succeeded
+          ..isRead = true,
       );
+      // SDK may return status=sending for local-only inserts; never show spinner.
+      msg.status = MessageStatus.succeeded;
+      msg.isRead = true;
 
       onSignalingMessage?.call(SignalingMessageEvent(msg, 1, receiverID, null));
     })();
