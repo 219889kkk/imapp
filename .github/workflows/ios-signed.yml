@@ -116,6 +116,7 @@ jobs:
           APP_NAME: ${{ env.APP_NAME }}
           NSE_NAME: ${{ env.NSE_NAME }}
           TEAM_ID: ${{ env.TEAM_ID }}
+          METHOD: ${{ inputs.export_method }}
         run: |
           set -e
           python3 ios/scripts/apply_manual_signing.py

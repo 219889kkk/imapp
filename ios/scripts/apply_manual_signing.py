@@ -5,11 +5,12 @@ import pathlib
 import sys
 
 
-def patch_block(lines: list[str], start: int, end: int, team: str, profile: str) -> None:
+def patch_block(lines: list[str], start: int, end: int, team: str, profile: str, identity: str) -> None:
     keys = {
         "CODE_SIGN_STYLE": "Manual",
         "DEVELOPMENT_TEAM": team,
         "PROVISIONING_PROFILE_SPECIFIER": profile,
+        "CODE_SIGN_IDENTITY": identity,
     }
     present = {k: False for k in keys}
     insert_at = start + 1
@@ -21,6 +22,8 @@ def patch_block(lines: list[str], start: int, end: int, team: str, profile: str)
             if token in line:
                 if key == "PROVISIONING_PROFILE_SPECIFIER":
                     lines[i] = f'\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = "{profile}";\n'
+                elif key == "CODE_SIGN_IDENTITY":
+                    lines[i] = f'\t\t\t\tCODE_SIGN_IDENTITY = "{identity}";\n'
                 else:
                     lines[i] = f"\t\t\t\t{key} = {value};\n"
                 present[key] = True
@@ -36,10 +39,12 @@ def patch_block(lines: list[str], start: int, end: int, team: str, profile: str)
         inserts.append(f"\t\t\t\tDEVELOPMENT_TEAM = {team};\n")
     if "PROVISIONING_PROFILE_SPECIFIER" in missing:
         inserts.append(f'\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = "{profile}";\n')
+    if "CODE_SIGN_IDENTITY" in missing:
+        inserts.append(f'\t\t\t\tCODE_SIGN_IDENTITY = "{identity}";\n')
     lines[insert_at:insert_at] = inserts
 
 
-def patch_bundle(path: pathlib.Path, bundle: str, profile: str, team: str) -> int:
+def patch_bundle(path: pathlib.Path, bundle: str, profile: str, team: str, identity: str) -> int:
     lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
     needle = f"PRODUCT_BUNDLE_IDENTIFIER = {bundle};"
     count = 0
@@ -61,7 +66,7 @@ def patch_bundle(path: pathlib.Path, bundle: str, profile: str, team: str) -> in
             depth += lines[k].count("{")
             depth -= lines[k].count("}")
             if depth == 0 and k > start:
-                patch_block(lines, start, k, team, profile)
+                patch_block(lines, start, k, team, profile, identity)
                 count += 1
                 i = k + 1
                 break
@@ -84,9 +89,15 @@ def main() -> None:
         print("Missing TEAM_ID / APP_NAME / NSE_NAME", file=sys.stderr)
         sys.exit(1)
 
-    n_app = patch_bundle(pbx, "top.hangxun.app", app_profile, team)
-    n_nse = patch_bundle(pbx, "top.hangxun.app.NotificationService", nse_profile, team)
-    print(f"Patched {n_app} Runner + {n_nse} NotificationService buildSettings blocks")
+    method = os.environ.get("METHOD", "ad-hoc").strip().lower()
+    if method == "development":
+        identity = "Apple Development"
+    else:
+        identity = "Apple Distribution"
+
+    n_app = patch_bundle(pbx, "top.hangxun.app", app_profile, team, identity)
+    n_nse = patch_bundle(pbx, "top.hangxun.app.NotificationService", nse_profile, team, identity)
+    print(f"Patched {n_app} Runner + {n_nse} NSE blocks (identity={identity})")
 
 
 if __name__ == "__main__":
