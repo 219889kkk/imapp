@@ -21,6 +21,7 @@ import '../models/signaling_info.dart';
 import '../res/strings.dart';
 import '../utils/data_sp.dart';
 import '../utils/logger.dart';
+import '../utils/session_guard.dart';
 
 /// iOS PushKit + CallKit / Android full-screen incoming-call bridge.
 ///

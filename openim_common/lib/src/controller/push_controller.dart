@@ -123,8 +123,8 @@ class PushController extends GetxService {
           onAppLinkPayload: (res) => _log('appLink', res),
           onPushModeResult: (msg) => _log('pushMode', msg),
           onSetTagResult: (msg) => _log('setTag', msg),
-          onAliasResult: (msg) {
-            _log('alias', msg);
+          onAliasResult: (msg) async {
+            await _log('alias', msg);
             _unbindCompleter?.complete();
           },
           onQueryTagResult: (msg) => _log('queryTag', msg),
