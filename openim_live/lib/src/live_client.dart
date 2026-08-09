@@ -546,7 +546,8 @@ class OpenIMLiveClient implements RTCBridge {
     _dispatchRoomDisconnected();
   }
 
-  bool _isRecoverableDisconnect(DisconnectReason reason) {
+  bool _isRecoverableDisconnect(DisconnectReason? reason) {
+    if (reason == null) return true;
     return reason != DisconnectReason.clientInitiated &&
         reason != DisconnectReason.duplicateIdentity;
   }
