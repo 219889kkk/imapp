@@ -156,6 +156,10 @@ mixin IMCallback {
     onKickedOfflineSubject.add(KickoffType.kickedOffline);
   }
 
+  void userTokenExpired() {
+    onKickedOfflineSubject.add(KickoffType.userTokenExpired);
+  }
+
   void userTokenInvalid() {
     onKickedOfflineSubject.add(KickoffType.userTokenInvalid);
   }

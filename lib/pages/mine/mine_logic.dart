@@ -1,21 +1,17 @@
-import 'dart:async';
-
 import 'package:flutter_easyloading/flutter_easyloading.dart';
 import 'package:get/get.dart';
-import 'package:openim/core/im_callback.dart';
-import 'package:openim/pages/home/home_logic.dart';
 import 'package:openim_common/openim_common.dart';
+import 'package:openim_live/openim_live.dart';
 import 'package:pull_to_refresh_new/pull_to_refresh.dart';
 
 import '../../core/controller/im_controller.dart';
 import '../../core/controller/session_logout.dart';
 import '../../routes/app_navigator.dart';
+import '../home/home_logic.dart';
 
 class MineLogic extends GetxController {
   final imLogic = Get.find<IMController>();
   final refreshController = RefreshController();
-
-  late StreamSubscription kickedOfflineSub;
 
   void viewMyInfo() => AppNavigator.startMyInfo();
 
@@ -56,8 +52,11 @@ class MineLogic extends GetxController {
         await LoadingView.singleton.wrap(asyncFunction: () async {
           await SessionLogout.run(
             im: imLogic,
-            onConversationsCleared: () =>
-                Get.find<HomeLogic>().conversationsAtFirstPage.clear(),
+            onConversationsCleared: () {
+              if (Get.isRegistered<HomeLogic>()) {
+                Get.find<HomeLogic>().conversationsAtFirstPage.clear();
+              }
+            },
           );
         });
         AppNavigator.startLogin();
@@ -67,34 +66,14 @@ class MineLogic extends GetxController {
     }
   }
 
-  void kickedOffline({String? tips}) async {
-    if (EasyLoading.isShow) {
-      EasyLoading.dismiss();
-    }
-    Get.snackbar(StrRes.accountWarn, tips ?? StrRes.accountException);
-    await SessionLogout.runFromKickoff(
-      onConversationsCleared: () =>
-          Get.find<HomeLogic>().conversationsAtFirstPage.clear(),
-    );
-    AppNavigator.startLogin();
-  }
-
   @override
   void onInit() {
-    kickedOfflineSub = imLogic.onKickedOfflineSubject.listen((value) {
-      if (value == KickoffType.userTokenInvalid) {
-        kickedOffline(tips: StrRes.tokenInvalid);
-      } else {
-        kickedOffline();
-      }
-    });
     super.onInit();
   }
 
   @override
   void onClose() {
     refreshController.dispose();
-    kickedOfflineSub.cancel();
     super.onClose();
   }
 

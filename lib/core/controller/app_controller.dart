@@ -13,6 +13,7 @@ import 'package:get/get.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:openim/core/im_callback.dart';
 import 'package:openim_common/openim_common.dart';
+import 'package:openim_live/openim_live.dart';
 import 'package:sound_mode/sound_mode.dart';
 import 'package:sound_mode/utils/ringer_mode_statuses.dart';
 import 'package:vibration/vibration.dart';
@@ -97,8 +98,7 @@ class AppController extends GetxController
       Get.find<IMController>().backgroundSubject.add(run);
     }
     if (!run) {
-      _cancelAllNotifications();
-      // Back to foreground: poke IM if the socket dropped while backgrounded.
+      // Keep incoming-call notification (id 900001) when returning from background.
       _nudgeImConnection();
     }
   }
@@ -213,6 +213,10 @@ class AppController extends GetxController
 
     if (!Get.isRegistered<IMController>()) return;
     if (!OpenIM.iMManager.isLogined) return;
+    if (OpenIMLiveClient().isBusy) {
+      Logger.print('IM nudge skipped: active call');
+      return;
+    }
 
     final imLogic = Get.find<IMController>();
     final status =

@@ -13,6 +13,9 @@ import 'package:openim_live/openim_live.dart';
 
 import '../im_callback.dart';
 import 'app_controller.dart';
+import 'session_logout.dart';
+import '../../routes/app_navigator.dart';
+import '../../pages/home/home_logic.dart';
 
 class IMController extends GetxController with IMCallback, OpenIMLive {
   late Rx<UserFullInfo> userInfo;
@@ -22,10 +25,15 @@ class IMController extends GetxController with IMCallback, OpenIMLive {
   DateTime? _lastFailoverAt;
   bool _reconnectInFlight = false;
   DateTime? _lastReconnectAt;
+  StreamSubscription<KickoffType>? _kickedOfflineSub;
+  bool _kickoffInFlight = false;
+
+  static bool _isActiveCallInProgress() => OpenIMLiveClient().isBusy;
 
   @override
   void onClose() {
-    super.close();
+    _kickedOfflineSub?.cancel();
+    close();
     onCloseLive();
     super.onClose();
   }
@@ -35,7 +43,39 @@ class IMController extends GetxController with IMCallback, OpenIMLive {
     userInfo = UserFullInfo(userID: DataSp.userID ?? '').obs;
     super.onInit();
     onInitLive();
+    _bindKickoffListener();
     WidgetsBinding.instance.addPostFrameCallback((_) => initOpenIM());
+  }
+
+  void _bindKickoffListener() {
+    _kickedOfflineSub?.cancel();
+    _kickedOfflineSub = onKickedOfflineSubject.listen(_handleKickoff);
+  }
+
+  Future<void> _handleKickoff(KickoffType type) async {
+    if (_kickoffInFlight || SessionGuard.suppressNotifications) return;
+    _kickoffInFlight = true;
+    try {
+      final tips = switch (type) {
+        KickoffType.userTokenInvalid => StrRes.tokenInvalid,
+        KickoffType.userTokenExpired => StrRes.accountException,
+        KickoffType.kickedOffline => StrRes.accountException,
+      };
+      IMViews.showToast('${StrRes.accountWarn}: $tips');
+      await SessionLogout.runFromKickoff(
+        im: this,
+        onConversationsCleared: () {
+          if (Get.isRegistered<HomeLogic>()) {
+            Get.find<HomeLogic>().conversationsAtFirstPage.clear();
+          }
+        },
+      );
+      AppNavigator.startLogin();
+    } catch (e, s) {
+      Logger.print('handleKickoff failed: $e $s');
+    } finally {
+      _kickoffInFlight = false;
+    }
   }
 
   Future<void> initOpenIM() async {
@@ -62,7 +102,7 @@ class IMController extends GetxController with IMCallback, OpenIMLive {
             imSdkStatus(IMSdkStatus.connectionSucceeded);
           },
           onKickedOffline: kickedOffline,
-          onUserTokenExpired: kickedOffline,
+          onUserTokenExpired: userTokenExpired,
           onUserTokenInvalid: userTokenInvalid,
         ),
       );
@@ -172,7 +212,12 @@ class IMController extends GetxController with IMCallback, OpenIMLive {
   }
 
   Future<void> _tryFailoverOnConnectFailed() async {
-    if (_failoverInFlight) return;
+    if (_failoverInFlight || _isActiveCallInProgress()) {
+      if (_isActiveCallInProgress()) {
+        Logger.print('defer endpoint failover: active call');
+      }
+      return;
+    }
     final now = DateTime.now();
     if (_lastFailoverAt != null &&
         now.difference(_lastFailoverAt!) < const Duration(seconds: 45)) {
@@ -201,7 +246,12 @@ class IMController extends GetxController with IMCallback, OpenIMLive {
 
   /// Best-effort relogin when the WS drops without a clean SDK callback.
   Future<void> _softReconnectAfterDisconnect() async {
-    if (_reconnectInFlight || _failoverInFlight) return;
+    if (_reconnectInFlight || _failoverInFlight || _isActiveCallInProgress()) {
+      if (_isActiveCallInProgress()) {
+        Logger.print('defer soft reconnect: active call');
+      }
+      return;
+    }
     final now = DateTime.now();
     if (_lastReconnectAt != null &&
         now.difference(_lastReconnectAt!) < const Duration(seconds: 15)) {
@@ -210,7 +260,9 @@ class IMController extends GetxController with IMCallback, OpenIMLive {
     _reconnectInFlight = true;
     try {
       await Future.delayed(const Duration(seconds: 2));
-      if (!OpenIM.iMManager.isLogined) return;
+      if (!OpenIM.iMManager.isLogined || _isActiveCallInProgress()) return;
+      final status = imSdkStatusSubject.values.lastOrNull?.status;
+      if (status == IMSdkStatus.connectionSucceeded) return;
       final cert = DataSp.getLoginCertificate();
       if (cert == null || cert.userID.isEmpty || cert.imToken.isEmpty) {
         return;

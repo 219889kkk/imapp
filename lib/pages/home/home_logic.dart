@@ -106,6 +106,7 @@ class HomeLogic extends SuperController {
 
     Apis.kickoffController.stream.listen((event) async {
       await SessionLogout.runFromKickoff(
+        im: imLogic,
         onConversationsCleared: () => conversationsAtFirstPage.clear(),
       );
       AppNavigator.startLogin();

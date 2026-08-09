@@ -97,6 +97,7 @@ mixin OpenIMLive {
     _beCalledEvent = null;
     _activeCallSignaling = null;
     _callSessionGen++; // invalidate in-flight headless accept/present
+    _cancelRingTimeout();
     _stopSound();
     PackageBridge.clearCallNotification?.call();
     FlutterOpenimLiveAlert.closeLiveAlert();
@@ -153,6 +154,28 @@ mixin OpenIMLive {
     handleAudioSessionActivation: false,
   );
   int _ringPlayGen = 0;
+  Timer? _ringTimeoutTimer;
+  String? _ringTimeoutRoomID;
+
+  void _startRingTimeout(SignalingInfo signaling) {
+    _cancelRingTimeout();
+    final roomID = signaling.invitation?.roomID?.trim() ?? '';
+    if (roomID.isEmpty || _isRoomEnded(roomID)) return;
+    final configured = signaling.invitation?.timeout ?? 30;
+    final seconds = configured <= 0 ? 30 : configured;
+    _ringTimeoutRoomID = roomID;
+    _ringTimeoutTimer = Timer(Duration(seconds: seconds), () {
+      if (_isRoomEnded(roomID)) return;
+      Logger.print('call ring timeout roomID=$roomID after ${seconds}s');
+      signalingSubject.add(CallEvent(CallState.timeout, signaling));
+    });
+  }
+
+  void _cancelRingTimeout() {
+    _ringTimeoutTimer?.cancel();
+    _ringTimeoutTimer = null;
+    _ringTimeoutRoomID = null;
+  }
 
   bool get isBusy => OpenIMLiveClient().isBusy;
 
@@ -179,6 +202,7 @@ mixin OpenIMLive {
       PackageBridge.isCallRoomEnded = null;
     }
     _clearPickupCache();
+    _cancelRingTimeout();
     signalingSubject.close();
     backgroundSubject.close();
     roomParticipantDisconnectedSubject.close();
@@ -652,6 +676,7 @@ mixin OpenIMLive {
           if (event.state == CallState.beCalled) {
             unawaited(_prefetchPickupToken(event.data.invitation?.roomID));
             _activeCallSignaling = event.data;
+            _startRingTimeout(event.data);
             if (!_autoPickup) {
               _playSound();
             } else {
@@ -751,11 +776,17 @@ mixin OpenIMLive {
               _terminateCallUi(roomID);
             }
           } else if (event.state == CallState.timeout) {
+            _cancelRingTimeout();
             insertSignalingMessageSubject.add(event);
+            final data = event.data;
+            final roomID = data.invitation?.roomID;
+            final isCaller =
+                data.invitation?.inviterUserID == OpenIM.iMManager.userID;
             _terminateCallUi(roomID);
-            final sessionType = event.data.invitation!.sessionType;
-            if (sessionType == 1) {
-              onTimeoutCancelled(event.data);
+            if (isCaller) {
+              unawaited(onTimeoutCancelled(data));
+            } else {
+              unawaited(onTapReject(data..userID = OpenIM.iMManager.userID));
             }
           }
         },
@@ -837,6 +868,7 @@ mixin OpenIMLive {
       onRoomDisconnected: () => onRoomDisconnected(signal),
       onClose: _stopSound,
     );
+    _startRingTimeout(signal);
   }
 
   onError(error, stack) {
@@ -1139,19 +1171,18 @@ mixin OpenIMLive {
     };
     final message = await OpenIM.iMManager.messageManager.createCustomMessage(
         data: jsonEncode(data), extension: '', description: '');
-
-    OpenIM.iMManager.messageManager.sendMessage(
-        message: message,
-        offlinePushInfo: OfflinePushInfo(),
-        userID: signaling.invitation!.inviterUserID,
-        isOnlineOnly: false);
+    final recvUserIDList = _recvUserIDList(signaling);
+    for (final userID in recvUserIDList) {
+      await OpenIM.iMManager.messageManager.sendMessage(
+          message: message,
+          offlinePushInfo: OfflinePushInfo(),
+          userID: userID,
+          isOnlineOnly: false);
+    }
     unawaited(_triggerVoipPush(
       signaling,
       action: 'cancel',
-      toUserIDs: [
-        if (signaling.invitation?.inviterUserID != null)
-          signaling.invitation!.inviterUserID!,
-      ],
+      toUserIDs: recvUserIDList,
     ));
     return true;
   }
@@ -1258,6 +1289,7 @@ mixin OpenIMLive {
 
   Future<void> _stopSound() async {
     _ringPlayGen++;
+    _cancelRingTimeout();
     try {
       await _audioPlayer.stop();
     } catch (_) {}

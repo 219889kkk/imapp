@@ -38,15 +38,26 @@ class SessionLogout {
     onConversationsCleared?.call();
   }
 
-  static Future<void> runFromKickoff({void Function()? onConversationsCleared}) async {
+  static Future<void> runFromKickoff({
+    IMController? im,
+    void Function()? onConversationsCleared,
+  }) async {
     SessionGuard.markLoggedOut();
 
     if (Get.isRegistered<AppController>()) {
       await Get.find<AppController>().onSessionLogout();
     }
 
-    if (Get.isRegistered<IMController>()) {
-      Get.find<IMController>().terminateAllCallsOnLogout();
+    final imCtrl = im ??
+        (Get.isRegistered<IMController>() ? Get.find<IMController>() : null);
+    imCtrl?.terminateAllCallsOnLogout();
+
+    if (imCtrl != null) {
+      try {
+        await imCtrl.logout();
+      } catch (e, s) {
+        Logger.print('SessionLogout kickoff im logout: $e $s');
+      }
     }
 
     await VoipCallkitController.logoutAsync();
