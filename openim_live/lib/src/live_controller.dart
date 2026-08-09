@@ -150,6 +150,11 @@ mixin OpenIMLive {
 
   bool get isBusy => OpenIMLiveClient().isBusy;
 
+  /// Tear down all call UI/ringtone on logout — no further incoming alerts.
+  void terminateAllCallsOnLogout() {
+    _terminateCallUi(null);
+  }
+
   onCloseLive() {
     if (identical(
         PackageBridge.handleCallNotificationAction, _handleCallNotificationAction)) {
@@ -542,6 +547,7 @@ mixin OpenIMLive {
 
   _signalingListener() => _stream.listen(
         (event) async {
+          if (!SessionGuard.shouldNotify) return;
           final roomID = event.data.invitation?.roomID;
           if (event.state != CallState.beCalled) {
             _beCalledEvent = null;
@@ -555,7 +561,9 @@ mixin OpenIMLive {
               unawaited(_stopSound());
             }
           }
-          if (event.state == CallState.beCalled) {            if (!_autoPickup) {
+          if (event.state == CallState.beCalled) {
+            unawaited(_prefetchPickupToken(event.data.invitation?.roomID));
+            if (!_autoPickup) {
               _playSound();
             } else {
               _stopSound();
@@ -629,8 +637,7 @@ mixin OpenIMLive {
             _terminateCallUi(roomID);
           } else if (event.state == CallState.beAccepted) {
             await _stopSound();
-            // Inviter: unmute mic + restore RTC session after ringback stops.
-            // (Waiting caller had mic muted; ring stop must win the race.)
+            // Inviter: backup path if LiveKit event missed — unmute + subscribe.
             unawaited(OpenIMLiveClient().ensureCallKeepAlive(speakerOn: true));
             unawaited(OpenIMLiveClient().ensureMediaAudible(
               speakerOn: true,
@@ -844,6 +851,21 @@ mixin OpenIMLive {
     );
   }
 
+  Future<void> _prefetchPickupToken(String? roomID) async {
+    final id = roomID?.trim() ?? '';
+    if (id.isEmpty) return;
+    if (_pickupCertRoomID == id && _pickupCertCache != null) return;
+    if (_pickupInFlight != null && _pickupRoomID == id) return;
+    try {
+      final cert = await Apis.getTokenForRTC(id, OpenIM.iMManager.userID);
+      _pickupCertCache = cert;
+      _pickupCertRoomID = id;
+      Logger.print('prefetch rtc token ok roomID=$id');
+    } catch (e, s) {
+      Logger.print('prefetch rtc token failed roomID=$id: $e $s');
+    }
+  }
+
   Future<SignalingCertificate> onTapPickup(SignalingInfo signaling) async {
     final roomID = signaling.invitation?.roomID;
     if (roomID != null &&
@@ -902,7 +924,8 @@ mixin OpenIMLive {
         message: message,
         offlinePushInfo: OfflinePushInfo(),
         userID: signaling.invitation!.inviterUserID,
-        isOnlineOnly: false);
+        // Online-only accept reaches waiting caller faster than offline sync.
+        isOnlineOnly: true);
     final certificate = await Apis.getTokenForRTC(
         signaling.invitation!.roomID!, OpenIM.iMManager.userID);
 

@@ -243,6 +243,10 @@ class _SingleRoomViewState extends SignalState<SingleRoomView> {
 
   @override
   void onParticipantConnected() {
+    // Caller: peer joined LiveKit — unmute immediately, don't wait IM accept.
+    if (_deferMicrophone) {
+      promoteInCallUi(reason: 'remote-joined-livekit');
+    }
     super.onParticipantConnected();
     if (_peerAudioArmed) {
       return;

@@ -421,7 +421,7 @@ class OpenIMLiveClient implements RTCBridge {
     // Once after lock-screen accept — avoid repeated mic off/on (causes harsh pops).
     await ensureMediaAudible(speakerOn: prefer, forceRestartMic: false);
     final room = _mediaRoom;
-    unawaited(Future<void>.delayed(const Duration(milliseconds: 600), () async {
+    unawaited(Future<void>.delayed(const Duration(milliseconds: 150), () async {
       if (_mediaRoom != room || room == null) return;
       final on = _userSpeakerPreference ?? prefer;
       await ensureMediaAudible(speakerOn: on, forceRestartMic: false);
@@ -496,12 +496,32 @@ class OpenIMLiveClient implements RTCBridge {
 
   void _wireRoomEvents(EventsListener<RoomEvent> listener, Room room) {
     listener
-      ..on<LocalTrackPublishedEvent>((_) => _uiOnRoom?.call(room))
+      ..on<LocalTrackPublishedEvent>((_) {
+        _uiOnRoom?.call(room);
+        unawaited(_armRemoteAudio());
+      })
       ..on<LocalTrackUnpublishedEvent>((_) => _uiOnRoom?.call(room))
-      ..on<ParticipantConnectedEvent>((_) => _uiOnRemotePresent?.call())
+      ..on<ParticipantConnectedEvent>((_) {
+        _uiOnRemotePresent?.call();
+        unawaited(_armRemoteAudio(forceMic: true));
+      })
       ..on<ParticipantDisconnectedEvent>((_) => _uiOnRemoteLeft?.call())
-      ..on<TrackSubscribedEvent>((_) => _uiOnRoom?.call(room))
+      ..on<TrackSubscribedEvent>((event) {
+        _uiOnRoom?.call(room);
+        if (event.track is AudioTrack) {
+          unawaited(_armRemoteAudio());
+        }
+      })
       ..on<TrackUnsubscribedEvent>((_) => _uiOnRoom?.call(room));
+  }
+
+  /// Subscribe remote audio + unmute as soon as LiveKit has tracks (don't wait IM).
+  Future<void> _armRemoteAudio({bool forceMic = false}) async {
+    final on = _userSpeakerPreference ?? true;
+    await ensureMediaAudible(
+      speakerOn: on,
+      forceRestartMic: forceMic,
+    );
   }
 
   /// Bind UI listeners onto the shared media room (no second connect).

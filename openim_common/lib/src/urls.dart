@@ -30,6 +30,8 @@ class Urls {
 
   /// Callee reports PushKit VoIP device token (stored per userID for direct APNs).
   static final voipToken = "${Config.appAuthUrl}/user/rtc/voip_token";
+  static final voipTokenDelete =
+      "${Config.appAuthUrl}/user/rtc/voip_token/delete";
 
   static final momentsFeed = "${Config.appAuthUrl}/moments/feed";
   static final momentPosts = "${Config.appAuthUrl}/moments/posts";

@@ -18,6 +18,9 @@ class IMController extends GetxController with IMCallback, OpenIMLive {
   late Rx<UserFullInfo> userInfo;
   late String atAllTag;
 
+  bool _failoverInFlight = false;
+  DateTime? _lastFailoverAt;
+
   @override
   void onClose() {
     super.close();
@@ -33,7 +36,7 @@ class IMController extends GetxController with IMCallback, OpenIMLive {
     WidgetsBinding.instance.addPostFrameCallback((_) => initOpenIM());
   }
 
-  void initOpenIM() async {
+  Future<void> initOpenIM() async {
     var initialized = false;
     try {
       initialized = await OpenIM.iMManager.initSDK(
@@ -50,6 +53,7 @@ class IMController extends GetxController with IMCallback, OpenIMLive {
           },
           onConnectFailed: (code, error) {
             imSdkStatus(IMSdkStatus.connectionFailed);
+            unawaited(_tryFailoverOnConnectFailed());
           },
           onConnectSuccess: () {
             imSdkStatus(IMSdkStatus.connectionSucceeded);
@@ -154,6 +158,44 @@ class IMController extends GetxController with IMCallback, OpenIMLive {
     initializedSubject.sink.add(initialized);
   }
 
+  /// Re-init SDK after switching to backup/primary entry.
+  Future<void> reinitOpenIM() async {
+    try {
+      OpenIM.iMManager.unInitSDK();
+    } catch (e, s) {
+      Logger.print('unInitSDK: $e $s');
+    }
+    await initOpenIM();
+  }
+
+  Future<void> _tryFailoverOnConnectFailed() async {
+    if (_failoverInFlight) return;
+    final now = DateTime.now();
+    if (_lastFailoverAt != null &&
+        now.difference(_lastFailoverAt!) < const Duration(seconds: 45)) {
+      return;
+    }
+    _failoverInFlight = true;
+    try {
+      final current = Config.serverIp;
+      final switched = await ServerEndpointSelector.failoverFrom(current);
+      if (!switched) return;
+      _lastFailoverAt = now;
+      await reinitOpenIM();
+      HttpUtil.updateBaseUrl();
+      final cert = DataSp.getLoginCertificate();
+      if (cert != null &&
+          cert.userID.isNotEmpty &&
+          cert.imToken.isNotEmpty) {
+        await login(cert.userID, cert.imToken);
+      }
+    } catch (e, s) {
+      Logger.print('endpoint failover failed: $e $s');
+    } finally {
+      _failoverInFlight = false;
+    }
+  }
+
   Future login(String userID, String token) async {
     try {
       var user = await OpenIM.iMManager.login(
@@ -174,6 +216,7 @@ class IMController extends GetxController with IMCallback, OpenIMLive {
 
   /// Returns true when the message is a calling signaling payload.
   bool _dispatchCallingMessage(Message msg) {
+    if (!SessionGuard.shouldNotify) return msg.isCallingSignalingType;
     if (!msg.isCustomType) return false;
     final raw = msg.customElem?.data;
     if (raw == null || raw.isEmpty) return false;

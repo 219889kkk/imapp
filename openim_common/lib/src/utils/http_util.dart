@@ -42,6 +42,10 @@ class HttpUtil {
     dio.options.receiveTimeout = const Duration(seconds: 15);
   }
 
+  static void updateBaseUrl() {
+    dio.options.baseUrl = Config.imApiUrl;
+  }
+
   static String get operationID =>
       DateTime.now().millisecondsSinceEpoch.toString();
 

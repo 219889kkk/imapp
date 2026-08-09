@@ -159,6 +159,12 @@ class LoginLogic extends GetxController {
         IMViews.showToast(StrRes.plsEnterRightAccount);
         return false;
       }
+      final hostBefore = Config.serverIp;
+      await ServerEndpointSelector.ensureBestEndpoint();
+      HttpUtil.updateBaseUrl();
+      if (Config.serverIp != hostBefore) {
+        await imLogic.reinitOpenIM();
+      }
       final password = IMUtils.emptyStrToNull(pwdCtrl.text);
       final data = await Apis.login(
         account: account,

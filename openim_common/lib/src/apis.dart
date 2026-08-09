@@ -510,6 +510,27 @@ class Apis {
     }
   }
 
+  /// Remove stored VoIP token on logout so server stops direct APNs call pushes.
+  static Future<void> deleteVoipToken({required String userID}) async {
+    if (userID.isEmpty) return;
+    final chatTok = DataSp.chatToken?.trim() ?? '';
+    if (chatTok.isEmpty) {
+      Logger.print('deleteVoipToken skip: chat auth token empty');
+      return;
+    }
+    try {
+      await HttpUtil.post(
+        Urls.voipTokenDelete,
+        data: {'userID': userID},
+        options: chatTokenOptions,
+        showErrorToast: false,
+      );
+      Logger.print('deleteVoipToken ok userID=$userID');
+    } catch (e, s) {
+      Logger.print('deleteVoipToken failed userID=$userID: $e $s');
+    }
+  }
+
   static Future<dynamic> checkVerificationCode({
     String? areaCode,
     String? phoneNumber,

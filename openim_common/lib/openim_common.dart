@@ -30,6 +30,8 @@ export 'src/widgets/theme_color_picker_sheet.dart';
 export 'src/urls.dart';
 export 'src/utils/chat_emoji_text_editing_controller.dart';
 export 'src/utils/data_sp.dart';
+export 'src/utils/session_guard.dart';
+export 'src/utils/server_endpoint_selector.dart';
 export 'src/utils/http_util.dart';
 export 'src/utils/image_util.dart';
 export 'src/utils/last_online_cache.dart';

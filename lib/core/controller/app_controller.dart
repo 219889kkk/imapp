@@ -221,6 +221,8 @@ class AppController extends GetxController
     try {
       if (status == IMSdkStatus.connectionFailed ||
           status == IMSdkStatus.syncFailed) {
+        await ServerEndpointSelector.ensureBestEndpoint(force: true);
+        HttpUtil.updateBaseUrl();
         final cert = DataSp.getLoginCertificate();
         if (cert == null || cert.userID.isEmpty || cert.imToken.isEmpty) {
           return;
@@ -257,6 +259,7 @@ class AppController extends GetxController
 
   Future<void> showNotification(im.Message message,
       {bool showNotification = true}) async {
+    if (!SessionGuard.shouldNotify) return;
     if (_isGlobalNotDisturb() ||
         message.attachedInfoElem?.notSenderNotificationPush == true ||
         message.contentType == im.MessageType.typing ||
@@ -284,6 +287,7 @@ class AppController extends GetxController
   String? viewingConversationID;
 
   Future<void> promptSoundOrNotification(im.Message message) async {
+    if (!SessionGuard.shouldNotify) return;
     final status =
         Get.find<IMController>().imSdkStatusSubject.values.lastOrNull?.status;
     // Only suppress during active sync — previously required syncEnded and
@@ -318,6 +322,7 @@ class AppController extends GetxController
   Future<void> showFriendApplicationNotification({
     required String nickname,
   }) async {
+    if (!SessionGuard.shouldNotify) return;
     if (_isGlobalNotDisturb()) return;
     if (!DataSp.getEnableMsgNotification()) return;
 
@@ -385,6 +390,7 @@ class AppController extends GetxController
   }
 
   Future<void> showCallNotification(SignalingInfo info) async {
+    if (!SessionGuard.shouldNotify) return;
     // iOS CallKit owns the system incoming-call UI; skip local banners.
     if (Platform.isIOS) return;
     if (!DataSp.getEnableCallNotification()) return;
@@ -532,6 +538,13 @@ class AppController extends GetxController
 
   Future<void> _cancelAllNotifications() async {
     await flutterLocalNotificationsPlugin.cancelAll();
+  }
+
+  /// Stop sounds, banners, and badge as soon as logout begins.
+  Future<void> onSessionLogout() async {
+    await _stopMessageSound();
+    await _cancelAllNotifications();
+    removeBadge();
   }
 
   void showBadge(count) {
@@ -709,9 +722,9 @@ class AppController extends GetxController
     }
   }
 
-  void _stopMessageSound() async {
+  Future<void> _stopMessageSound() async {
     if (_audioPlayer.playerState.playing) {
-      _audioPlayer.stop();
+      await _audioPlayer.stop();
     }
     await session.setActive(false);
   }

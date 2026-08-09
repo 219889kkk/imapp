@@ -59,6 +59,12 @@ class SplashLogic extends GetxController {
     if (isClosed) return;
 
     if (sdkOk && null != userID && null != token) {
+      final hostBefore = Config.serverIp;
+      await ServerEndpointSelector.ensureBestEndpoint();
+      HttpUtil.updateBaseUrl();
+      if (Config.serverIp != hostBefore) {
+        await imLogic.reinitOpenIM();
+      }
       await _login();
     } else {
       AppNavigator.startLogin();

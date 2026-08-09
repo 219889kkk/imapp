@@ -8,6 +8,7 @@ import 'package:openim_common/openim_common.dart';
 import 'package:pull_to_refresh_new/pull_to_refresh.dart';
 
 import '../../core/controller/im_controller.dart';
+import '../../core/controller/session_logout.dart';
 import '../../routes/app_navigator.dart';
 
 class MineLogic extends GetxController {
@@ -53,11 +54,11 @@ class MineLogic extends GetxController {
     if (confirm == true) {
       try {
         await LoadingView.singleton.wrap(asyncFunction: () async {
-          await imLogic.logout();
-          await DataSp.removeLoginCertificate();
-          PushController.logout();
-          VoipCallkitController.logout();
-          Get.find<HomeLogic>().conversationsAtFirstPage.clear();
+          await SessionLogout.run(
+            im: imLogic,
+            onConversationsCleared: () =>
+                Get.find<HomeLogic>().conversationsAtFirstPage.clear(),
+          );
         });
         AppNavigator.startLogin();
       } catch (e) {
@@ -71,9 +72,10 @@ class MineLogic extends GetxController {
       EasyLoading.dismiss();
     }
     Get.snackbar(StrRes.accountWarn, tips ?? StrRes.accountException);
-    await DataSp.removeLoginCertificate();
-    PushController.logout();
-    VoipCallkitController.logout();
+    await SessionLogout.runFromKickoff(
+      onConversationsCleared: () =>
+          Get.find<HomeLogic>().conversationsAtFirstPage.clear(),
+    );
     AppNavigator.startLogin();
   }
 

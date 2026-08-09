@@ -33,6 +33,7 @@ class PushController extends GetxService {
   String? _boundAlias;
   bool _getuiInited = false;
   bool _handlersAttached = false;
+  Completer<void>? _unbindCompleter;
 
   @override
   void onInit() {
@@ -57,6 +58,7 @@ class PushController extends GetxService {
     String alias, {
     void Function(String token)? onTokenRefresh,
   }) {
+    SessionGuard.markLoggedIn();
     final ctrl = Get.isRegistered<PushController>()
         ? Get.find<PushController>()
         : PushController();
@@ -77,15 +79,19 @@ class PushController extends GetxService {
   }
 
   static void logout() {
+    unawaited(logoutAsync());
+  }
+
+  static Future<void> logoutAsync() async {
     final ctrl = Get.isRegistered<PushController>()
         ? Get.find<PushController>()
         : PushController();
     switch (ctrl.pushType) {
       case PushType.getui:
-        GetuiPushController()._logout();
+        await GetuiPushController()._logoutAsync();
         break;
       case PushType.FCM:
-        FCMPushController()._deleteToken();
+        await FCMPushController()._deleteToken();
         break;
       case PushType.none:
         break;
@@ -117,7 +123,10 @@ class PushController extends GetxService {
           onAppLinkPayload: (res) => _log('appLink', res),
           onPushModeResult: (msg) => _log('pushMode', msg),
           onSetTagResult: (msg) => _log('setTag', msg),
-          onAliasResult: (msg) => _log('alias', msg),
+          onAliasResult: (msg) {
+            _log('alias', msg);
+            _unbindCompleter?.complete();
+          },
           onQueryTagResult: (msg) => _log('queryTag', msg),
           onWillPresentNotification: (msg) => _log('willPresent', msg),
           onOpenSettingsForNotification: (msg) =>
@@ -171,6 +180,10 @@ class GetuiPushController {
   }
 
   void _logout() {
+    unawaited(_logoutAsync());
+  }
+
+  Future<void> _logoutAsync() async {
     final push = Get.isRegistered<PushController>()
         ? Get.find<PushController>()
         : null;
@@ -178,10 +191,20 @@ class GetuiPushController {
     if (alias == null || alias.isEmpty) return;
     try {
       final sn = 'unalias_${DateTime.now().millisecondsSinceEpoch}';
+      push?._unbindCompleter = Completer<void>();
       Getuiflut().unbindAlias(alias, sn, true);
       push?._boundAlias = null;
       Logger.print('Getui unbindAlias: $alias');
+      try {
+        await push!._unbindCompleter!.future
+            .timeout(const Duration(seconds: 3));
+      } catch (_) {
+        Logger.print('Getui unbindAlias timeout for $alias');
+      } finally {
+        push?._unbindCompleter = null;
+      }
     } catch (e, s) {
+      push?._unbindCompleter = null;
       Logger.print('Getui unbindAlias failed: $e $s');
     }
   }

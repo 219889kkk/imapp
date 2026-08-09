@@ -74,6 +74,7 @@ class VoipCallkitController extends GetxService {
 
   /// After Getui [PushController.login] / bindAlias.
   static void login(String userID) {
+    SessionGuard.markLoggedIn();
     if (!Platform.isIOS && !Platform.isAndroid) return;
     final ctrl = Get.isRegistered<VoipCallkitController>()
         ? Get.find<VoipCallkitController>()
@@ -95,14 +96,30 @@ class VoipCallkitController extends GetxService {
   }
 
   static void logout() {
+    unawaited(logoutAsync());
+  }
+
+  static Future<void> logoutAsync() async {
     if (!Platform.isIOS && !Platform.isAndroid) return;
     if (!Get.isRegistered<VoipCallkitController>()) return;
     final ctrl = Get.find<VoipCallkitController>();
+    final userID = ctrl._boundUserID ?? DataSp.userID;
     ctrl._boundUserID = null;
     ctrl._lastUploadedToken = null;
     ctrl._tokenRetryTimer?.cancel();
-    unawaited(FlutterCallkitIncoming.endAllCalls());
+    ctrl._voipToken = null;
+    try {
+      await FlutterCallkitIncoming.endAllCalls();
+    } catch (e, s) {
+      Logger.print('VoipCallkit endAllCalls: $e $s');
+    }
     ctrl.callKitActive.value = false;
+    if (Platform.isIOS &&
+        userID != null &&
+        userID.isNotEmpty &&
+        (DataSp.chatToken?.trim().isNotEmpty ?? false)) {
+      await Apis.deleteVoipToken(userID: userID);
+    }
   }
 
   /// Android: notification + full-screen intent (+ overlay if needed).

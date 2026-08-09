@@ -10,6 +10,7 @@ import 'package:rxdart/rxdart.dart';
 
 import '../../core/controller/app_controller.dart';
 import '../../core/controller/im_controller.dart';
+import '../../core/controller/session_logout.dart';
 import '../../core/im_callback.dart';
 import '../../routes/app_navigator.dart';
 import '../../widgets/screen_lock_title.dart';
@@ -103,10 +104,10 @@ class HomeLogic extends SuperController {
       }
     });
 
-    Apis.kickoffController.stream.listen((event) {
-      DataSp.removeLoginCertificate();
-      PushController.logout();
-      VoipCallkitController.logout();
+    Apis.kickoffController.stream.listen((event) async {
+      await SessionLogout.runFromKickoff(
+        onConversationsCleared: () => conversationsAtFirstPage.clear(),
+      );
       AppNavigator.startLogin();
     });
     super.onInit();
@@ -189,12 +190,12 @@ class HomeLogic extends SuperController {
         onMaxRetries: (_) async {
           Get.back();
           await LoadingView.singleton.wrap(asyncFunction: () async {
-            await imLogic.logout();
-            await DataSp.removeLoginCertificate();
+            await SessionLogout.run(
+              im: imLogic,
+              onConversationsCleared: () => conversationsAtFirstPage.clear(),
+            );
             await DataSp.clearLockScreenPassword();
             await DataSp.closeBiometric();
-            PushController.logout();
-            VoipCallkitController.logout();
           });
           AppNavigator.startLogin();
         },

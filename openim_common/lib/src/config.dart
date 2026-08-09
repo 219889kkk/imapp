@@ -11,6 +11,8 @@ import 'package:openim_common/openim_common.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
 
+import 'utils/server_endpoint_selector.dart';
+
 class Config {
   static Future init(Function() runApp) async {
     WidgetsFlutterBinding.ensureInitialized();
@@ -18,6 +20,7 @@ class Config {
       final path = (await getApplicationDocumentsDirectory()).path;
       cachePath = '$path/';
       await DataSp.init();
+      await ServerEndpointSelector.ensureBestEndpoint();
       await Hive.initFlutter(path);
       MediaKit.ensureInitialized();
       HttpUtil.init();
@@ -110,21 +113,22 @@ class Config {
   static const friendScheme = "io.openim.app/addFriend/";
   static const groupScheme = "io.openim.app/joinGroup/";
 
-  static const _host = "im.zghtchat9.top";
+  static const _defaultHost = ServerEndpointSelector.primaryHost;
 
   static const _ipRegex =
       '((2[0-4]\\d|25[0-5]|[01]?\\d\\d?)\\.){3}(2[0-4]\\d|25[0-5]|[01]?\\d\\d?)';
 
-  static bool get _isIP => RegExp(_ipRegex).hasMatch(_host);
-
-  static String get serverIp {
-    String? ip;
-    var server = DataSp.getServerConfig();
-    if (null != server) {
-      ip = server['serverIP'];
-    }
-    return ip ?? _host;
+  static String get _activeHost {
+    final fromSp = DataSp.getServerConfig()?['serverIP']?.toString().trim();
+    if (fromSp != null && fromSp.isNotEmpty) return fromSp;
+    return _defaultHost;
   }
+
+  static bool _isIPHost(String host) => RegExp(_ipRegex).hasMatch(host);
+
+  static bool get _isIP => _isIPHost(_activeHost);
+
+  static String get serverIp => _activeHost;
 
   static String get chatTokenUrl {
     String? url;
@@ -132,7 +136,7 @@ class Config {
     if (null != server) {
       url = server['chatTokenUrl'];
     }
-    return url ?? (_isIP ? "http://$_host:10009" : "https://$_host/chat");
+    return url ?? (_isIP ? "http://$_activeHost:10009" : "https://$_activeHost/chat");
   }
 
   static String get appAuthUrl {
@@ -141,7 +145,7 @@ class Config {
     if (null != server) {
       url = server['authUrl'];
     }
-    return url ?? (_isIP ? "http://$_host:10008" : "https://$_host/chat");
+    return url ?? (_isIP ? "http://$_activeHost:10008" : "https://$_activeHost/chat");
   }
 
   static String get botApiUrl {
@@ -150,7 +154,7 @@ class Config {
     if (null != server) {
       url = server['botApiUrl'];
     }
-    return url ?? (_isIP ? "http://$_host:10010" : "https://$_host/bot");
+    return url ?? (_isIP ? "http://$_activeHost:10010" : "https://$_activeHost/bot");
   }
 
   static String get imApiUrl {
@@ -159,7 +163,7 @@ class Config {
     if (null != server) {
       url = server['apiUrl'];
     }
-    return url ?? (_isIP ? 'http://$_host:10002' : "https://$_host/api");
+    return url ?? (_isIP ? 'http://$_activeHost:10002' : "https://$_activeHost/api");
   }
 
   static String get imWsUrl {
@@ -168,7 +172,7 @@ class Config {
     if (null != server) {
       url = server['wsUrl'];
     }
-    return url ?? (_isIP ? "ws://$_host:10001" : "wss://$_host/msg_gateway");
+    return url ?? (_isIP ? "ws://$_activeHost:10001" : "wss://$_activeHost/msg_gateway");
   }
 
   /// Public WebSocket URL for LiveKit — phones cannot use 127.0.0.1 from API.
@@ -176,8 +180,8 @@ class Config {
     final server = DataSp.getServerConfig();
     final fromConfig = server?['liveKitUrl']?.toString().trim();
     if (fromConfig != null && fromConfig.isNotEmpty) return fromConfig;
-    if (!_isIP) return 'wss://livekit.$_host';
-    return 'wss://livekit.zghtchat9.top';
+    if (!_isIP) return 'wss://livekit.$_defaultHost';
+    return 'wss://livekit.$_defaultHost';
   }
 
   static int get logLevel {

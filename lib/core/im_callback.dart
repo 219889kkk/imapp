@@ -184,11 +184,13 @@ mixin IMCallback {
   }
 
   void recvNewMessage(Message msg) {
+    if (!SessionGuard.shouldNotify) return;
     initLogic.showNotification(msg);
     onRecvNewMessage?.call(msg);
   }
 
   void recvOfflineMessage(Message msg) {
+    if (!SessionGuard.shouldNotify) return;
     initLogic.showNotification(msg);
     onRecvOfflineMessage?.call(msg);
   }
