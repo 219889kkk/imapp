@@ -214,18 +214,6 @@ class _SingleRoomViewState extends SignalState<SingleRoomView> {
     }
   }
 
-  Future<void> _ensureMicrophonePublished() async {
-    if (!enabledMicrophone) return;
-    try {
-      final participant = _room?.localParticipant;
-      if (participant == null) return;
-      if (participant.isMicrophoneEnabled() == true) return;
-      await participant.setMicrophoneEnabled(true);
-    } catch (error, stackTrace) {
-      Logger.print('could not enable microphone: $error $stackTrace');
-    }
-  }
-
   @override
   void onParticipantConnected() {
     // Caller: peer joined LiveKit — unmute immediately, don't wait IM accept.
