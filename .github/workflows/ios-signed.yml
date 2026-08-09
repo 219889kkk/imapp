@@ -118,50 +118,7 @@ jobs:
           TEAM_ID: ${{ env.TEAM_ID }}
         run: |
           set -e
-          PBX="ios/Runner.xcodeproj/project.pbxproj"
-          sed -i '' 's/CODE_SIGN_STYLE = Automatic;/CODE_SIGN_STYLE = Manual;/g' "$PBX"
-          python3 <<'PY'
-          import pathlib, re, os
-          p = pathlib.Path("ios/Runner.xcodeproj/project.pbxproj")
-          text = p.read_text(encoding="utf-8")
-          app_name = os.environ["APP_NAME"]
-          nse_name = os.environ["NSE_NAME"]
-          team = os.environ.get("TEAM_ID", "U7QZA36QT4")
-
-          def set_for_bundle(src: str, bundle: str, profile: str) -> str:
-              pattern = re.compile(
-                  r"(buildSettings = \{(?:[^{}]|\n)*?PRODUCT_BUNDLE_IDENTIFIER = "
-                  + re.escape(bundle)
-                  + r";(?:[^{}]|\n)*?\})",
-                  re.M,
-              )
-              def repl(m):
-                  block = m.group(1)
-                  if "CODE_SIGN_STYLE" in block:
-                      block = re.sub(r"CODE_SIGN_STYLE = [^;]+;", "CODE_SIGN_STYLE = Manual;", block)
-                  else:
-                      block = block.replace("buildSettings = {", "buildSettings = {\n\t\t\t\tCODE_SIGN_STYLE = Manual;")
-                  if "DEVELOPMENT_TEAM" in block:
-                      block = re.sub(r"DEVELOPMENT_TEAM = [^;]+;", f"DEVELOPMENT_TEAM = {team};", block)
-                  else:
-                      block = block.replace("buildSettings = {", f"buildSettings = {{\n\t\t\t\tDEVELOPMENT_TEAM = {team};")
-                  spec = f'PROVISIONING_PROFILE_SPECIFIER = "{profile}";'
-                  if "PROVISIONING_PROFILE_SPECIFIER" in block:
-                      block = re.sub(r'PROVISIONING_PROFILE_SPECIFIER = "[^"]*";', spec, block)
-                      block = re.sub(r"PROVISIONING_PROFILE_SPECIFIER = [^;\n]+;", spec, block)
-                  else:
-                      block = block.replace("buildSettings = {", f"buildSettings = {{\n\t\t\t\t{spec}")
-                  return block
-              out, n = pattern.subn(repl, src)
-              print(f"Updated {n} buildSettings block(s) for {bundle}")
-              if n == 0:
-                  raise SystemExit(f"No buildSettings found for {bundle}")
-              return out
-
-          text = set_for_bundle(text, "top.hangxun.app", app_name)
-          text = set_for_bundle(text, "top.hangxun.app.NotificationService", nse_name)
-          p.write_text(text, encoding="utf-8")
-          PY
+          python3 ios/scripts/apply_manual_signing.py
 
       - name: Write ExportOptions.plist
         env:
