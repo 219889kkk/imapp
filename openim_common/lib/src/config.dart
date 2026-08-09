@@ -180,8 +180,7 @@ class Config {
     final server = DataSp.getServerConfig();
     final fromConfig = server?['liveKitUrl']?.toString().trim();
     if (fromConfig != null && fromConfig.isNotEmpty) return fromConfig;
-    if (!_isIP) return 'wss://livekit.$_defaultHost';
-    return 'wss://livekit.$_defaultHost';
+    return 'wss://livekit.$_activeHost';
   }
 
   static int get logLevel {

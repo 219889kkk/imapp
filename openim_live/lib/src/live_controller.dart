@@ -763,12 +763,7 @@ mixin OpenIMLive {
             _terminateCallUi(roomID);
           } else if (event.state == CallState.beAccepted) {
             await _stopSound();
-            // Inviter: backup path if LiveKit event missed — unmute + subscribe.
-            unawaited(OpenIMLiveClient().ensureCallKeepAlive(speakerOn: true));
-            unawaited(OpenIMLiveClient().ensureMediaAudible(
-              speakerOn: true,
-              forceRestartMic: true,
-            ));
+            unawaited(OpenIMLiveClient().onCallActive(speakerOn: true, unmuteMic: true));
           } else if (event.state == CallState.otherReject ||
               event.state == CallState.otherAccepted) {
             await _stopSound();
@@ -905,7 +900,10 @@ mixin OpenIMLive {
     IMViews.showToast(StrRes.networkError);
   }
 
-  onRoomDisconnected(SignalingInfo signalingInfo) {}
+  onRoomDisconnected(SignalingInfo signalingInfo) {
+    Logger.print(
+        'call room disconnected roomID=${signalingInfo.invitation?.roomID}');
+  }
 
   Future<SignalingCertificate> onDialSingle(SignalingInfo signaling) async {
     final invitation = signaling.invitation!;

@@ -26,7 +26,7 @@ class IMController extends GetxController with IMCallback, OpenIMLive {
   bool _reconnectInFlight = false;
   DateTime? _lastReconnectAt;
   StreamSubscription<KickoffType>? _kickedOfflineSub;
-  StreamSubscription<int>? _httpKickoffSub;
+  StreamSubscription? _httpKickoffSub;
   bool _kickoffInFlight = false;
   bool _rtcRecoveryInFlight = false;
   DateTime? _lastRtcRecoveryAt;
@@ -55,7 +55,10 @@ class IMController extends GetxController with IMCallback, OpenIMLive {
     _kickedOfflineSub?.cancel();
     _kickedOfflineSub = onKickedOfflineSubject.listen(_handleKickoff);
     _httpKickoffSub?.cancel();
-    _httpKickoffSub = Apis.kickoffController.stream.listen(_handleHttpKickoff);
+    _httpKickoffSub = Apis.kickoffController.stream.listen((event) {
+      final code = event is int ? event : int.tryParse('$event') ?? 0;
+      unawaited(_handleHttpKickoff(code));
+    });
   }
 
   Future<void> _handleHttpKickoff(int errCode) async {

@@ -151,14 +151,11 @@ class _SingleRoomViewState extends SignalState<SingleRoomView> {
     await _publish();
     _syncMicStateFromRoom();
     if (!_deferMicrophone) {
-      await OpenIMLiveClient().ensureMediaAudible(
+      await OpenIMLiveClient().onCallActive(
         speakerOn: enabledSpeaker,
-        forceRestartMic: !widget.adoptExistingMedia,
+        unmuteMic: enabledMicrophone,
       );
       _syncMicStateFromRoom();
-      if (enabledMicrophone) {
-        await _startCallAudioKeepAlive();
-      }
     } else {
       // Waiting: route only — do not unmute over deferred mic.
       try {
@@ -217,32 +214,16 @@ class _SingleRoomViewState extends SignalState<SingleRoomView> {
     }
   }
 
-  Future<void> _ensureMicrophonePublished({bool forceRestart = false}) async {
+  Future<void> _ensureMicrophonePublished() async {
     if (!enabledMicrophone) return;
     try {
       final participant = _room?.localParticipant;
       if (participant == null) return;
-      if (!forceRestart && participant.isMicrophoneEnabled() == true) return;
-      if (forceRestart && participant.isMicrophoneEnabled() == true) {
-        await participant.setMicrophoneEnabled(false);
-      }
+      if (participant.isMicrophoneEnabled() == true) return;
       await participant.setMicrophoneEnabled(true);
     } catch (error, stackTrace) {
       Logger.print('could not enable microphone: $error $stackTrace');
     }
-  }
-
-  Future<void> _startCallAudioKeepAlive() async {
-    final id = roomID ?? widget.roomID;
-    if (id == null || id.isEmpty) return;
-    final keep = CallAudioKeepAlive.instance;
-    keep.onNeedRepublishMic =
-        () => _ensureMicrophonePublished(forceRestart: true);
-    await keep.start(
-      roomID: id,
-      isVideo: widget.callType == CallType.video,
-      peerName: userInfo?.nickname ?? widget.userID,
-    );
   }
 
   @override
@@ -256,23 +237,12 @@ class _SingleRoomViewState extends SignalState<SingleRoomView> {
       return;
     }
     _peerAudioArmed = true;
-    // Video: open camera as soon as peer joins (same moment as mic unmute).
     if (widget.callType == CallType.video) {
       unawaited(_publish());
     }
-    final adopt = widget.adoptExistingMedia;
-    // Lock-screen / headless accept: mic is already live — avoid off/on flap
-    // that makes the mute button briefly show "muted".
-    if (!adopt) {
-      unawaited(_ensureMicrophonePublished(forceRestart: true));
-    }
-    unawaited(OpenIMLiveClient().ensureCallKeepAlive(speakerOn: enabledSpeaker));
-    unawaited(_startCallAudioKeepAlive());
+    final unmute = enabledMicrophone && !_deferMicrophone;
     unawaited(OpenIMLiveClient()
-        .ensureMediaAudible(
-          speakerOn: enabledSpeaker,
-          forceRestartMic: !adopt,
-        )
+        .onCallActive(speakerOn: enabledSpeaker, unmuteMic: unmute)
         .then((_) {
       if (!mounted) return;
       _syncMicStateFromRoom();
@@ -320,9 +290,6 @@ class _SingleRoomViewState extends SignalState<SingleRoomView> {
       );
     }
 
-    if (null != remoteParticipantTrack) {
-      onParticipantConnected();
-    }
     if (mounted) setState(() {});
   }
 

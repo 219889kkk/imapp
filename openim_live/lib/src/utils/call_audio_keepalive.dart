@@ -94,6 +94,7 @@ class CallAudioKeepAlive with WidgetsBindingObserver {
 
   Future<void> _recoverMic() async {
     await _activateCallSession();
+    if (onNeedRepublishMic == null) return;
     try {
       await onNeedRepublishMic?.call();
     } catch (e, s) {

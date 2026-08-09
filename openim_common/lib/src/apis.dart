@@ -365,15 +365,24 @@ class Apis {
           ? Map<String, dynamic>.from(value)
           : <String, dynamic>{};
       var signaling = SignalingCertificate.fromJson(map)..roomID = roomID;
-      // Mobile clients cannot reach the server's loopback LiveKit URL.
       final live = signaling.liveURL?.trim() ?? '';
-      if (live.contains('127.0.0.1') || live.contains('localhost')) {
-        final fixed = Config.liveKitWsUrl;
-        Logger.print('rewrite liveURL $live -> $fixed');
+      final expected = Config.liveKitWsUrl;
+      var shouldRewrite = live.isEmpty ||
+          live.contains('127.0.0.1') ||
+          live.contains('localhost');
+      if (!shouldRewrite && live.isNotEmpty) {
+        try {
+          shouldRewrite = Uri.parse(live).host != Uri.parse(expected).host;
+        } catch (_) {
+          shouldRewrite = true;
+        }
+      }
+      if (shouldRewrite && expected.isNotEmpty) {
+        Logger.print('rewrite liveURL $live -> $expected');
         signaling = SignalingCertificate(
           token: signaling.token,
           roomID: signaling.roomID,
-          liveURL: fixed,
+          liveURL: expected,
           busyLineUserIDList: signaling.busyLineUserIDList,
         );
       }

@@ -105,6 +105,7 @@ class ServerEndpointSelector {
       'authUrl': 'https://$h/chat',
       'chatTokenUrl': 'https://$h/chat',
       'botApiUrl': 'https://$h/bot',
+      'liveKitUrl': 'wss://livekit.$h',
     };
   }
 
