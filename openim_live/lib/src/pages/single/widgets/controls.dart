@@ -55,7 +55,7 @@ class ControlsView extends StatefulWidget {
   State<ControlsView> createState() => _ControlsViewState();
 }
 
-class _ControlsViewState extends State<ControlsView> {
+class _ControlsViewState extends State<ControlsView> with WidgetsBindingObserver {
   late CallState _callState;
   Timer? _callingTimer;
   int _callingDuration = 0;
@@ -86,6 +86,7 @@ class _ControlsViewState extends State<ControlsView> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _callStateChangedSub?.cancel();
     _roomDidUpdateSub?.cancel();
     _callingTimer?.cancel();
@@ -96,6 +97,7 @@ class _ControlsViewState extends State<ControlsView> {
 
   @override
   void initState() {
+    WidgetsBinding.instance.addObserver(this);
     _enabledSpeaker =
         widget.initialSpeakerOn ?? (widget.callType == CallType.video);
     _enabledMicrophone = widget.initialMicOn ?? true;
@@ -108,6 +110,14 @@ class _ControlsViewState extends State<ControlsView> {
         Hardware.instance.onDeviceChange.stream.listen(_loadDevices);
     Hardware.instance.enumerateDevices().then(_loadDevices);
     super.initState();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed || !mounted) return;
+    if (_callState == CallState.calling && _callingTimer == null) {
+      _startCallingTimer();
+    }
   }
 
   _roomDidUpdate(Room room) {

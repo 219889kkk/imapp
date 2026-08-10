@@ -8,6 +8,7 @@ import flutter_callkit_incoming
 @objc class AppDelegate: FlutterAppDelegate, PKPushRegistryDelegate {
     
     var replayKitChannel: FlutterMethodChannel! = nil
+    var voipChannel: FlutterMethodChannel! = nil
     var observeTimer: Timer?
     var hasEmittedFirstSample = false
     private var voipRegistry: PKPushRegistry?
@@ -23,6 +24,7 @@ import flutter_callkit_incoming
         FirebaseApp.configure()
         
         replayKitChannel = FlutterMethodChannel(name: "io.livekit.example.flutter/replaykit-channel",binaryMessenger: controller.binaryMessenger)
+        voipChannel = FlutterMethodChannel(name: "top.hangxun.app/voip", binaryMessenger: controller.binaryMessenger)
         
         replayKitChannel.setMethodCallHandler({
             (call: FlutterMethodCall, result: @escaping  FlutterResult)  -> Void in
@@ -71,12 +73,7 @@ import flutter_callkit_incoming
 
         // Notify Dart so login-time upload does not depend solely on plugin event timing.
         DispatchQueue.main.async {
-            guard let controller = self.window?.rootViewController as? FlutterViewController else { return }
-            let channel = FlutterMethodChannel(
-                name: "top.hangxun.app/voip",
-                binaryMessenger: controller.binaryMessenger
-            )
-            channel.invokeMethod("onVoipToken", arguments: deviceToken)
+            self.voipChannel?.invokeMethod("onVoipToken", arguments: deviceToken)
         }
     }
 
@@ -84,6 +81,60 @@ import flutter_callkit_incoming
         NSLog("HangXun VoIP: token invalidated")
         UserDefaults.standard.set("", forKey: "DevicePushTokenVoIP")
         SwiftFlutterCallkitIncomingPlugin.sharedInstance?.setDevicePushTokenVoIP("")
+    }
+
+    /// Flatten Getui / APNs VoIP payload (may be JSON string under payload/transmission).
+    private func flattenVoipPayload(_ dict: [AnyHashable: Any]) -> [String: Any] {
+        var merged: [String: Any] = [:]
+
+        func absorb(_ source: [String: Any]) {
+            for (key, value) in source {
+                merged[String(describing: key)] = value
+            }
+        }
+
+        func absorbJSONString(_ raw: String) {
+            guard let data = raw.data(using: .utf8),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return
+            }
+            absorb(json)
+        }
+
+        for (key, value) in dict {
+            let k = String(describing: key)
+            if let s = value as? String, (k == "payload" || k == "transmission" || k == "content") {
+                absorbJSONString(s)
+            } else if let nested = value as? [String: Any] {
+                absorb(nested)
+            } else {
+                merged[k] = value
+            }
+        }
+
+        return merged
+    }
+
+    private func endCallKitCalls(roomID: String) {
+        let endData = flutter_callkit_incoming.Data(args: [
+            "id": roomID,
+            "nameCaller": "",
+            "handle": "",
+            "type": 0,
+        ])
+        let plugin = SwiftFlutterCallkitIncomingPlugin.sharedInstance
+        plugin?.endCall(endData)
+        // Fallback when UUID mismatch or plugin init raced PushKit cancel.
+        plugin?.endAllCalls()
+    }
+
+    private func notifyDartVoipRemoteEnd(roomID: String, action: String) {
+        DispatchQueue.main.async {
+            self.voipChannel?.invokeMethod("onVoipRemoteEnd", arguments: [
+                "roomID": roomID,
+                "action": action,
+            ])
+        }
     }
 
     /// iOS 13+: MUST report CallKit incoming call before invoking completion.
@@ -98,24 +149,21 @@ import flutter_callkit_incoming
             return
         }
 
-        let dict = payload.dictionaryPayload
-        NSLog("HangXun VoIP payload: %@", dict)
+        let dict = flattenVoipPayload(payload.dictionaryPayload)
+        NSLog("HangXun VoIP payload (flat): %@", dict)
 
         HangXunGetuiVoip.handlePushKitPayload(dict)
 
         let action = ((dict["action"] as? String) ?? "").lowercased()
         let roomID = (dict["roomID"] as? String)
+            ?? (dict["callUUID"] as? String)
             ?? (dict["id"] as? String)
             ?? UUID().uuidString
 
         if action == "cancel" || action == "end" || action == "hungup" || action == "reject" {
-            let endData = flutter_callkit_incoming.Data(args: [
-                "id": roomID,
-                "nameCaller": "",
-                "handle": "",
-                "type": 0,
-            ])
-            SwiftFlutterCallkitIncomingPlugin.sharedInstance?.endCall(endData)
+            NSLog("HangXun VoIP remote end action=%@ room=%@", action, roomID)
+            endCallKitCalls(roomID: roomID)
+            notifyDartVoipRemoteEnd(roomID: roomID, action: action)
             DispatchQueue.main.async { completion() }
             return
         }
@@ -130,6 +178,7 @@ import flutter_callkit_incoming
         let mediaType = (dict["mediaType"] as? String) ?? "audio"
         let isVideo = mediaType == "video"
         let nameCaller = (dict["nickname"] as? String)
+            ?? (dict["inviterNickname"] as? String)
             ?? (dict["nameCaller"] as? String)
             ?? "来电"
         let handle = (dict["inviterUserID"] as? String)

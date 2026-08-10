@@ -61,7 +61,8 @@ abstract class SignalView extends StatefulWidget {
   final Future<UserInfo?> Function(String userID)? onSyncUserInfo;
 }
 
-abstract class SignalState<T extends SignalView> extends State<T> {
+abstract class SignalState<T extends SignalView> extends State<T>
+    with WidgetsBindingObserver {
   final callStateSubject = BehaviorSubject<CallState>();
   final roomDidUpdateSubject = PublishSubject<Room>();
   late CallState callState;
@@ -85,6 +86,7 @@ abstract class SignalState<T extends SignalView> extends State<T> {
     enabledSpeaker = widget.callType == CallType.video;
     callEventSub = sameRoomSignalStream.listen(_onStateDidUpdate);
     widget.onSyncUserInfo?.call(widget.userID).then(_onUpdateUserInfo);
+    WidgetsBinding.instance.addObserver(this);
     onDail();
     autoPickup();
     super.initState();
@@ -92,9 +94,26 @@ abstract class SignalState<T extends SignalView> extends State<T> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     callStateSubject.close();
     callEventSub?.cancel();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _syncUiAfterForeground();
+    }
+  }
+
+  void _syncUiAfterForeground() {
+    if (!mounted) return;
+    final client = OpenIMLiveClient();
+    if (client.isConnectedMedia(_callRoomID) &&
+        callState != CallState.calling) {
+      promoteInCallUi(reason: 'app-resumed');
+    }
   }
 
   Stream<CallEvent> get sameRoomSignalStream =>
@@ -109,7 +128,16 @@ abstract class SignalState<T extends SignalView> extends State<T> {
 
   _onStateDidUpdate(CallEvent event) {
     Logger.print("CallEvent current：$callState  event：$event");
-    if (!mounted) return;
+    if (!mounted) {
+      // Apply terminal events even when overlay was inactive (WeChat / lock screen).
+      if (event.state == CallState.beRejected ||
+          event.state == CallState.beCanceled ||
+          event.state == CallState.beHangup ||
+          event.state == CallState.timeout) {
+        widget.onClose?.call();
+      }
+      return;
+    }
 
     if (event.state == CallState.call ||
         event.state == CallState.beCalled ||

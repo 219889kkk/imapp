@@ -26,6 +26,9 @@ class PackageBridge {
   /// CallKit / system End during active call or timeout (lock-screen hangup).
   static void Function(SignalingInfo? signaling)? onCallKitEnded;
 
+  /// PushKit remote cancel/hungup (native endCall before Dart WS).
+  static void Function(String? roomID, String action)? onVoipRemoteEnd;
+
   /// True when [roomID] was cancelled/hung up recently — ignore late invites.
   static bool Function(String? roomID)? isCallRoomEnded;
 }

@@ -128,6 +128,15 @@ class OpenIMLiveClient implements RTCBridge {
     }
   }
 
+  /// Remove Flutter overlay only — keep LiveKit media (background → CallKit handoff).
+  void closeOverlayOnly() {
+    if (_holder != null) {
+      _holder?.remove();
+      _holder = null;
+      WakelockPlus.disable();
+    }
+  }
+
   close() {
     if (_holder != null) {
       _holder?.remove();

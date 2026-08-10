@@ -252,6 +252,17 @@ class VoipCallkitController extends GetxService {
         _voipToken = token;
         Logger.print('VoIP token from native channel: $token');
         await _uploadVoipTokenIfNeeded();
+        return;
+      }
+      if (call.method == 'onVoipRemoteEnd') {
+        final args = call.arguments;
+        String? roomID;
+        String action = 'cancel';
+        if (args is Map) {
+          roomID = args['roomID']?.toString();
+          action = args['action']?.toString() ?? 'cancel';
+        }
+        PackageBridge.onVoipRemoteEnd?.call(roomID, action);
       }
     });
   }
