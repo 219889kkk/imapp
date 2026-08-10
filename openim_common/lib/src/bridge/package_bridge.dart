@@ -32,6 +32,9 @@ class PackageBridge {
   /// iOS CallKit activated AVAudioSession — WebRTC may now capture/play.
   static VoidCallback? onCallKitAudioActivated;
 
+  /// iOS CallKit deactivated AVAudioSession — may need in-app re-enable if still in call.
+  static VoidCallback? onCallKitAudioDeactivated;
+
   /// iOS: ignore spurious CallKit `ended` after programmatic dismiss.
   static void Function(String? roomID)? suppressCallKitEnded;
 

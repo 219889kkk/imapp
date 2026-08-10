@@ -389,32 +389,47 @@ class OpenIMLiveClient implements RTCBridge {
     if (liveURL.isEmpty || token.isEmpty) {
       throw StateError('missing liveURL/token for roomID=$roomID');
     }
-    await room.connect(
-      liveURL,
-      token,
-      roomOptions: RoomOptions(
-        dynacast: true,
-        adaptiveStream: true,
-        defaultAudioCaptureOptions: const AudioCaptureOptions(
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-          highPassFilter: true,
-        ),
-        defaultAudioOutputOptions: AudioOutputOptions(speakerOn: speakerOn),
-        defaultCameraCaptureOptions: const CameraCaptureOptions(
-          params: VideoParametersPresets.h720_169,
-        ),
-        defaultVideoPublishOptions: VideoPublishOptions(
-          simulcast: true,
-          videoCodec: 'VP9',
-          videoEncoding: const VideoEncoding(
-            maxBitrate: 5 * 1000 * 1000,
-            maxFramerate: 15,
+    CallAudioDebugLog.add(
+      'livekit',
+      'room.connect begin roomID=$roomID url=$liveURL tokenLen=${token.length}',
+    );
+    try {
+      await room
+          .connect(
+        liveURL,
+        token,
+        roomOptions: RoomOptions(
+          dynacast: true,
+          adaptiveStream: true,
+          defaultAudioCaptureOptions: const AudioCaptureOptions(
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+            highPassFilter: true,
+          ),
+          defaultAudioOutputOptions: AudioOutputOptions(speakerOn: speakerOn),
+          defaultCameraCaptureOptions: const CameraCaptureOptions(
+            params: VideoParametersPresets.h720_169,
+          ),
+          defaultVideoPublishOptions: VideoPublishOptions(
+            simulcast: true,
+            videoCodec: 'VP9',
+            videoEncoding: const VideoEncoding(
+              maxBitrate: 5 * 1000 * 1000,
+              maxFramerate: 15,
+            ),
           ),
         ),
-      ),
-    );
+      )
+          .timeout(const Duration(seconds: 20));
+      CallAudioDebugLog.add('livekit', 'room.connect ok roomID=$roomID');
+    } on TimeoutException {
+      CallAudioDebugLog.add('livekit', 'room.connect TIMEOUT 20s roomID=$roomID');
+      rethrow;
+    } catch (e) {
+      CallAudioDebugLog.add('livekit', 'room.connect failed roomID=$roomID err=$e');
+      rethrow;
+    }
 
     room.addListener(_noopRoomListener);
     await _ensurePublished(

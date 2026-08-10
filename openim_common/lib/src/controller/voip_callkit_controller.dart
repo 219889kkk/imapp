@@ -276,6 +276,12 @@ class VoipCallkitController extends GetxService {
         PackageBridge.onCallKitAudioActivated?.call();
         return;
       }
+      if (call.method == 'onCallKitAudioDeactivated') {
+        Logger.print('CallKit audio session deactivated (native)');
+        CallAudioDebugLog.add('native', 'onCallKitAudioDeactivated');
+        PackageBridge.onCallKitAudioDeactivated?.call();
+        return;
+      }
       if (call.method == 'onAudioDebug') {
         final args = call.arguments;
         String tag = 'native';
@@ -604,8 +610,10 @@ class VoipCallkitController extends GetxService {
       await FlutterCallkitIncoming.setCallConnected(id);
       callKitActive.value = true;
       Logger.print('CallKit setConnected roomID=$id');
+      CallAudioDebugLog.add('callkit', 'setCallConnected roomID=$id');
     } catch (e, s) {
       Logger.print('setConnected failed: $e $s');
+      CallAudioDebugLog.add('callkit', 'setCallConnected failed: $e');
     }
   }
 

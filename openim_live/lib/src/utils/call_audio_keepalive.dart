@@ -248,13 +248,16 @@ class CallAudioKeepAlive with WidgetsBindingObserver {
       }
       if (!already) {
         Logger.print(
-            'CallAudioKeepAlive skip setCallConnected (no CallKit) roomID=$roomID');
-        return;
+            'CallAudioKeepAlive setCallConnected anyway (activeCalls miss) roomID=$roomID');
+        CallAudioDebugLog.add(
+            'keepalive', 'setCallConnected anyway (activeCalls miss) $roomID');
       }
       await FlutterCallkitIncoming.setCallConnected(roomID);
       Logger.print('CallAudioKeepAlive iOS CallKit connected roomID=$roomID');
+      CallAudioDebugLog.add('keepalive', 'setCallConnected roomID=$roomID');
     } catch (e, s) {
       Logger.print('CallAudioKeepAlive iOS CallKit promote failed: $e $s');
+      CallAudioDebugLog.add('keepalive', 'setCallConnected failed: $e');
     }
   }
 }

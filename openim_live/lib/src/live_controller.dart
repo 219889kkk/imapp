@@ -309,6 +309,10 @@ mixin OpenIMLive {
     if (identical(PackageBridge.onCallKitAudioActivated, _onCallKitAudioActivated)) {
       PackageBridge.onCallKitAudioActivated = null;
     }
+    if (identical(
+        PackageBridge.onCallKitAudioDeactivated, _onCallKitAudioDeactivated)) {
+      PackageBridge.onCallKitAudioDeactivated = null;
+    }
     _clearPickupCache();
     _cancelRingTimeout();
     signalingSubject.close();
@@ -328,6 +332,7 @@ mixin OpenIMLive {
     PackageBridge.isCallRoomEnded = _isRoomEnded;
     PackageBridge.onPeerLeftCall = _onPeerLeftCall;
     PackageBridge.onCallKitAudioActivated = _onCallKitAudioActivated;
+    PackageBridge.onCallKitAudioDeactivated = _onCallKitAudioDeactivated;
     _signalingListener();
     _insertSignalingMessageListener();
     _bindLiveAlertButtons();
@@ -379,6 +384,9 @@ mixin OpenIMLive {
     PackageBridge.clearCallNotification?.call();
     if (roomID.isNotEmpty) {
       _suppressCallKitEnded(roomID, duration: const Duration(seconds: 20));
+      // Mark connected immediately so CallKit keeps the audio session while LiveKit joins.
+      unawaited(VoipCallkitController.toOrNull?.setConnected(roomID) ??
+          Future.value());
     }
     CallAudioDebugLog.add('callkit', 'accept join roomID=$roomID');
     unawaited(_callKitAcceptAndJoin(resolved));
@@ -498,6 +506,13 @@ mixin OpenIMLive {
     );
     // Keep CallKit as session owner — do not hand off to in-app enable.
     CallAudioKeepAlive.instance.markCallKitOwnsSession();
+    final roomID = _activeCallSignaling?.invitation?.roomID?.trim() ??
+        OpenIMLiveClient().currentRoomID?.trim() ??
+        '';
+    if (roomID.isNotEmpty) {
+      unawaited(VoipCallkitController.toOrNull?.setConnected(roomID) ??
+          Future.value());
+    }
     final client = OpenIMLiveClient();
     if (!client.isBusy || client.mediaRoom == null) {
       CallAudioDebugLog.add(
@@ -506,8 +521,32 @@ mixin OpenIMLive {
     }
     final isVideo = _activeCallSignaling?.invitation?.mediaType == 'video';
     Logger.print('CallKit audio activated (native) — enable LiveKit audio');
-    CallAudioDebugLog.add('callkit', 'didActivate — kickstart media (keep CallKit session)');
+    CallAudioDebugLog.add(
+        'callkit', 'didActivate — kickstart media (keep CallKit session)');
     unawaited(client.kickstartIosCallKitMedia(speakerOn: isVideo));
+  }
+
+  /// CallKit dropped AVAudioSession mid-call — take over so LiveKit can keep audio.
+  void _onCallKitAudioDeactivated() {
+    _iosCallKitDidActivateNative = false;
+    CallAudioDebugLog.add('callkit', 'didDeactivate');
+    final client = OpenIMLiveClient();
+    if (!client.isBusy) return;
+    final isVideo = _activeCallSignaling?.invitation?.mediaType == 'video';
+    CallAudioDebugLog.add(
+      'callkit',
+      'didDeactivate while busy — switch to in-app WebRTC enable',
+    );
+    CallAudioKeepAlive.instance.releaseCallKitSession();
+    unawaited(() async {
+      await IosWebRtcAudio.enable(speakerOn: isVideo);
+      if (client.mediaRoom != null) {
+        await client.kickstartIosCallKitMedia(
+          speakerOn: isVideo,
+          unmuteMic: true,
+        );
+      }
+    }());
   }
 
   /// Background / lock: ringing uses CallKit, not Flutter overlay.

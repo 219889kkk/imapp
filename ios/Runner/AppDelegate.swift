@@ -141,6 +141,9 @@ import flutter_callkit_incoming
         RTCAudioSession.sharedInstance().audioSessionDidDeactivate(audioSession)
         RTCAudioSession.sharedInstance().isAudioEnabled = false
         emitAudioDebug("CallKit audio session deactivated isAudioEnabled=false")
+        DispatchQueue.main.async {
+            self.voipChannel?.invokeMethod("onCallKitAudioDeactivated", arguments: nil)
+        }
     }
 
     // MARK: - WebRTC audio (in-app calls — useManualAudio requires explicit enable)
