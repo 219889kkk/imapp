@@ -84,7 +84,8 @@ abstract class SignalState<T extends SignalView> extends State<T>
     callState = widget.initState;
     // Audio: earpiece by default; video: speaker for preview.
     enabledSpeaker = widget.callType == CallType.video;
-    callEventSub = sameRoomSignalStream.listen(_onStateDidUpdate);
+    OpenIMLiveClient().setPromoteCallingUiHandler(_applyCallingUi);
+    callEventSub = widget.callEventSubject.stream.listen(_onStateDidUpdate);
     widget.onSyncUserInfo?.call(widget.userID).then(_onUpdateUserInfo);
     WidgetsBinding.instance.addObserver(this);
     onDail();
@@ -94,6 +95,7 @@ abstract class SignalState<T extends SignalView> extends State<T>
 
   @override
   void dispose() {
+    OpenIMLiveClient().setPromoteCallingUiHandler(null);
     WidgetsBinding.instance.removeObserver(this);
     callStateSubject.close();
     callEventSub?.cancel();
@@ -108,20 +110,44 @@ abstract class SignalState<T extends SignalView> extends State<T>
   }
 
   void _syncUiAfterForeground() {
-    if (!mounted) return;
     final client = OpenIMLiveClient();
-    if (client.isConnectedMedia(_callRoomID) &&
-        callState != CallState.calling) {
-      promoteInCallUi(reason: 'app-resumed');
+    if (callState == CallState.calling) return;
+    if (client.peerAcceptedForUi ||
+        client.isConnectedMedia(_callRoomID) ||
+        (_roomHasRemote(client))) {
+      promoteInCallUi(reason: 'app-resumed', force: true);
     }
   }
 
-  Stream<CallEvent> get sameRoomSignalStream => widget.callEventSubject.stream
-      .where((event) => LiveUtils.matchesActiveCall(
-            event,
-            boundRoomID: _callRoomID,
-            isOutboundDial: widget.initState == CallState.call,
-          ));
+  bool _roomHasRemote(OpenIMLiveClient client) {
+    final room = client.mediaRoom;
+    return room != null && room.remoteParticipants.isNotEmpty;
+  }
+
+  void _applyCallingUi() {
+    if (callState == CallState.calling) return;
+    Logger.print(
+        'apply calling UI direct from=$callState roomID=$_callRoomID mounted=$mounted');
+    callState = CallState.calling;
+    if (!callStateSubject.isClosed) {
+      callStateSubject.add(CallState.calling);
+    }
+    widget.onStartCalling?.call();
+    if (mounted) setState(() {});
+  }
+
+  bool _acceptCallEvent(CallEvent event) {
+    if (widget.initState == CallState.call &&
+        event.state == CallState.calling &&
+        OpenIMLiveClient().isBusy) {
+      return true;
+    }
+    return LiveUtils.matchesActiveCall(
+      event,
+      boundRoomID: _callRoomID,
+      isOutboundDial: widget.initState == CallState.call,
+    );
+  }
 
   _onUpdateUserInfo(UserInfo? info) {
     if (!mounted && null != info) return;
@@ -131,7 +157,15 @@ abstract class SignalState<T extends SignalView> extends State<T>
   }
 
   _onStateDidUpdate(CallEvent event) {
+    if (!_acceptCallEvent(event)) {
+      Logger.print('CallEvent dropped: $event local=$_callRoomID');
+      return;
+    }
     Logger.print("CallEvent current：$callState  event：$event");
+    if (event.state == CallState.calling) {
+      _applyCallingUi();
+      return;
+    }
     if (!mounted) {
       // Apply terminal events even when overlay was inactive (WeChat / lock screen).
       if (event.state == CallState.beRejected ||
@@ -145,13 +179,9 @@ abstract class SignalState<T extends SignalView> extends State<T>
 
     if (event.state == CallState.call ||
         event.state == CallState.beCalled ||
-        event.state == CallState.connecting ||
-        event.state == CallState.calling) {
+        event.state == CallState.connecting) {
       callState = event.state;
       callStateSubject.add(event.state);
-      if (event.state == CallState.calling) {
-        widget.onStartCalling?.call();
-      }
     }
 
     if (event.state == CallState.beRejected ||
@@ -177,7 +207,6 @@ abstract class SignalState<T extends SignalView> extends State<T>
 
   /// Move UI off "connecting" / "请求中" once in-call.
   void promoteInCallUi({String? reason, bool force = false}) {
-    if (!mounted) return;
     if (callState == CallState.calling) return;
     final client = OpenIMLiveClient();
     if (!force && !client.isConnectedMedia(_callRoomID)) {
@@ -187,9 +216,7 @@ abstract class SignalState<T extends SignalView> extends State<T>
     }
     Logger.print(
         'promote in-call UI reason=$reason from=$callState roomID=$_callRoomID');
-    callState = CallState.calling;
-    callStateSubject.add(CallState.calling);
-    widget.onStartCalling?.call();
+    _applyCallingUi();
   }
 
   onParticipantConnected() {

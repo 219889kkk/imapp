@@ -76,7 +76,7 @@ class LiveUtils {
     return matchesActiveCall(event, boundRoomID: roomID);
   }
 
-  /// Match signaling to the bound/active room. Outbound dial bypasses bind races.
+  /// Match signaling to the bound/active room.
   static bool matchesActiveCall(
     CallEvent event, {
     String? boundRoomID,
@@ -85,20 +85,19 @@ class LiveUtils {
     final invitationRoomID = event.data.invitation?.roomID?.trim() ?? '';
     if (invitationRoomID.isEmpty) return false;
 
+    // Outbound caller: never drop in-call transition — room bind may lag accept.
+    if (isOutboundDial &&
+        event.state == CallState.calling &&
+        OpenIMLiveClient().isBusy) {
+      Logger.print(
+          '${event.state}--outbound calling accepted (room=$invitationRoomID)');
+      return true;
+    }
+
     final localRoomID = (boundRoomID?.trim().isNotEmpty == true
             ? boundRoomID!.trim()
             : OpenIMLiveClient().currentRoomID?.trim()) ??
         '';
-
-    if (isOutboundDial &&
-        event.state == CallState.calling &&
-        OpenIMLiveClient().isBusy) {
-      if (localRoomID.isEmpty || localRoomID == invitationRoomID) {
-        Logger.print(
-            '${event.state}--outbound accept roomID：$localRoomID / $invitationRoomID');
-        return true;
-      }
-    }
 
     if (localRoomID.isEmpty) return false;
     Logger.print(

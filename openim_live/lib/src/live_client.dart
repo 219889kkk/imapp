@@ -137,11 +137,28 @@ class OpenIMLiveClient implements RTCBridge {
     }
   }
 
+  void Function()? _promoteCallingUi;
+  bool _peerAcceptedForUi = false;
+
+  bool get peerAcceptedForUi => _peerAcceptedForUi;
+
+  void setPromoteCallingUiHandler(void Function()? handler) {
+    _promoteCallingUi = handler;
+  }
+
+  /// Bypass signaling stream filter — push caller overlay to in-call immediately.
+  void promoteCallingUi() {
+    _peerAcceptedForUi = true;
+    _promoteCallingUi?.call();
+  }
+
   close() {
     if (_holder != null) {
       _holder?.remove();
       _holder = null;
     }
+    _promoteCallingUi = null;
+    _peerAcceptedForUi = false;
     unawaited(_disposeMedia());
     isBusy = false;
     currentRoomID = null;

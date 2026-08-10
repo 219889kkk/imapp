@@ -767,32 +767,23 @@ mixin OpenIMLive {
     signalingSubject.add(CallEvent(CallState.calling, signaling));
   }
 
-  bool _isOutboundDial(SignalingInfo info) {
-    final roomID = info.invitation?.roomID?.trim() ?? '';
-    if (roomID.isEmpty) return false;
-    final self = OpenIM.iMManager.userID.trim();
-    final inviter = info.invitation?.inviterUserID?.trim() ?? '';
-    if (inviter == self) return true;
-    final client = OpenIMLiveClient();
-    if (!client.isBusy) return false;
-    final current = client.currentRoomID?.trim() ?? '';
-    final active = _activeCallSignaling?.invitation?.roomID?.trim() ?? '';
-    return current == roomID || active == roomID;
-  }
-
   /// Caller: peer accepted — leave ringing, unmute, show in-call UI. Safe to call repeatedly.
   void _onPeerAccepted(SignalingInfo info) {
-    final roomID = info.invitation?.roomID?.trim() ?? '';
+    final merged = _mergeOutboundAcceptSignaling(info);
+    final roomID = merged.invitation?.roomID?.trim() ?? '';
     if (roomID.isEmpty || _isRoomEnded(roomID)) return;
-    if (!_isOutboundDial(info)) return;
+    if (!_isOutboundDial(merged)) {
+      Logger.print('ignore accept: not outbound dial roomID=$roomID');
+      return;
+    }
 
     if (!_peerAcceptedRooms.contains(roomID)) {
       _peerAcceptedRooms.add(roomID);
       _cancelRingTimeout();
       unawaited(_stopRingSound());
-      _activeCallSignaling = info;
+      _activeCallSignaling = merged;
       Logger.print('caller peer accepted roomID=$roomID');
-      final isVideo = info.invitation?.mediaType == 'video';
+      final isVideo = merged.invitation?.mediaType == 'video';
       final client = OpenIMLiveClient();
       unawaited(client.onCallActive(
         speakerOn: isVideo,
@@ -800,7 +791,51 @@ mixin OpenIMLive {
       ));
     }
 
-    signalingSubject.add(CallEvent(CallState.calling, info));
+    signalingSubject.add(CallEvent(CallState.calling, merged));
+    OpenIMLiveClient().promoteCallingUi();
+  }
+
+  /// Accept payload may omit fields — always merge with active outbound session.
+  SignalingInfo _mergeOutboundAcceptSignaling(SignalingInfo info) {
+    final active = _activeCallSignaling;
+    final acceptInv = info.invitation;
+    if (active?.invitation == null || acceptInv == null) return info;
+    final activeInv = active!.invitation!;
+    return SignalingInfo(
+      userID: active.userID ?? info.userID ?? activeInv.inviterUserID,
+      invitation: InvitationInfo(
+        roomID: acceptInv.roomID?.trim().isNotEmpty == true
+            ? acceptInv.roomID
+            : activeInv.roomID,
+        inviterUserID: acceptInv.inviterUserID?.trim().isNotEmpty == true
+            ? acceptInv.inviterUserID
+            : activeInv.inviterUserID,
+        inviteeUserIDList:
+            acceptInv.inviteeUserIDList ?? activeInv.inviteeUserIDList,
+        groupID: acceptInv.groupID ?? activeInv.groupID,
+        timeout: acceptInv.timeout ?? activeInv.timeout,
+        mediaType: acceptInv.mediaType ?? activeInv.mediaType,
+        sessionType: acceptInv.sessionType ?? activeInv.sessionType,
+        platformID: acceptInv.platformID ?? activeInv.platformID,
+      ),
+    );
+  }
+
+  bool _isOutboundDial(SignalingInfo info) {
+    final self = OpenIM.iMManager.userID.trim();
+    final activeInviter =
+        _activeCallSignaling?.invitation?.inviterUserID?.trim() ?? '';
+    if (activeInviter == self) return true;
+
+    final roomID = info.invitation?.roomID?.trim() ?? '';
+    if (roomID.isEmpty) return false;
+    final inviter = info.invitation?.inviterUserID?.trim() ?? '';
+    if (inviter == self) return true;
+    final client = OpenIMLiveClient();
+    if (!client.isBusy) return false;
+    final current = client.currentRoomID?.trim() ?? '';
+    final active = _activeCallSignaling?.invitation?.roomID?.trim() ?? '';
+    return current == roomID || active == roomID;
   }
 
   SignalingInfo? _resolveIncomingSignaling(SignalingInfo? primary) {

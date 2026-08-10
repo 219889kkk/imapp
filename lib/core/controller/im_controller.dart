@@ -426,7 +426,8 @@ class IMController extends GetxController with IMCallback, OpenIMLive {
     try {
       final map = jsonDecode(raw);
       if (map is! Map) return false;
-      final customType = map['customType'];
+      final customType = _parseCallingCustomType(map['customType']);
+      if (customType == null) return false;
       if (customType != CustomMessageType.callingInvite &&
           customType != CustomMessageType.callingAccept &&
           customType != CustomMessageType.callingReject &&
@@ -520,6 +521,13 @@ class IMController extends GetxController with IMCallback, OpenIMLive {
       Logger.print('dispatch calling message error: $e $s');
       return false;
     }
+  }
+
+  int? _parseCallingCustomType(dynamic raw) {
+    if (raw is int) return raw;
+    if (raw is String) return int.tryParse(raw.trim());
+    if (raw is double) return raw.toInt();
+    return null;
   }
 
   void _clearCallNotification() {
