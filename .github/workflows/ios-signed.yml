@@ -135,7 +135,24 @@ jobs:
       - name: Build signed IPA
         run: |
           set -e
-          flutter build ipa --release --export-options-plist=ios/ExportOptions-ci.plist
+          build_ok=0
+          for attempt in 1 2 3; do
+            echo "=== IPA build attempt ${attempt}/3 ==="
+            if flutter build ipa --release --export-options-plist=ios/ExportOptions-ci.plist; then
+              build_ok=1
+              break
+            fi
+            echo "Build attempt ${attempt} failed"
+            if [ "$attempt" -lt 3 ]; then
+              echo "Cleaning pods and retrying in 45s..."
+              rm -rf ios/Pods ios/Podfile.lock
+              sleep 45
+            fi
+          done
+          if [ "$build_ok" -ne 1 ]; then
+            echo "::error::IPA build failed after 3 attempts"
+            exit 1
+          fi
           ls -la build/ios/ipa/
 
       - name: Upload artifact
