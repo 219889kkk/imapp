@@ -41,10 +41,12 @@ class CallAudioKeepAlive with WidgetsBindingObserver {
   }) async {
     if (skipSessionActivation) _callKitOwnsSession = true;
     if (_callKitOwnsSession || skipSessionActivation) return;
-    await _activateCallSession(preferSpeaker: speakerOn);
+    // iOS: IosWebRtcAudio.enable already setCategory+setActive — avoid double activate.
     if (Platform.isIOS) {
       await IosWebRtcAudio.enable(speakerOn: speakerOn);
+      return;
     }
+    await _activateCallSession(preferSpeaker: speakerOn);
   }
 
   Future<void> start({

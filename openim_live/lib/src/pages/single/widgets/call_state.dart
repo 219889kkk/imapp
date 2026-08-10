@@ -10,6 +10,7 @@ import 'package:rxdart/rxdart.dart';
 import 'package:sprintf/sprintf.dart';
 
 import '../../../../openim_live.dart';
+import '../../../utils/call_audio_keepalive.dart';
 import '../../../widgets/small_window.dart';
 import 'controls.dart';
 import 'participant.dart';
@@ -144,6 +145,11 @@ abstract class SignalState<T extends SignalView> extends State<T>
   Future<void> _restoreCallAudio() async {
     final client = OpenIMLiveClient();
     if (!client.isBusy || client.mediaRoom == null) return;
+    // If CallKit still owns the session, release so prepareForRtc can re-enable WebRTC.
+    if (CallAudioKeepAlive.instance.callKitOwnsSession) {
+      CallAudioKeepAlive.instance.releaseCallKitSession();
+      await CallAudioKeepAlive.instance.prepareForRtc(speakerOn: enabledSpeaker);
+    }
     await client.onCallActive(
       speakerOn: enabledSpeaker,
       unmuteMic: enabledMicrophone,

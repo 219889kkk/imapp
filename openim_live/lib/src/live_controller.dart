@@ -362,7 +362,7 @@ mixin OpenIMLive {
   }
 
   Future<void> _callKitAcceptAndJoin(SignalingInfo signaling) async {
-    await _refreshHeadlessMicPending();
+    // Mic status + gate already handled in _runAcceptJoin for all headless accepts.
     await _acceptIncomingCall(signaling, requestPermissions: false);
   }
 
@@ -405,28 +405,56 @@ mixin OpenIMLive {
       Logger.print('iOS CallKit audio already activated');
       return;
     }
+    // MethodChannel may be lost while native is already enabled — poll as backup.
+    if (await IosWebRtcAudio.isEnabled()) {
+      _markIosCallKitAudioReady(source: 'native-poll-prewait');
+      return;
+    }
     final gate = _iosCallKitAudioGate!;
     try {
-      await gate.future.timeout(const Duration(seconds: 8));
+      await Future.any([
+        gate.future,
+        _pollNativeCallKitAudioReady(),
+      ]).timeout(const Duration(seconds: 8));
       Logger.print('iOS CallKit audio session ready');
     } on TimeoutException {
       var enabled = await IosWebRtcAudio.isEnabled();
       if (!enabled) {
-        Logger.print('iOS CallKit audio timeout — bridge WebRTC without session reconfig');
+        Logger.print(
+            'iOS CallKit audio timeout — bridge WebRTC without session reconfig');
         await IosWebRtcAudio.bridgeCallKitSession();
         enabled = await IosWebRtcAudio.isEnabled();
       }
-      if (enabled) _iosCallKitAudioActivated = true;
+      if (enabled) {
+        _markIosCallKitAudioReady(source: 'timeout-bridge');
+      }
       Logger.print('iOS CallKit audio timeout — proceed nativeEnabled=$enabled');
     }
   }
 
-  void _onCallKitAudioActivated() {
+  Future<void> _pollNativeCallKitAudioReady() async {
+    while (!_iosCallKitAudioActivated) {
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      if (await IosWebRtcAudio.isEnabled()) {
+        _markIosCallKitAudioReady(source: 'native-poll');
+        return;
+      }
+    }
+  }
+
+  void _markIosCallKitAudioReady({String source = 'native'}) {
     _iosCallKitAudioActivated = true;
     final gate = _iosCallKitAudioGate;
     if (gate != null && !gate.isCompleted) {
       gate.complete();
+    } else if (gate == null) {
+      _iosCallKitAudioGate = Completer<void>()..complete();
     }
+    Logger.print('iOS CallKit audio ready ($source)');
+  }
+
+  void _onCallKitAudioActivated() {
+    _markIosCallKitAudioReady(source: 'didActivate');
     final client = OpenIMLiveClient();
     if (!client.isBusy || client.mediaRoom == null) return;
     final isVideo = _activeCallSignaling?.invitation?.mediaType == 'video';
@@ -705,6 +733,12 @@ mixin OpenIMLive {
     PackageBridge.clearCallNotification?.call();
 
     final isCallKitAccept = Platform.isIOS && !requestPermissions;
+    // All headless/CallKit accepts (CallKit / notification / live-alert) —
+    // create gate before pickup so early didActivate is never lost.
+    if (isCallKitAccept) {
+      _ensureIosCallKitAudioGate();
+      await _refreshHeadlessMicPending();
+    }
 
     final cert =
         await onTapPickup(signaling..userID = OpenIM.iMManager.userID);
@@ -1037,6 +1071,7 @@ mixin OpenIMLive {
     if (accept) {
       _autoPickup = true;
       _stopSound();
+      if (Platform.isIOS) _ensureIosCallKitAudioGate();
       PackageBridge.clearCallNotification?.call();
       final signaling = _resolveIncomingSignaling(_beCalledEvent?.data) ??
           _activeCallSignaling;
@@ -1064,6 +1099,7 @@ mixin OpenIMLive {
       activityName: 'io.openim.MainActivity',
       onAccept: () {
         _autoPickup = true;
+        if (Platform.isIOS) _ensureIosCallKitAudioGate();
         final signaling = _resolveIncomingSignaling(_beCalledEvent?.data) ??
             _activeCallSignaling;
         if (signaling != null) {
