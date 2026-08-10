@@ -86,6 +86,10 @@ class VoipCallkitController extends GetxService {
       ctrl._lastUploadedToken = null;
       unawaited(ctrl._refreshVoipToken(upload: true));
       ctrl._scheduleTokenRetries();
+      // Mic must be granted before lock-screen answer — prompt once after login.
+      Future.delayed(const Duration(seconds: 2), () {
+        unawaited(Permission.microphone.request());
+      });
       Logger.print('VoipCallkit login userID=$userID token=${ctrl._voipToken}');
     } else {
       // Delay until main UI is up so the Settings dialog can show.

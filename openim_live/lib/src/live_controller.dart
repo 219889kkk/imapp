@@ -67,6 +67,8 @@ mixin OpenIMLive {
     final roomID = info.invitation?.roomID;
     _markRoomEnded(roomID);
     signalingSubject.add(CallEvent(CallState.beHangup, info));
+    // Do not rely on signaling listener alone — background/lock may miss the stream pass.
+    _terminateCallUi(roomID);
   }
 
   void _markRoomEnded(String? roomID) {
@@ -185,13 +187,6 @@ mixin OpenIMLive {
         return true;
       }
     }
-    final client = OpenIMLiveClient();
-    if (id.isNotEmpty && client.hasMediaFor(id)) return true;
-    if (id.isNotEmpty &&
-        client.hasOverlay &&
-        !client.isConnectedMedia(id)) {
-      return true;
-    }
     return false;
   }
 
@@ -300,6 +295,9 @@ mixin OpenIMLive {
     if (identical(PackageBridge.isCallRoomEnded, _isRoomEnded)) {
       PackageBridge.isCallRoomEnded = null;
     }
+    if (identical(PackageBridge.onPeerLeftCall, _onPeerLeftCall)) {
+      PackageBridge.onPeerLeftCall = null;
+    }
     if (identical(PackageBridge.onCallKitAudioActivated, _onCallKitAudioActivated)) {
       PackageBridge.onCallKitAudioActivated = null;
     }
@@ -325,6 +323,7 @@ mixin OpenIMLive {
     PackageBridge.onVoipRemoteEnd = _onVoipRemoteEnd;
     PackageBridge.suppressCallKitEnded = _suppressCallKitEnded;
     PackageBridge.isCallRoomEnded = _isRoomEnded;
+    PackageBridge.onPeerLeftCall = _onPeerLeftCall;
     PackageBridge.onCallKitAudioActivated = _onCallKitAudioActivated;
     _signalingListener();
     _insertSignalingMessageListener();
@@ -348,9 +347,8 @@ mixin OpenIMLive {
 
   void _onCallKitAccept(SignalingInfo signaling) {
     _autoPickup = true;
-    _pendingHeadlessMicPermission = true;
-    _iosCallKitAudioGate = Completer<void>();
     _stopSound();
+    unawaited(_refreshHeadlessMicPending());
     PackageBridge.clearCallNotification?.call();
     final resolved = _resolveIncomingSignaling(signaling) ?? signaling;
     final roomID = resolved.invitation?.roomID;
@@ -363,6 +361,26 @@ mixin OpenIMLive {
       _suppressCallKitEnded(roomID, duration: const Duration(seconds: 12));
     }
     unawaited(_acceptIncomingCall(resolved, requestPermissions: false));
+  }
+
+  Future<void> _refreshHeadlessMicPending() async {
+    _iosCallKitAudioGate = Completer<void>();
+    try {
+      final mic = await Permission.microphone.status;
+      _pendingHeadlessMicPermission = !mic.isGranted;
+      if (_pendingHeadlessMicPermission) {
+        Logger.print('CallKit accept: mic not granted — defer capture until unlock');
+      }
+    } catch (_) {
+      _pendingHeadlessMicPermission = true;
+    }
+  }
+
+  void _onPeerLeftCall(String? roomID) {
+    final id = roomID?.trim() ?? '';
+    if (id.isEmpty || _isRoomEnded(id)) return;
+    Logger.print('peer left — terminate call roomID=$id');
+    _terminateCallUi(id);
   }
 
   Future<void> _waitForIosCallKitAudio() async {
@@ -487,29 +505,29 @@ mixin OpenIMLive {
     }
   }
 
-  /// PushKit cancel/hungup — only tear down ringing; active calls ignore stale cancel.
+  /// PushKit cancel/hungup — tear down ringing or active 1:1 calls.
   void _onVoipRemoteEnd(String? roomID, String action) {
     Logger.print('VoIP remote end action=$action roomID=$roomID');
     final id = roomID?.trim() ?? '';
     if (id.isNotEmpty && _isRoomEnded(id)) return;
 
-    final client = OpenIMLiveClient();
-    final inLiveCall = id.isNotEmpty && client.isConnectedMedia(id);
-
-    if (!inLiveCall) {
-      _terminateCallUi(id.isEmpty ? null : id);
+    final act = action.toLowerCase();
+    if (act != 'hungup' && act != 'end' && act != 'cancel' && act != 'reject') {
       return;
     }
 
-    final act = action.toLowerCase();
     if (act == 'hungup' || act == 'end') {
       final info = _activeCallSignaling;
       if (info != null) {
-        unawaited(onTapHangup(info..userID = OpenIM.iMManager.userID, 0, true));
+        // Peer already hung up — local cleanup only.
+        unawaited(onTapHangup(info..userID = OpenIM.iMManager.userID, 0, false));
       } else {
-        _terminateCallUi(id);
+        _terminateCallUi(id.isEmpty ? null : id);
       }
+      return;
     }
+
+    _terminateCallUi(id.isEmpty ? null : id);
   }
 
   /// Single callee accept pipeline: permissions → accept signal → token → LiveKit.
@@ -563,6 +581,7 @@ mixin OpenIMLive {
       final cert = await future;
       if (gen == _callSessionGen && !_isRoomEnded(roomID)) {
         _autoPickup = false;
+        signalingSubject.add(CallEvent(CallState.calling, signaling));
         unawaited(
             VoipCallkitController.toOrNull?.setConnected(roomID) ??
                 Future.value());
@@ -594,14 +613,19 @@ mixin OpenIMLive {
         _activeCallSignaling?.invitation?.mediaType == 'video';
     if (_pendingHeadlessMicPermission) {
       final mic = await Permission.microphone.status;
-      _pendingHeadlessMicPermission = false;
       if (!mic.isGranted) {
         Logger.print('headless accept: request mic permission on foreground');
         final ok = await Permissions.requestCallMedia(needCamera: isVideo);
+        _pendingHeadlessMicPermission = false;
         if (!ok) return;
+      } else {
+        _pendingHeadlessMicPermission = false;
       }
     }
-    await client.restoreActiveCallAudio(speakerOn: isVideo);
+    // After unlock + mic grant: CallKit no longer owns session — reconfigure and republish.
+    CallAudioKeepAlive.instance.releaseCallKitSession();
+    await CallAudioKeepAlive.instance.prepareForRtc(speakerOn: isVideo);
+    await client.kickstartIosCallKitMedia(speakerOn: isVideo);
     client.promoteCallingUi();
   }
 
@@ -613,7 +637,9 @@ mixin OpenIMLive {
     if (roomID.isEmpty || !client.hasMediaFor(roomID)) return;
     final isVideo = signaling?.invitation?.mediaType == 'video';
     Logger.print('restore live call audio roomID=$roomID');
-    await client.onCallActive(speakerOn: isVideo, unmuteMic: true);
+    CallAudioKeepAlive.instance.releaseCallKitSession();
+    await CallAudioKeepAlive.instance.prepareForRtc(speakerOn: isVideo);
+    await client.kickstartIosCallKitMedia(speakerOn: isVideo);
     client.promoteCallingUi();
   }
 

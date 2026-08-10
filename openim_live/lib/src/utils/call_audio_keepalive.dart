@@ -31,6 +31,10 @@ class CallAudioKeepAlive with WidgetsBindingObserver {
   bool get isActive => _active;
   bool get callKitOwnsSession => _callKitOwnsSession;
 
+  void releaseCallKitSession() {
+    _callKitOwnsSession = false;
+  }
+
   Future<void> prepareForRtc({
     bool speakerOn = false,
     bool skipSessionActivation = false,

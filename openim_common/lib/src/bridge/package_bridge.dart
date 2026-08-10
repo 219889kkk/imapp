@@ -37,6 +37,9 @@ class PackageBridge {
 
   /// True when [roomID] was cancelled/hung up recently — ignore late invites.
   static bool Function(String? roomID)? isCallRoomEnded;
+
+  /// 1:1 call: remote participant left the LiveKit room (peer hangup).
+  static void Function(String? roomID)? onPeerLeftCall;
 }
 
 abstract class ScanBridge {

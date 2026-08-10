@@ -562,7 +562,16 @@ class OpenIMLiveClient implements RTCBridge {
     }
   }
 
-  Future<void> _handleRoomDisconnected(Room room, RoomDisconnectedEvent event) async {
+  void _onRemoteParticipantLeft(Room room) {
+    if (room.remoteParticipants.isNotEmpty) return;
+    final roomID = currentRoomID;
+    if (roomID == null || roomID.isEmpty) return;
+    Logger.print('LiveKit remote participant left roomID=$roomID');
+    PackageBridge.onPeerLeftCall?.call(roomID);
+  }
+
+  Future<void> _handleRoomDisconnected(
+      Room room, RoomDisconnectedEvent event) async {
     final roomID = currentRoomID;
     Logger.print('Headless room disconnected: ${event.reason} roomID=$roomID');
     if (roomID != null &&
@@ -731,7 +740,10 @@ class OpenIMLiveClient implements RTCBridge {
         _uiOnRemotePresent?.call();
         unawaited(_subscribeRemoteTracks());
       })
-      ..on<ParticipantDisconnectedEvent>((_) => _uiOnRemoteLeft?.call())
+      ..on<ParticipantDisconnectedEvent>((_) {
+        _uiOnRemoteLeft?.call();
+        _onRemoteParticipantLeft(room);
+      })
       ..on<TrackSubscribedEvent>((event) {
         _uiOnRoom?.call(room);
         if (event.track is AudioTrack || event.track is VideoTrack) {
