@@ -143,7 +143,11 @@ abstract class SignalState<T extends SignalView> extends State<T>
         event.state == CallState.beCalled ||
         event.state == CallState.connecting ||
         event.state == CallState.calling) {
+      callState = event.state;
       callStateSubject.add(event.state);
+      if (event.state == CallState.calling) {
+        widget.onStartCalling?.call();
+      }
     }
 
     if (event.state == CallState.beRejected ||
@@ -163,19 +167,24 @@ abstract class SignalState<T extends SignalView> extends State<T>
     } else if (event.state == CallState.timeout) {
       widget.onClose?.call();
     } else if (event.state == CallState.beAccepted) {
-      // Caller: leave waiting UI — audio unmute handled in room/controller.
+      // Caller: peer accepted via IM — leave "请求中" even before remote joins.
+      promoteInCallUi(reason: 'peer-accepted', force: true);
       onParticipantConnected();
     }
   }
 
   String? get _callRoomID => roomID ?? widget.roomID;
 
-  /// Move UI off "connecting" once shared LiveKit media is live.
-  void promoteInCallUi({String? reason}) {
+  /// Move UI off "connecting" / "请求中" once in-call (or peer accepted).
+  void promoteInCallUi({String? reason, bool force = false}) {
     if (!mounted) return;
     if (callState == CallState.calling) return;
     final client = OpenIMLiveClient();
-    if (!client.isConnectedMedia(_callRoomID)) return;
+    if (!force && !client.isConnectedMedia(_callRoomID)) {
+      final callerWaiting = widget.initState == CallState.call &&
+          (callState == CallState.call || callState == CallState.connecting);
+      if (!callerWaiting) return;
+    }
     Logger.print(
         'promote in-call UI reason=$reason from=$callState roomID=$_callRoomID');
     callState = CallState.calling;

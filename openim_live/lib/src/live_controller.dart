@@ -744,22 +744,23 @@ mixin OpenIMLive {
     final roomID = signaling.invitation?.roomID;
     if (_isRoomEnded(roomID)) return;
     final client = OpenIMLiveClient();
-    if (!client.hasMediaFor(roomID)) return;
     if (!client.hasOverlay) {
       _presentCallUi(signaling, fromHeadless: true);
-      return;
     }
-    Logger.print('promote overlay to in-call roomID=$roomID');
+    Logger.print(
+        'promote overlay to in-call roomID=$roomID media=${client.hasMediaFor(roomID)}');
     _stopSound();
     PackageBridge.clearCallNotification?.call();
-    unawaited(
-        VoipCallkitController.toOrNull?.setConnected(roomID) ?? Future.value());
-    final isVideo = signaling.invitation?.mediaType == 'video';
-    unawaited(OpenIMLiveClient().onCallActive(
-      speakerOn: isVideo,
-      unmuteMic: true,
-    ));
-    signalingSubject.add(CallEvent(CallState.beAccepted, signaling));
+    if (client.hasMediaFor(roomID)) {
+      unawaited(
+          VoipCallkitController.toOrNull?.setConnected(roomID) ?? Future.value());
+      final isVideo = signaling.invitation?.mediaType == 'video';
+      unawaited(OpenIMLiveClient().onCallActive(
+        speakerOn: isVideo,
+        unmuteMic: true,
+      ));
+    }
+    // beAccepted already dispatched — only advance UI to in-call.
     signalingSubject.add(CallEvent(CallState.calling, signaling));
   }
 
@@ -992,6 +993,7 @@ mixin OpenIMLive {
             insertSignalingMessageSubject.add(event);
             _terminateCallUi(roomID);
           } else if (event.state == CallState.beAccepted) {
+            _cancelRingTimeout();
             await _stopSound();
             final isVideo = event.data.invitation?.mediaType == 'video';
             unawaited(OpenIMLiveClient().onCallActive(
@@ -1001,8 +1003,12 @@ mixin OpenIMLive {
             final inviter = event.data.invitation?.inviterUserID;
             final isCaller =
                 inviter != null && inviter == OpenIM.iMManager.userID;
-            if (isCaller && OpenIMLiveClient().hasOverlay) {
-              _promoteOverlayToInCall(event.data);
+            if (isCaller) {
+              if (OpenIMLiveClient().hasOverlay) {
+                _promoteOverlayToInCall(event.data);
+              } else {
+                signalingSubject.add(CallEvent(CallState.calling, event.data));
+              }
             }
           } else if (event.state == CallState.otherReject ||
               event.state == CallState.otherAccepted) {
@@ -1074,6 +1080,7 @@ mixin OpenIMLive {
     OpenIMLiveClient().start(
       Get.overlayContext!,
       callEventSubject: signalingSubject,
+      roomID: signal.invitation!.roomID,
       inviterUserID: inviterUserID,
       groupID: groupID,
       inviteeUserIDList: inviteeUserIDList,

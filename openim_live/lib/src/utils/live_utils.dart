@@ -75,15 +75,14 @@ class LiveUtils {
   static bool isSameRoom(CallEvent event, String? roomID) {
     var signalingInfo = event.data;
     var invitation = signalingInfo.invitation!;
-    // var inviterUserID = invitation.inviterUserID;
-    // var inviteeUserIDList = invitation.inviteeUserIDList;
-    // var groupID = invitation.groupID;
-    // var roomID = invitation.roomID;
-    // var timeout = invitation.timeout;
-    // var mediaType = invitation.mediaType;
-    // var sessionType = invitation.sessionType;
-    // var platformID = invitation.platformID;
-    Logger.print('${event.state}--Current roomID：$roomID, Signaling from roomID：${invitation.roomID}');
-    return roomID == invitation.roomID;
+    final invitationRoomID = invitation.roomID?.trim() ?? '';
+    if (invitationRoomID.isEmpty) return false;
+    final localRoomID = (roomID?.trim().isNotEmpty == true
+            ? roomID!.trim()
+            : OpenIMLiveClient().currentRoomID?.trim()) ??
+        '';
+    Logger.print(
+        '${event.state}--Current roomID：$localRoomID, Signaling from roomID：$invitationRoomID');
+    return localRoomID == invitationRoomID;
   }
 }
