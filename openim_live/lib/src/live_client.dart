@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_openim_sdk/flutter_openim_sdk.dart';
@@ -627,6 +628,28 @@ class OpenIMLiveClient implements RTCBridge {
   /// Re-arm mic, speaker route, keepalive, and remote track subscribe after unlock.
   Future<void> restoreActiveCallAudio({bool? speakerOn}) async {
     await onCallActive(speakerOn: speakerOn, unmuteMic: true);
+  }
+
+  /// Lock-screen CallKit: republish mic + start remote playout after WebRTC bridge.
+  Future<void> kickstartIosCallKitMedia({bool speakerOn = false}) async {
+    if (!Platform.isIOS) return;
+    final room = _mediaRoom;
+    if (room == null) return;
+    try {
+      await onCallActive(speakerOn: speakerOn, unmuteMic: true);
+      final local = room.localParticipant;
+      if (local != null) {
+        if (local.isMicrophoneEnabled() == true) {
+          await local.setMicrophoneEnabled(false);
+        }
+        await local.setMicrophoneEnabled(true);
+      }
+      await _subscribeRemoteTracks();
+      Logger.print(
+          'kickstartIosCallKitMedia remotes=${room.remoteParticipants.length}');
+    } catch (e, s) {
+      Logger.print('kickstartIosCallKitMedia failed: $e $s');
+    }
   }
 
   Future<void> _disposeMediaRoomOnly() async {

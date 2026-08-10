@@ -372,8 +372,9 @@ class VoipCallkitController extends GetxService {
           _onEnded(event.body);
           break;
         case Event.actionCallToggleAudioSession:
-          Logger.print('CallKit audio session toggled');
-          PackageBridge.onCallKitAudioActivated?.call();
+          // Native AppDelegate didActivateAudioSession → MethodChannel only.
+          // Plugin event fires before RTCAudioSession bridge — do not join LiveKit here.
+          Logger.print('CallKit audio session toggled (ignored — wait for native bridge)');
           break;
         case Event.actionDidUpdateDevicePushTokenVoip:
           final token = event.body is Map

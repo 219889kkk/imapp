@@ -8,6 +8,7 @@ import 'package:flutter_openim_live_alert/flutter_openim_live_alert.dart';
 import 'package:flutter_openim_sdk/flutter_openim_sdk.dart';
 import 'package:get/get.dart';
 import 'package:just_audio/just_audio.dart';
+import 'package:livekit_client/livekit_client.dart';
 import 'package:openim_common/openim_common.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:rxdart/rxdart.dart';
@@ -312,6 +313,11 @@ mixin OpenIMLive {
   }
 
   onInitLive() async {
+    if (Platform.isIOS) {
+      // CallKit owns AVAudioSession on lock-screen answer — LiveKit must not reconfigure it.
+      Hardware.instance.setAutomaticConfigurationEnabled(enable: false);
+      Logger.print('LiveKit iOS: automatic native audio configuration disabled');
+    }
     PackageBridge.handleCallNotificationAction = _handleCallNotificationAction;
     PackageBridge.onCallKitAccept = _onCallKitAccept;
     PackageBridge.onCallKitDecline = _onCallKitDecline;
@@ -377,8 +383,8 @@ mixin OpenIMLive {
     final client = OpenIMLiveClient();
     if (!client.isBusy || client.mediaRoom == null) return;
     final isVideo = _activeCallSignaling?.invitation?.mediaType == 'video';
-    Logger.print('CallKit audio activated — enable LiveKit audio');
-    unawaited(client.onCallActive(speakerOn: isVideo, unmuteMic: true));
+    Logger.print('CallKit audio activated (native) — enable LiveKit audio');
+    unawaited(client.kickstartIosCallKitMedia(speakerOn: isVideo));
   }
 
   /// Background / lock: ringing uses CallKit, not Flutter overlay.
@@ -711,6 +717,11 @@ mixin OpenIMLive {
       speakerOn: isVideo,
       unmuteMic: true,
     );
+    if (isCallKitAccept) {
+      // Mic/playout may need a beat after CallKit → WebRTC bridge.
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+      await OpenIMLiveClient().kickstartIosCallKitMedia(speakerOn: isVideo);
+    }
     Logger.print('accept joined roomID=${cert.roomID} type=$callType');
     return cert;
   }
