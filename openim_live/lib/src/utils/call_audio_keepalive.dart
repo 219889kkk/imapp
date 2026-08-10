@@ -33,8 +33,12 @@ class CallAudioKeepAlive with WidgetsBindingObserver {
   void beginCallKitAudioSession() {
     _callKitOwnsSession = true;
     if (Platform.isIOS) {
-      Hardware.instance.setAutomaticConfigurationEnabled(enable: false);
-      Logger.print('CallAudioKeepAlive: CallKit owns audio session');
+      try {
+        Hardware.instance.setAutomaticConfigurationEnabled(enable: false);
+        Logger.print('CallAudioKeepAlive: CallKit owns audio session');
+      } catch (e, s) {
+        Logger.print('CallAudioKeepAlive disable auto-config failed: $e $s');
+      }
     }
   }
 
@@ -42,8 +46,12 @@ class CallAudioKeepAlive with WidgetsBindingObserver {
     if (!_callKitOwnsSession) return;
     _callKitOwnsSession = false;
     if (Platform.isIOS) {
-      Hardware.instance.setAutomaticConfigurationEnabled(enable: true);
-      Logger.print('CallAudioKeepAlive: restored LiveKit audio auto-config');
+      try {
+        Hardware.instance.setAutomaticConfigurationEnabled(enable: true);
+        Logger.print('CallAudioKeepAlive: restored LiveKit audio auto-config');
+      } catch (e, s) {
+        Logger.print('CallAudioKeepAlive restore auto-config failed: $e $s');
+      }
     }
   }
 

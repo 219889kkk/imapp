@@ -4,7 +4,6 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_easyloading/flutter_easyloading.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
-import 'package:livekit_client/livekit_client.dart';
 import 'package:openim/core/liquid_glass_runtime.dart';
 import 'package:openim_common/openim_common.dart';
 
@@ -18,9 +17,6 @@ void main() {
     };
 
     WidgetsFlutterBinding.ensureInitialized();
-    if (Platform.isIOS || Platform.isAndroid) {
-      await LiveKitClient.initialize();
-    }
     if (!Platform.isIOS) {
       try {
         await LiquidGlassWidgets.initialize();

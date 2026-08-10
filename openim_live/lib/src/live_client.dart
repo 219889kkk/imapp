@@ -559,12 +559,16 @@ class OpenIMLiveClient implements RTCBridge {
     for (final participant in room.remoteParticipants.values) {
       for (final pub in participant.audioTrackPublications) {
         try {
-          await pub.subscribe();
+          if (!pub.subscribed) {
+            await pub.subscribe();
+          }
           final track = pub.track;
-          if (track != null) {
+          if (track is RemoteAudioTrack && !track.muted) {
             await track.start();
           }
-        } catch (_) {}
+        } catch (e, s) {
+          Logger.print('subscribe remote audio failed: $e $s');
+        }
       }
       for (final pub in participant.videoTrackPublications) {
         if (pub.isScreenShare) continue;
