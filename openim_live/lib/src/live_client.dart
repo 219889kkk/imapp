@@ -693,6 +693,7 @@ class OpenIMLiveClient implements RTCBridge {
       roomID: roomID,
       isVideo: callType == CallType.video,
       speakerOn: speakerOn,
+      skipSessionActivation: keep.callKitOwnsSession,
     );
   }
 

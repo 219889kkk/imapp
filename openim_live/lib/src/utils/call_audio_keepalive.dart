@@ -25,14 +25,18 @@ class CallAudioKeepAlive with WidgetsBindingObserver {
   String _peerName = '通话中';
   StreamSubscription? _interruptionSub;
   Future<void> Function()? onNeedRepublishMic;
+  /// CallKit owns AVAudioSession (lock-screen accept) — do not reconfigure via audio_session.
+  bool _callKitOwnsSession = false;
 
   bool get isActive => _active;
+  bool get callKitOwnsSession => _callKitOwnsSession;
 
   Future<void> prepareForRtc({
     bool speakerOn = false,
     bool skipSessionActivation = false,
   }) async {
-    if (skipSessionActivation) return;
+    if (skipSessionActivation) _callKitOwnsSession = true;
+    if (_callKitOwnsSession || skipSessionActivation) return;
     await _activateCallSession(preferSpeaker: speakerOn);
   }
 
@@ -45,18 +49,19 @@ class CallAudioKeepAlive with WidgetsBindingObserver {
   }) async {
     _roomID = roomID;
     _isVideo = isVideo;
+    if (skipSessionActivation) _callKitOwnsSession = true;
     if (peerName != null && peerName.trim().isNotEmpty) {
       _peerName = peerName.trim();
     }
     if (_active) {
-      if (!skipSessionActivation) {
+      if (!_callKitOwnsSession && !skipSessionActivation) {
         await _activateCallSession(preferSpeaker: speakerOn);
       }
       return;
     }
     _active = true;
     WidgetsBinding.instance.addObserver(this);
-    if (!skipSessionActivation) {
+    if (!_callKitOwnsSession && !skipSessionActivation) {
       await _activateCallSession(preferSpeaker: speakerOn);
     }
     await _listenInterruptions();
@@ -72,6 +77,7 @@ class CallAudioKeepAlive with WidgetsBindingObserver {
   Future<void> stop() async {
     if (!_active && _roomID == null) return;
     _active = false;
+    _callKitOwnsSession = false;
     _roomID = null;
     WidgetsBinding.instance.removeObserver(this);
     await _interruptionSub?.cancel();
@@ -92,7 +98,7 @@ class CallAudioKeepAlive with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (!_active) return;
+    if (!_active || _callKitOwnsSession) return;
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.hidden) {
       unawaited(_activateCallSession());
@@ -102,7 +108,9 @@ class CallAudioKeepAlive with WidgetsBindingObserver {
   }
 
   Future<void> _recoverMic() async {
-    await _activateCallSession();
+    if (!_callKitOwnsSession) {
+      await _activateCallSession();
+    }
     if (onNeedRepublishMic == null) return;
     try {
       await onNeedRepublishMic?.call();

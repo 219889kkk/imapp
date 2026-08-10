@@ -544,7 +544,9 @@ class VoipCallkitController extends GetxService {
         maximumCallGroups: 1,
         maximumCallsPerCallGroup: 1,
         audioSessionMode: 'voiceChat',
-        audioSessionActive: true,
+        // Must be false — plugin session config fights WebRTC/LiveKit (see flutter_callkit_incoming #402).
+        configureAudioSession: false,
+        audioSessionActive: false,
         audioSessionPreferredSampleRate: 44100.0,
         audioSessionPreferredIOBufferDuration: 0.005,
         ringtonePath: 'system_ringtone_default',

@@ -34,6 +34,10 @@ import flutter_callkit_incoming
             self.handleReplayKitFromFlutter(result: result, call: call)
         })
 
+        // WebRTC manual audio: CallKit activates/deactivates via didActivateAudioSession.
+        RTCAudioSession.sharedInstance().useManualAudio = true
+        RTCAudioSession.sharedInstance().isAudioEnabled = false
+
         // CallKit owns activation on lock-screen answer — AppDelegate bridges to WebRTC.
         GeneratedPluginRegistrant.register(with: self)
 
@@ -244,6 +248,9 @@ import flutter_callkit_incoming
         info["extra"] = dict
 
         let data = flutter_callkit_incoming.Data(args: info)
+        // Let CallKit activate session; WebRTC bridges in didActivateAudioSession.
+        data.configureAudioSession = false
+        data.audioSessionActive = false
         SwiftFlutterCallkitIncomingPlugin.sharedInstance?.showCallkitIncoming(data, fromPushKit: true)
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
