@@ -271,7 +271,23 @@ class VoipCallkitController extends GetxService {
       }
       if (call.method == 'onCallKitAudioActivated') {
         Logger.print('CallKit audio session activated (native)');
+        CallAudioDebugLog.add('native', 'onCallKitAudioActivated');
         PackageBridge.onCallKitAudioActivated?.call();
+        return;
+      }
+      if (call.method == 'onAudioDebug') {
+        final args = call.arguments;
+        String tag = 'native';
+        String message = '';
+        if (args is Map) {
+          tag = args['tag']?.toString() ?? 'native';
+          message = args['message']?.toString() ?? '';
+        } else if (args != null) {
+          message = args.toString();
+        }
+        if (message.isNotEmpty) {
+          CallAudioDebugLog.add(tag, message);
+        }
       }
     });
   }

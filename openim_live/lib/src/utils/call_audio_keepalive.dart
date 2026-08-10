@@ -33,6 +33,7 @@ class CallAudioKeepAlive with WidgetsBindingObserver {
 
   void releaseCallKitSession() {
     _callKitOwnsSession = false;
+    CallAudioDebugLog.add('keepalive', 'releaseCallKitSession');
   }
 
   Future<void> prepareForRtc({
@@ -40,9 +41,16 @@ class CallAudioKeepAlive with WidgetsBindingObserver {
     bool skipSessionActivation = false,
   }) async {
     if (skipSessionActivation) _callKitOwnsSession = true;
-    if (_callKitOwnsSession || skipSessionActivation) return;
+    if (_callKitOwnsSession || skipSessionActivation) {
+      CallAudioDebugLog.add(
+        'keepalive',
+        'prepareForRtc skip owns=$_callKitOwnsSession skip=$skipSessionActivation',
+      );
+      return;
+    }
     // iOS: IosWebRtcAudio.enable already setCategory+setActive — avoid double activate.
     if (Platform.isIOS) {
+      CallAudioDebugLog.add('keepalive', 'prepareForRtc enable speaker=$speakerOn');
       await IosWebRtcAudio.enable(speakerOn: speakerOn);
       return;
     }
@@ -59,6 +67,10 @@ class CallAudioKeepAlive with WidgetsBindingObserver {
     _roomID = roomID;
     _isVideo = isVideo;
     if (skipSessionActivation) _callKitOwnsSession = true;
+    CallAudioDebugLog.add(
+      'keepalive',
+      'start roomID=$roomID video=$isVideo skipSession=$skipSessionActivation owns=$_callKitOwnsSession',
+    );
     if (peerName != null && peerName.trim().isNotEmpty) {
       _peerName = peerName.trim();
     }

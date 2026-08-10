@@ -347,17 +347,23 @@ mixin OpenIMLive {
     _stopSound();
     // Gate must exist before async accept — native audio may activate immediately after fulfill.
     _ensureIosCallKitAudioGate();
+    CallAudioDebugLog.add(
+      'callkit',
+      'accept gate=${_iosCallKitAudioGate != null} activated=$_iosCallKitAudioActivated',
+    );
     PackageBridge.clearCallNotification?.call();
     final resolved = _resolveIncomingSignaling(signaling) ?? signaling;
     final roomID = resolved.invitation?.roomID;
     if (roomID != null && roomID.isNotEmpty && _isRoomEnded(roomID)) {
       Logger.print('CallKit accept ignored: room ended $roomID');
+      CallAudioDebugLog.add('callkit', 'accept ignored room ended $roomID');
       unawaited(_dismissCallKitIncoming(roomID));
       return;
     }
     if (roomID != null && roomID.isNotEmpty) {
       _suppressCallKitEnded(roomID, duration: const Duration(seconds: 12));
     }
+    CallAudioDebugLog.add('callkit', 'accept join roomID=$roomID');
     unawaited(_callKitAcceptAndJoin(resolved));
   }
 
@@ -372,12 +378,17 @@ mixin OpenIMLive {
       final gate = _iosCallKitAudioGate;
       if (gate == null || gate.isCompleted) {
         _iosCallKitAudioGate = Completer<void>()..complete();
+        CallAudioDebugLog.add('gate', 'create completed (already activated)');
       }
       return;
     }
     final gate = _iosCallKitAudioGate;
-    if (gate != null && !gate.isCompleted) return;
+    if (gate != null && !gate.isCompleted) {
+      CallAudioDebugLog.add('gate', 'reuse pending');
+      return;
+    }
     _iosCallKitAudioGate = Completer<void>();
+    CallAudioDebugLog.add('gate', 'create pending');
   }
 
   Future<void> _refreshHeadlessMicPending() async {
@@ -386,9 +397,13 @@ mixin OpenIMLive {
       _pendingHeadlessMicPermission = !mic.isGranted;
       if (_pendingHeadlessMicPermission) {
         Logger.print('CallKit accept: mic not granted — defer capture until unlock');
+        CallAudioDebugLog.add('mic', 'not granted — defer until unlock');
+      } else {
+        CallAudioDebugLog.add('mic', 'granted');
       }
     } catch (_) {
       _pendingHeadlessMicPermission = true;
+      CallAudioDebugLog.add('mic', 'status check failed — treat as pending');
     }
   }
 
@@ -401,8 +416,13 @@ mixin OpenIMLive {
 
   Future<void> _waitForIosCallKitAudio({bool speakerOn = false}) async {
     _ensureIosCallKitAudioGate();
+    CallAudioDebugLog.add(
+      'gate',
+      'wait start activated=$_iosCallKitAudioActivated speaker=$speakerOn',
+    );
     if (_iosCallKitAudioActivated) {
       Logger.print('iOS CallKit audio already activated');
+      CallAudioDebugLog.add('gate', 'wait skip — already activated');
       return;
     }
     // MethodChannel may be lost while native is already enabled — poll as backup.
@@ -417,11 +437,13 @@ mixin OpenIMLive {
         _pollNativeCallKitAudioReady(),
       ]).timeout(const Duration(seconds: 8));
       Logger.print('iOS CallKit audio session ready');
+      CallAudioDebugLog.add('gate', 'wait ready');
     } on TimeoutException {
       var enabled = await IosWebRtcAudio.isEnabled();
       if (!enabled) {
         Logger.print(
             'iOS CallKit audio timeout — bridge WebRTC without session reconfig');
+        CallAudioDebugLog.add('gate', 'timeout — bridgeCallKitSession');
         await IosWebRtcAudio.bridgeCallKitSession();
         enabled = await IosWebRtcAudio.isEnabled();
       }
@@ -429,6 +451,8 @@ mixin OpenIMLive {
         _markIosCallKitAudioReady(source: 'timeout-bridge');
       }
       Logger.print('iOS CallKit audio timeout — proceed nativeEnabled=$enabled');
+      CallAudioDebugLog.add(
+          'gate', 'timeout proceed nativeEnabled=$enabled');
     }
   }
 
@@ -451,14 +475,20 @@ mixin OpenIMLive {
       _iosCallKitAudioGate = Completer<void>()..complete();
     }
     Logger.print('iOS CallKit audio ready ($source)');
+    CallAudioDebugLog.add('gate', 'ready source=$source');
   }
 
   void _onCallKitAudioActivated() {
     _markIosCallKitAudioReady(source: 'didActivate');
     final client = OpenIMLiveClient();
-    if (!client.isBusy || client.mediaRoom == null) return;
+    if (!client.isBusy || client.mediaRoom == null) {
+      CallAudioDebugLog.add(
+          'callkit', 'didActivate — media not ready yet (kickstart deferred)');
+      return;
+    }
     final isVideo = _activeCallSignaling?.invitation?.mediaType == 'video';
     Logger.print('CallKit audio activated (native) — enable LiveKit audio');
+    CallAudioDebugLog.add('callkit', 'didActivate — kickstart media');
     unawaited(client.kickstartIosCallKitMedia(speakerOn: isVideo));
   }
 
@@ -733,6 +763,10 @@ mixin OpenIMLive {
     PackageBridge.clearCallNotification?.call();
 
     final isCallKitAccept = Platform.isIOS && !requestPermissions;
+    CallAudioDebugLog.add(
+      'accept',
+      'join start roomID=$roomID callKit=$isCallKitAccept requestPerm=$requestPermissions',
+    );
     // All headless/CallKit accepts (CallKit / notification / live-alert) —
     // create gate before pickup so early didActivate is never lost.
     if (isCallKitAccept) {
@@ -765,6 +799,10 @@ mixin OpenIMLive {
     }
 
     final micGranted = !isCallKitAccept || !_pendingHeadlessMicPermission;
+    CallAudioDebugLog.add(
+      'accept',
+      'pre-connect micGranted=$micGranted pendingMic=$_pendingHeadlessMicPermission skipSession=$isCallKitAccept',
+    );
 
     if (roomID != null && roomID.isNotEmpty) {
       await CallAudioKeepAlive.instance.start(
@@ -811,12 +849,17 @@ mixin OpenIMLive {
     if (isCallKitAccept) {
       // Mic/playout may need a beat after CallKit → WebRTC bridge.
       await Future<void>.delayed(const Duration(milliseconds: 250));
+      CallAudioDebugLog.add('accept', 'post-connect kickstart unmuteMic=$micGranted');
       await OpenIMLiveClient().kickstartIosCallKitMedia(
         speakerOn: isVideo,
         unmuteMic: micGranted,
       );
     }
     Logger.print('accept joined roomID=${cert.roomID} type=$callType');
+    CallAudioDebugLog.add(
+      'accept',
+      'joined roomID=${cert.roomID} type=$callType remotes=${OpenIMLiveClient().mediaRoom?.remoteParticipants.length ?? 0}',
+    );
     return cert;
   }
 

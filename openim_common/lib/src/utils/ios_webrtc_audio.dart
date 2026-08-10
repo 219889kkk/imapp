@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/services.dart';
 
+import 'call_audio_debug_log.dart';
 import 'logger.dart';
 
 /// Bridges AVAudioSession → WebRTC when [useManualAudio] is enabled (iOS).
@@ -18,8 +19,10 @@ class IosWebRtcAudio {
     try {
       await _channel.invokeMethod('enableWebRtcAudio', {'speakerOn': speakerOn});
       Logger.print('IosWebRtcAudio enabled speaker=$speakerOn');
+      CallAudioDebugLog.add('webrtc', 'enable speaker=$speakerOn ok');
     } catch (e, s) {
       Logger.print('IosWebRtcAudio enable failed: $e $s');
+      CallAudioDebugLog.add('webrtc', 'enable failed: $e');
     }
   }
 
@@ -27,8 +30,10 @@ class IosWebRtcAudio {
     if (!Platform.isIOS) return;
     try {
       await _channel.invokeMethod('disableWebRtcAudio');
+      CallAudioDebugLog.add('webrtc', 'disable ok');
     } catch (e, s) {
       Logger.print('IosWebRtcAudio disable failed: $e $s');
+      CallAudioDebugLog.add('webrtc', 'disable failed: $e');
     }
   }
 
@@ -50,8 +55,10 @@ class IosWebRtcAudio {
     try {
       await _channel.invokeMethod('bridgeCallKitWebRtcAudio');
       Logger.print('IosWebRtcAudio CallKit bridge invoked');
+      CallAudioDebugLog.add('webrtc', 'bridgeCallKitSession ok');
     } catch (e, s) {
       Logger.print('IosWebRtcAudio CallKit bridge failed: $e $s');
+      CallAudioDebugLog.add('webrtc', 'bridgeCallKitSession failed: $e');
     }
   }
 }

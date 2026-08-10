@@ -30,6 +30,7 @@ abstract class AppRoutes {
   static const languageSetup = '/language_setup';
   static const themeSetup = '/theme_setup';
   static const aboutUs = '/about_us';
+  static const callAudioDebug = '/call_audio_debug';
   static const groupChatSetup = '/group_chat_setup';
   static const groupManage = '/group_manage';
   static const editGroupName = '/edit_group_name';

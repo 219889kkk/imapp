@@ -197,6 +197,8 @@ class AppNavigator {
 
   static startAboutUs() => Get.toNamed(AppRoutes.aboutUs);
 
+  static startCallAudioDebug() => Get.toNamed(AppRoutes.callAudioDebug);
+
   static startChatSetup({
     required ConversationInfo conversationInfo,
   }) =>

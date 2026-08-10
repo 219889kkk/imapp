@@ -76,6 +76,8 @@ import '../pages/login/login_binding.dart';
 import '../pages/login/login_view.dart';
 import '../pages/mine/about_us/about_us_binding.dart';
 import '../pages/mine/about_us/about_us_view.dart';
+import '../pages/mine/call_audio_debug/call_audio_debug_binding.dart';
+import '../pages/mine/call_audio_debug/call_audio_debug_view.dart';
 import '../pages/mine/account_setup/account_setup_binding.dart';
 import '../pages/mine/account_setup/account_setup_view.dart';
 import '../pages/mine/appearance_language_setup/appearance_language_setup_binding.dart';
@@ -301,6 +303,11 @@ class AppPages {
       name: AppRoutes.aboutUs,
       page: () => AboutUsPage(),
       binding: AboutUsBinding(),
+    ),
+    _pageBuilder(
+      name: AppRoutes.callAudioDebug,
+      page: () => CallAudioDebugPage(),
+      binding: CallAudioDebugBinding(),
     ),
     _pageBuilder(
       name: AppRoutes.groupChatSetup,

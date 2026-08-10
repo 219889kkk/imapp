@@ -340,6 +340,11 @@ class OpenIMLiveClient implements RTCBridge {
       );
     }
 
+    CallAudioDebugLog.add(
+      'livekit',
+      'connect start roomID=$roomID skipSession=$skipSessionActivation mic=$enableMicrophone cam=$enableCamera',
+    );
+
     if (!skipSessionActivation) {
       await CallAudioKeepAlive.instance.prepareForRtc(speakerOn: speakerOn);
     }
@@ -434,11 +439,19 @@ class OpenIMLiveClient implements RTCBridge {
         // CallKit lock-screen: subscribe remote audio even when mic deferred.
         if (skipSessionActivation) {
           await _subscribeRemoteTracks();
+          CallAudioDebugLog.add(
+            'livekit',
+            'connect mic-off CallKit path subscribed remotes=${room.remoteParticipants.length}',
+          );
         }
       } catch (_) {}
     }
     WakelockPlus.enable();
     Logger.print('connectMedia connected roomID=$roomID keepAlive=$enableKeepAlive');
+    CallAudioDebugLog.add(
+      'livekit',
+      'connected roomID=$roomID remotes=${room.remoteParticipants.length} keepAlive=$enableKeepAlive',
+    );
   }
 
   /// Accumulated while another onCallActive is in flight (fixes caller mic stuck off).
@@ -656,8 +669,15 @@ class OpenIMLiveClient implements RTCBridge {
   }) async {
     if (!Platform.isIOS) return;
     final room = _mediaRoom;
-    if (room == null) return;
+    if (room == null) {
+      CallAudioDebugLog.add('kickstart', 'skip — no media room');
+      return;
+    }
     try {
+      CallAudioDebugLog.add(
+        'kickstart',
+        'start unmuteMic=$unmuteMic speaker=$speakerOn remotes=${room.remoteParticipants.length}',
+      );
       await onCallActive(speakerOn: speakerOn, unmuteMic: unmuteMic);
       if (unmuteMic) {
         final local = room.localParticipant;
@@ -671,8 +691,13 @@ class OpenIMLiveClient implements RTCBridge {
       await _subscribeRemoteTracks();
       Logger.print(
           'kickstartIosCallKitMedia remotes=${room.remoteParticipants.length}');
+      CallAudioDebugLog.add(
+        'kickstart',
+        'done remotes=${room.remoteParticipants.length} mic=${room.localParticipant?.isMicrophoneEnabled()}',
+      );
     } catch (e, s) {
       Logger.print('kickstartIosCallKitMedia failed: $e $s');
+      CallAudioDebugLog.add('kickstart', 'failed: $e');
     }
   }
 

@@ -4,6 +4,7 @@ import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:get/get.dart';
 import 'package:openim_common/openim_common.dart';
 
+import '../../../routes/app_navigator.dart';
 import 'about_us_logic.dart';
 
 class AboutUsPage extends StatelessWidget {
@@ -86,6 +87,23 @@ class AboutUsPage extends StatelessWidget {
                     child: Row(
                       children: [
                         StrRes.uploadLogWithLine.toText..style = Styles.ts_0C1C33_17sp,
+                        const Spacer(),
+                        ImageRes.rightArrow.toImage
+                          ..width = 24.w
+                          ..height = 24.h,
+                      ],
+                    ),
+                  ),
+                ),
+                GestureDetector(
+                  behavior: HitTestBehavior.translucent,
+                  onTap: AppNavigator.startCallAudioDebug,
+                  child: Container(
+                    height: 57.h,
+                    padding: EdgeInsets.symmetric(horizontal: 16.w),
+                    child: Row(
+                      children: [
+                        '通话音频调试'.toText..style = Styles.ts_0C1C33_17sp,
                         const Spacer(),
                         ImageRes.rightArrow.toImage
                           ..width = 24.w

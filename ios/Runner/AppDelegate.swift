@@ -82,6 +82,7 @@ import flutter_callkit_incoming
     /// Dart handles accept via FlutterCallkitIncoming.onEvent — fulfill so CallKit activates audio.
     func onAccept(_ call: Call, _ action: CXAnswerCallAction) {
         NSLog("HangXun CallKit: onAccept room=%@", call.data.uuid)
+        emitAudioDebug("CallKit onAccept room=\(call.data.uuid)")
         action.fulfill()
     }
 
@@ -105,10 +106,20 @@ import flutter_callkit_incoming
 
     // MARK: - CallKit audio session → WebRTC (lock-screen talk)
 
+    private func emitAudioDebug(_ message: String) {
+        NSLog("HangXun WebRTC: %@", message)
+        DispatchQueue.main.async {
+            self.voipChannel?.invokeMethod("onAudioDebug", arguments: [
+                "tag": "native",
+                "message": message,
+            ])
+        }
+    }
+
     func didActivateAudioSession(_ audioSession: AVAudioSession) {
         RTCAudioSession.sharedInstance().audioSessionDidActivate(audioSession)
         RTCAudioSession.sharedInstance().isAudioEnabled = true
-        NSLog("HangXun WebRTC: CallKit audio session activated")
+        emitAudioDebug("CallKit audio session activated isAudioEnabled=true")
         DispatchQueue.main.async {
             self.voipChannel?.invokeMethod("onCallKitAudioActivated", arguments: nil)
         }
@@ -117,7 +128,7 @@ import flutter_callkit_incoming
     func didDeactivateAudioSession(_ audioSession: AVAudioSession) {
         RTCAudioSession.sharedInstance().audioSessionDidDeactivate(audioSession)
         RTCAudioSession.sharedInstance().isAudioEnabled = false
-        NSLog("HangXun WebRTC: CallKit audio session deactivated")
+        emitAudioDebug("CallKit audio session deactivated isAudioEnabled=false")
     }
 
     // MARK: - WebRTC audio (in-app calls — useManualAudio requires explicit enable)
@@ -133,10 +144,10 @@ import flutter_callkit_incoming
             try session.setActive(true)
             RTCAudioSession.sharedInstance().audioSessionDidActivate(session)
             RTCAudioSession.sharedInstance().isAudioEnabled = true
-            NSLog("HangXun WebRTC: in-app audio enabled speaker=%d", preferSpeaker)
+            emitAudioDebug("in-app audio enabled speaker=\(preferSpeaker)")
             result(true)
         } catch {
-            NSLog("HangXun WebRTC: in-app enable failed %@", error.localizedDescription)
+            emitAudioDebug("in-app enable failed \(error.localizedDescription)")
             result(FlutterError(code: "audio", message: error.localizedDescription, details: nil))
         }
     }
@@ -145,7 +156,7 @@ import flutter_callkit_incoming
         let session = AVAudioSession.sharedInstance()
         RTCAudioSession.sharedInstance().audioSessionDidDeactivate(session)
         RTCAudioSession.sharedInstance().isAudioEnabled = false
-        NSLog("HangXun WebRTC: in-app audio disabled")
+        emitAudioDebug("in-app audio disabled")
         result(true)
     }
 
@@ -154,7 +165,7 @@ import flutter_callkit_incoming
         let session = AVAudioSession.sharedInstance()
         RTCAudioSession.sharedInstance().audioSessionDidActivate(session)
         RTCAudioSession.sharedInstance().isAudioEnabled = true
-        NSLog("HangXun WebRTC: CallKit bridge (no setActive)")
+        emitAudioDebug("CallKit bridge (no setActive) isAudioEnabled=true")
         result(true)
     }
 
