@@ -263,6 +263,11 @@ class VoipCallkitController extends GetxService {
           action = args['action']?.toString() ?? 'cancel';
         }
         PackageBridge.onVoipRemoteEnd?.call(roomID, action);
+        return;
+      }
+      if (call.method == 'onCallKitAudioActivated') {
+        Logger.print('CallKit audio session activated (native)');
+        PackageBridge.onCallKitAudioActivated?.call();
       }
     });
   }
@@ -365,6 +370,10 @@ class VoipCallkitController extends GetxService {
         case Event.actionCallTimeout:
           callKitActive.value = false;
           _onEnded(event.body);
+          break;
+        case Event.actionCallToggleAudioSession:
+          Logger.print('CallKit audio session toggled');
+          PackageBridge.onCallKitAudioActivated?.call();
           break;
         case Event.actionDidUpdateDevicePushTokenVoip:
           final token = event.body is Map

@@ -29,6 +29,9 @@ class PackageBridge {
   /// PushKit remote cancel/hungup (native endCall before Dart WS).
   static void Function(String? roomID, String action)? onVoipRemoteEnd;
 
+  /// iOS CallKit activated AVAudioSession — WebRTC may now capture/play.
+  static VoidCallback? onCallKitAudioActivated;
+
   /// iOS: ignore spurious CallKit `ended` after programmatic dismiss.
   static void Function(String? roomID)? suppressCallKitEnded;
 

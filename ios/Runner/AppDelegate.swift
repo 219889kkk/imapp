@@ -2,17 +2,19 @@ import UIKit
 import Flutter
 import FirebaseCore
 import PushKit
+import AVFAudio
+import WebRTC
 import flutter_callkit_incoming
 
 @main
-@objc class AppDelegate: FlutterAppDelegate, PKPushRegistryDelegate {
-    
+@objc class AppDelegate: FlutterAppDelegate, PKPushRegistryDelegate, CallkitIncomingAppDelegate {
+
     var replayKitChannel: FlutterMethodChannel! = nil
     var voipChannel: FlutterMethodChannel! = nil
     var observeTimer: Timer?
     var hasEmittedFirstSample = false
     private var voipRegistry: PKPushRegistry?
-    
+
     override func application(
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
@@ -22,16 +24,21 @@ import flutter_callkit_incoming
         }
 
         FirebaseApp.configure()
-        
-        replayKitChannel = FlutterMethodChannel(name: "io.livekit.example.flutter/replaykit-channel",binaryMessenger: controller.binaryMessenger)
+
+        replayKitChannel = FlutterMethodChannel(name: "io.livekit.example.flutter/replaykit-channel", binaryMessenger: controller.binaryMessenger)
         voipChannel = FlutterMethodChannel(name: "top.hangxun.app/voip", binaryMessenger: controller.binaryMessenger)
-        
+
         replayKitChannel.setMethodCallHandler({
-            (call: FlutterMethodCall, result: @escaping  FlutterResult)  -> Void in
-            self.handleReplayKitFromFlutter(result: result, call:call)
+            (call: FlutterMethodCall, result: @escaping FlutterResult) -> Void in
+            self.handleReplayKitFromFlutter(result: result, call: call)
         })
-        
+
         GeneratedPluginRegistrant.register(with: self)
+
+        // WebRTC manual audio: CallKit activates/deactivates via didActivateAudioSession below.
+        RTCAudioSession.sharedInstance().useManualAudio = true
+        RTCAudioSession.sharedInstance().isAudioEnabled = false
+        NSLog("HangXun WebRTC: useManualAudio enabled")
 
         // PushKit must be registered early so VoIP wakes can report CallKit before completion.
         self.registerVoipPush()
@@ -46,6 +53,23 @@ import flutter_callkit_incoming
         fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
     ) {
         completionHandler(.newData)
+    }
+
+    // MARK: - CallKit audio session → WebRTC (lock-screen talk)
+
+    func didActivateAudioSession(_ audioSession: AVAudioSession) {
+        RTCAudioSession.sharedInstance().audioSessionDidActivate(audioSession)
+        RTCAudioSession.sharedInstance().isAudioEnabled = true
+        NSLog("HangXun WebRTC: CallKit audio session activated")
+        DispatchQueue.main.async {
+            self.voipChannel?.invokeMethod("onCallKitAudioActivated", arguments: nil)
+        }
+    }
+
+    func didDeactivateAudioSession(_ audioSession: AVAudioSession) {
+        RTCAudioSession.sharedInstance().audioSessionDidDeactivate(audioSession)
+        RTCAudioSession.sharedInstance().isAudioEnabled = false
+        NSLog("HangXun WebRTC: CallKit audio session deactivated")
     }
 
     // MARK: - PushKit (VoIP)
@@ -63,15 +87,11 @@ import flutter_callkit_incoming
         let deviceToken = credentials.token.map { String(format: "%02x", $0) }.joined()
         NSLog("HangXun VoIP token: %@", deviceToken)
 
-        // Getui: bindAlias (Dart) + PushKit token credentials (native) for kill-app wake.
         HangXunGetuiVoip.registerPushKitToken(credentials.token)
 
-        // Persist even if plugin sharedInstance is still nil (PushKit can fire before Flutter ready).
-        // Key must match flutter_callkit_incoming's DevicePushTokenVoIP.
         UserDefaults.standard.set(deviceToken, forKey: "DevicePushTokenVoIP")
         SwiftFlutterCallkitIncomingPlugin.sharedInstance?.setDevicePushTokenVoIP(deviceToken)
 
-        // Notify Dart so login-time upload does not depend solely on plugin event timing.
         DispatchQueue.main.async {
             self.voipChannel?.invokeMethod("onVoipToken", arguments: deviceToken)
         }
@@ -166,7 +186,6 @@ import flutter_callkit_incoming
             return
         }
 
-        // Foreground: in-app / WS invite UI is primary — skip duplicate CallKit.
         if UIApplication.shared.applicationState == .active {
             NSLog("HangXun VoIP: skip CallKit (app foreground, room=%@)", roomID)
             DispatchQueue.main.async { completion() }
@@ -202,49 +221,45 @@ import flutter_callkit_incoming
         info["extra"] = dict
 
         let data = flutter_callkit_incoming.Data(args: info)
-        // Hard requirement: reportNewIncomingCall via plugin before completion returns.
         SwiftFlutterCallkitIncomingPlugin.sharedInstance?.showCallkitIncoming(data, fromPushKit: true)
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
             completion()
         }
     }
-    
-    func handleReplayKitFromFlutter(result:FlutterResult, call: FlutterMethodCall){
-        switch (call.method) {
+
+    func handleReplayKitFromFlutter(result: FlutterResult, call: FlutterMethodCall) {
+        switch call.method {
         case "startReplayKit":
             self.hasEmittedFirstSample = false
-            let group=UserDefaults(suiteName: "group.io.livekit.example.flutter")
+            let group = UserDefaults(suiteName: "group.io.livekit.example.flutter")
             group!.set(false, forKey: "closeReplayKitFromNative")
             group!.set(false, forKey: "closeReplayKitFromFlutter")
             self.observeReplayKitStateChanged()
-            break
         case "closeReplayKit":
-            let group=UserDefaults(suiteName: "group.io.livekit.example.flutter")
-            group!.set(true,forKey: "closeReplayKitFromFlutter")
+            let group = UserDefaults(suiteName: "group.io.livekit.example.flutter")
+            group!.set(true, forKey: "closeReplayKitFromFlutter")
             result(true)
-            break
         default:
-            return result(FlutterMethodNotImplemented)
+            result(FlutterMethodNotImplemented)
         }
     }
-    
 
-    func observeReplayKitStateChanged(){
-        if (self.observeTimer != nil) {
+    func observeReplayKitStateChanged() {
+        if self.observeTimer != nil {
             return
         }
-        
-        let group=UserDefaults(suiteName: "group.io.livekit.example.flutter")
-        self.observeTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { (timer) in
-            let closeReplayKitFromNative=group!.bool(forKey: "closeReplayKitFromNative")
-            let hasSampleBroadcast=group!.bool(forKey: "hasSampleBroadcast")
-            
-            if (closeReplayKitFromNative) {
+
+        let group = UserDefaults(suiteName: "group.io.livekit.example.flutter")
+        self.observeTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { (_) in
+            let closeReplayKitFromNative = group!.bool(forKey: "closeReplayKitFromNative")
+            let hasSampleBroadcast = group!.bool(forKey: "hasSampleBroadcast")
+
+            if closeReplayKitFromNative {
                 self.hasEmittedFirstSample = false
                 self.replayKitChannel.invokeMethod("closeReplayKitFromNative", arguments: true)
-            } else if (hasSampleBroadcast) {
-                if (!self.hasEmittedFirstSample) {
+            } else if hasSampleBroadcast {
+                if !self.hasEmittedFirstSample {
                     self.hasEmittedFirstSample = true
                     self.replayKitChannel.invokeMethod("hasSampleBroadcast", arguments: true)
                 }

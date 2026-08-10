@@ -296,6 +296,9 @@ mixin OpenIMLive {
     if (identical(PackageBridge.isCallRoomEnded, _isRoomEnded)) {
       PackageBridge.isCallRoomEnded = null;
     }
+    if (identical(PackageBridge.onCallKitAudioActivated, _onCallKitAudioActivated)) {
+      PackageBridge.onCallKitAudioActivated = null;
+    }
     _clearPickupCache();
     _cancelRingTimeout();
     signalingSubject.close();
@@ -313,6 +316,7 @@ mixin OpenIMLive {
     PackageBridge.onVoipRemoteEnd = _onVoipRemoteEnd;
     PackageBridge.suppressCallKitEnded = _suppressCallKitEnded;
     PackageBridge.isCallRoomEnded = _isRoomEnded;
+    PackageBridge.onCallKitAudioActivated = _onCallKitAudioActivated;
     _signalingListener();
     _insertSignalingMessageListener();
     _bindLiveAlertButtons();
@@ -349,8 +353,21 @@ mixin OpenIMLive {
     if (roomID != null && roomID.isNotEmpty) {
       _suppressCallKitEnded(roomID, duration: const Duration(seconds: 12));
     }
-    // setConnected only after LiveKit join — early call triggers spurious ended.
     unawaited(_acceptIncomingCall(resolved, requestPermissions: false));
+  }
+
+  /// Native CallKit didActivateAudioSession → WebRTC can capture/play.
+  void _onCallKitAudioActivated() {
+    CallAudioKeepAlive.instance.markCallKitAudioActivated();
+    final client = OpenIMLiveClient();
+    if (!client.isBusy) return;
+    final isVideo = _activeCallSignaling?.invitation?.mediaType == 'video';
+    Logger.print('CallKit audio activated — restore LiveKit audio');
+    unawaited(client.restoreActiveCallAudio(
+      speakerOn: isVideo,
+      forceRestartMic: true,
+    ));
+    client.promoteCallingUi();
   }
 
   /// Background / lock: ringing uses CallKit, not Flutter overlay.
@@ -621,6 +638,13 @@ mixin OpenIMLive {
     _stopSound();
     PackageBridge.clearCallNotification?.call();
 
+    final callKitPath = Platform.isIOS &&
+        CallAudioKeepAlive.instance.callKitOwnsSession;
+
+    if (callKitPath) {
+      await CallAudioKeepAlive.instance.waitForCallKitAudioReady();
+    }
+
     if (roomID != null && roomID.isNotEmpty) {
       await CallAudioKeepAlive.instance.start(
         roomID: roomID,
@@ -628,9 +652,6 @@ mixin OpenIMLive {
         speakerOn: isVideo,
       );
     }
-
-    final callKitPath = Platform.isIOS &&
-        CallAudioKeepAlive.instance.callKitOwnsSession;
 
     final cert =
         await onTapPickup(signaling..userID = OpenIM.iMManager.userID);
@@ -649,6 +670,10 @@ mixin OpenIMLive {
     if (liveURL.isEmpty || token.isEmpty) {
       throw StateError(
           'invalid rtc cert roomID=$roomID liveURL=$liveURL tokenLen=${token.length}');
+    }
+
+    if (callKitPath) {
+      await CallAudioKeepAlive.instance.waitForCallKitAudioReady();
     }
 
     await OpenIMLiveClient().connectMedia(

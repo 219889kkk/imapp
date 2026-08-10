@@ -6,7 +6,6 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_background/flutter_background.dart';
 import 'package:flutter_callkit_incoming/entities/call_kit_params.dart';
 import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
-import 'package:livekit_client/livekit_client.dart';
 import 'package:openim_common/openim_common.dart';
 
 /// Keeps call mic/audio alive when the app is backgrounded (e.g. switch to WeChat text).
@@ -25,34 +24,47 @@ class CallAudioKeepAlive with WidgetsBindingObserver {
   Future<void> Function()? onNeedRepublishMic;
   /// CallKit already activated AVAudioSession — never call setActive again.
   bool _callKitOwnsSession = false;
+  bool _callKitAudioActivated = false;
+  Completer<void>? _callKitAudioReady;
 
   bool get isActive => _active;
   bool get callKitOwnsSession => _callKitOwnsSession;
+  bool get callKitAudioActivated => _callKitAudioActivated;
 
-  /// Lock-screen CallKit accept: LiveKit must not steal/reactivate the session.
+  /// Lock-screen CallKit accept: wait for native RTCAudioSession bridge.
   void beginCallKitAudioSession() {
     _callKitOwnsSession = true;
-    if (Platform.isIOS) {
-      try {
-        Hardware.instance.setAutomaticConfigurationEnabled(enable: false);
-        Logger.print('CallAudioKeepAlive: CallKit owns audio session');
-      } catch (e, s) {
-        Logger.print('CallAudioKeepAlive disable auto-config failed: $e $s');
-      }
+    _callKitAudioActivated = false;
+    _callKitAudioReady = Completer<void>();
+    Logger.print('CallAudioKeepAlive: waiting for CallKit audio session');
+  }
+
+  void markCallKitAudioActivated() {
+    if (_callKitAudioActivated) return;
+    _callKitAudioActivated = true;
+    Logger.print('CallAudioKeepAlive: CallKit audio session ready');
+    final pending = _callKitAudioReady;
+    if (pending != null && !pending.isCompleted) {
+      pending.complete();
+    }
+  }
+
+  Future<void> waitForCallKitAudioReady({
+    Duration timeout = const Duration(seconds: 5),
+  }) async {
+    if (!_callKitOwnsSession || _callKitAudioActivated) return;
+    final pending = _callKitAudioReady ??= Completer<void>();
+    try {
+      await pending.future.timeout(timeout);
+    } on TimeoutException {
+      Logger.print('CallAudioKeepAlive: CallKit audio ready timeout');
     }
   }
 
   Future<void> endCallKitAudioSession() async {
-    if (!_callKitOwnsSession) return;
     _callKitOwnsSession = false;
-    if (Platform.isIOS) {
-      try {
-        Hardware.instance.setAutomaticConfigurationEnabled(enable: true);
-        Logger.print('CallAudioKeepAlive: restored LiveKit audio auto-config');
-      } catch (e, s) {
-        Logger.print('CallAudioKeepAlive restore auto-config failed: $e $s');
-      }
-    }
+    _callKitAudioActivated = false;
+    _callKitAudioReady = null;
   }
 
   /// Configure a LiveKit/WebRTC-friendly session BEFORE room.connect.
@@ -130,7 +142,9 @@ class CallAudioKeepAlive with WidgetsBindingObserver {
     if (!_active) return;
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.hidden) {
-      unawaited(_activateCallSession());
+      unawaited(_activateCallSession(
+        skipSessionActivation: _callKitOwnsSession,
+      ));
     } else if (state == AppLifecycleState.resumed) {
       unawaited(_recoverMic());
     }

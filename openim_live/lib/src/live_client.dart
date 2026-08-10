@@ -333,12 +333,13 @@ class OpenIMLiveClient implements RTCBridge {
 
     await _disposeMediaRoomOnly();
 
-    // Audio session MUST be ready before LiveKit connects. On lock-screen
-    // CallKit accept, never re-activate — only align category/mode.
-    await CallAudioKeepAlive.instance.prepareForRtc(
-      speakerOn: speakerOn,
-      callKitCoexist: callKitCoexist,
-    );
+    // CallKit + WebRTC bridge owns session activation on lock-screen accept.
+    if (!callKitCoexist) {
+      await CallAudioKeepAlive.instance.prepareForRtc(
+        speakerOn: speakerOn,
+        callKitCoexist: false,
+      );
+    }
 
     if (PackageBridge.isCallRoomEnded?.call(roomID) == true) {
       Logger.print('_doConnectMedia aborted before LiveKit: room ended $roomID');
