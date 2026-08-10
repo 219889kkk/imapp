@@ -346,7 +346,9 @@ class VoipCallkitController extends GetxService {
           // WS invite may have already opened in-app UI — drop duplicate banner.
           if (PackageBridge.rtcBridge?.hasCallOverlay == true) {
             final signaling = signalingFromCallKitBody(event.body);
-            unawaited(endCall(signaling?.invitation?.roomID));
+            final roomID = signaling?.invitation?.roomID;
+            PackageBridge.suppressCallKitEnded?.call(roomID);
+            unawaited(endCall(roomID));
             callKitActive.value = false;
           }
           break;
@@ -564,9 +566,9 @@ class VoipCallkitController extends GetxService {
     if (!Platform.isIOS && !Platform.isAndroid) return;
     try {
       if (roomID != null && roomID.isNotEmpty) {
+        PackageBridge.suppressCallKitEnded?.call(roomID);
         await FlutterCallkitIncoming.endCall(roomID);
       } else {
-        // No id: clear leftovers (Android id mismatch / missed cancel race).
         await FlutterCallkitIncoming.endAllCalls();
       }
     } catch (e, s) {

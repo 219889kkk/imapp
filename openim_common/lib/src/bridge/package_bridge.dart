@@ -29,6 +29,9 @@ class PackageBridge {
   /// PushKit remote cancel/hungup (native endCall before Dart WS).
   static void Function(String? roomID, String action)? onVoipRemoteEnd;
 
+  /// iOS: ignore spurious CallKit `ended` after programmatic dismiss.
+  static void Function(String? roomID)? suppressCallKitEnded;
+
   /// True when [roomID] was cancelled/hung up recently — ignore late invites.
   static bool Function(String? roomID)? isCallRoomEnded;
 }

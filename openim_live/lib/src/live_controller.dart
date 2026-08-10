@@ -146,6 +146,64 @@ mixin OpenIMLive {
   bool _autoPickup = false;
   bool _pendingHeadlessMicPermission = false;
 
+  /// After programmatic [endCall] — iOS fires spurious `actionCallEnded`.
+  final Map<String, int> _suppressCallKitEndedUntilMs = {};
+
+  // --- iOS call UI rules (single source of truth) ---
+  // | App state              | Incoming ring | Active call      |
+  // |------------------------|---------------|------------------|
+  // | Foreground (in app)    | Flutter overlay | Flutter overlay |
+  // | Background / lock      | CallKit       | LiveKit + keepalive |
+  // | Return to foreground   | overlay + dismiss CallKit | attach/promote overlay |
+  //
+  // Never treat CallKit `ended` as hangup while: accept in flight, media
+  // connecting/connected, in-app ring overlay visible, or suppress window.
+
+  void _suppressCallKitEnded(String? roomID,
+      {Duration duration = const Duration(seconds: 4)}) {
+    final id = roomID?.trim() ?? '';
+    if (id.isEmpty) return;
+    _suppressCallKitEndedUntilMs[id] =
+        DateTime.now().millisecondsSinceEpoch + duration.inMilliseconds;
+  }
+
+  bool _shouldIgnoreCallKitEnded(String? roomID) {
+    if (_isAcceptInProgressForRoom(roomID)) return true;
+    if (_isRoomEnded(roomID)) return true;
+    final id = roomID?.trim() ?? '';
+    if (id.isNotEmpty) {
+      final until = _suppressCallKitEndedUntilMs[id];
+      if (until != null &&
+          DateTime.now().millisecondsSinceEpoch < until) {
+        return true;
+      }
+    }
+    final client = OpenIMLiveClient();
+    if (id.isNotEmpty && client.hasMediaFor(id)) return true;
+    if (id.isNotEmpty &&
+        client.hasOverlay &&
+        !client.isConnectedMedia(id)) {
+      return true;
+    }
+    return false;
+  }
+
+  /// Dismiss system incoming UI only — not a user reject/hangup.
+  Future<void> _dismissCallKitIncoming(String? roomID) async {
+    if (!Platform.isIOS) return;
+    final id = roomID?.trim() ?? '';
+    if (id.isEmpty) return;
+    _suppressCallKitEnded(id);
+    await VoipCallkitController.toOrNull?.endCall(id);
+  }
+
+  bool _iosShouldUseCallKitForRing(String? roomID) {
+    if (!Platform.isIOS) return false;
+    if (roomID != null && _isRoomEnded(roomID)) return false;
+    if (_autoPickup || _isAcceptInProgressForRoom(roomID)) return false;
+    return _isRunningBackground;
+  }
+
   /// True while lock-screen / CallKit accept → LiveKit join has not finished.
   bool _isAcceptInProgressForRoom(String? roomID) {
     final id = roomID?.trim() ?? '';
@@ -229,6 +287,9 @@ mixin OpenIMLive {
     if (identical(PackageBridge.onVoipRemoteEnd, _onVoipRemoteEnd)) {
       PackageBridge.onVoipRemoteEnd = null;
     }
+    if (identical(PackageBridge.suppressCallKitEnded, _suppressCallKitEnded)) {
+      PackageBridge.suppressCallKitEnded = null;
+    }
     if (identical(PackageBridge.isCallRoomEnded, _isRoomEnded)) {
       PackageBridge.isCallRoomEnded = null;
     }
@@ -247,6 +308,7 @@ mixin OpenIMLive {
     PackageBridge.onCallKitDecline = _onCallKitDecline;
     PackageBridge.onCallKitEnded = _onCallKitEnded;
     PackageBridge.onVoipRemoteEnd = _onVoipRemoteEnd;
+    PackageBridge.suppressCallKitEnded = _suppressCallKitEnded;
     PackageBridge.isCallRoomEnded = _isRoomEnded;
     _signalingListener();
     _insertSignalingMessageListener();
@@ -254,64 +316,9 @@ mixin OpenIMLive {
     backgroundSubject.listen((background) {
       _isRunningBackground = background;
       if (background) {
-        unawaited(_onAppBackgroundedDuringCall());
+        unawaited(_onIosBackgroundForRinging());
       } else {
-        unawaited(_ensureMicPermissionAfterHeadlessAccept());
-        FlutterOpenimLiveAlert.closeLiveAlert();
-        if (_beCalledEvent != null) {
-          final pending = _beCalledEvent!;
-          _beCalledEvent = null;
-          final pendingRoom = pending.data.invitation?.roomID;
-          if (_isRoomEnded(pendingRoom)) {
-            Logger.print('skip foreground restore: room ended $pendingRoom');
-          } else if (OpenIMLiveClient().hasMediaFor(pendingRoom)) {
-            // Already answered on lock-screen — attach or promote in-app UI.
-            if (!_isRoomEnded(pendingRoom)) {
-              _presentCallUi(pending.data, fromHeadless: true);
-            }
-          } else if (OpenIMLiveClient().hasOverlay) {
-            // In-app invite already visible — drop duplicate system UI only.
-            unawaited(
-                VoipCallkitController.toOrNull?.endCall(pendingRoom) ??
-                    Future.value());
-            PackageBridge.clearCallNotification?.call();
-          } else if (_isAcceptInProgressForRoom(pendingRoom)) {
-            // Lock-screen accept is joining LiveKit — do not endCall (iOS fires ended on accept).
-            Logger.print(
-                'foreground: accept in flight, skip endCall roomID=$pendingRoom');
-            final inFlight = _acceptJoinInFlight;
-            if (inFlight != null) {
-              unawaited(inFlight.then((_) {
-                if (_isRoomEnded(pendingRoom)) return;
-                final client = OpenIMLiveClient();
-                if (client.hasMediaFor(pendingRoom) && !client.hasOverlay) {
-                  _presentCallUi(pending.data, fromHeadless: true);
-                }
-              }));
-            }
-          } else {
-            // Unanswered: drop system incoming UI so only in-app Accept remains.
-            unawaited(
-                VoipCallkitController.toOrNull?.endCall(pendingRoom) ??
-                    Future.value());
-            PackageBridge.clearCallNotification?.call();
-            signalingSubject.add(pending);
-          }
-        } else {
-          final active = _activeCallSignaling;
-          final activeRoom = active?.invitation?.roomID;
-          if (active != null &&
-              !_isRoomEnded(activeRoom) &&
-              OpenIMLiveClient().isBusy &&
-              OpenIMLiveClient().hasMediaFor(activeRoom)) {
-            if (!OpenIMLiveClient().hasOverlay) {
-              _presentCallUi(active, fromHeadless: true);
-            } else {
-              _promoteOverlayToInCall(active);
-            }
-          }
-        }
-        unawaited(_syncCallUiOnForeground());
+        unawaited(_onIosForegroundResume());
       }
     });
 
@@ -332,34 +339,30 @@ mixin OpenIMLive {
     final roomID = resolved.invitation?.roomID;
     if (roomID != null && roomID.isNotEmpty && _isRoomEnded(roomID)) {
       Logger.print('CallKit accept ignored: room ended $roomID');
-      unawaited(_endSystemCallUi(roomID));
+      unawaited(_dismissCallKitIncoming(roomID));
       return;
     }
-    if (roomID != null && roomID.isNotEmpty) {
-      unawaited(
-          VoipCallkitController.toOrNull?.setConnected(roomID) ?? Future.value());
-    }
+    // setConnected only after LiveKit join — early call triggers spurious ended.
     unawaited(_acceptIncomingCall(resolved, requestPermissions: false));
   }
 
-  /// iOS: in-app ring overlay is invisible over WeChat — switch to CallKit.
-  Future<void> _onAppBackgroundedDuringCall() async {
+  /// Background / lock: ringing uses CallKit, not Flutter overlay.
+  Future<void> _onIosBackgroundForRinging() async {
     if (!Platform.isIOS) return;
     final signaling = _activeCallSignaling ?? _beCalledEvent?.data;
     if (signaling == null) return;
     final roomID = signaling.invitation?.roomID?.trim() ?? '';
     if (roomID.isEmpty || _isRoomEnded(roomID)) return;
+    if (!_iosShouldUseCallKitForRing(roomID)) return;
 
     final client = OpenIMLiveClient();
     if (client.hasMediaFor(roomID)) return;
-
-    if (_autoPickup || _isAcceptInProgressForRoom(roomID)) return;
 
     final voip = VoipCallkitController.toOrNull;
     if (voip == null) return;
 
     if (client.hasOverlay) {
-      Logger.print('background: drop in-app ring overlay, show CallKit roomID=$roomID');
+      Logger.print('iOS bg: overlay→CallKit roomID=$roomID');
       client.closeOverlayOnly();
     }
 
@@ -371,24 +374,75 @@ mixin OpenIMLive {
     }
   }
 
-  /// Re-attach or refresh in-app call UI after returning from WeChat / lock screen.
-  Future<void> _syncCallUiOnForeground() async {
+  /// Foreground: attach in-app UI; dismiss CallKit without treating as hangup.
+  Future<void> _onIosForegroundResume() async {
     if (!Platform.isIOS) return;
-    final active = _activeCallSignaling;
-    if (active == null) return;
-    final roomID = active.invitation?.roomID?.trim() ?? '';
-    if (roomID.isEmpty || _isRoomEnded(roomID)) return;
+    await _ensureMicPermissionAfterHeadlessAccept();
+    FlutterOpenimLiveAlert.closeLiveAlert();
+    PackageBridge.clearCallNotification?.call();
 
     final client = OpenIMLiveClient();
-    if (!client.hasMediaFor(roomID)) return;
+    final active = _activeCallSignaling;
+    final activeRoom = active?.invitation?.roomID?.trim() ?? '';
 
-    if (!client.hasOverlay) {
-      Logger.print('foreground: attach in-app call UI roomID=$roomID');
-      _presentCallUi(active, fromHeadless: true);
+    // Live / connecting call — ensure in-app UI matches media state.
+    if (active != null &&
+        activeRoom.isNotEmpty &&
+        !_isRoomEnded(activeRoom) &&
+        client.hasMediaFor(activeRoom)) {
+      _beCalledEvent = null;
+      if (!client.hasOverlay) {
+        Logger.print('iOS fg: attach call UI roomID=$activeRoom');
+        _presentCallUi(active, fromHeadless: true);
+      } else {
+        _promoteOverlayToInCall(active);
+      }
       return;
     }
-    Logger.print('foreground: promote in-app call UI roomID=$roomID');
-    _promoteOverlayToInCall(active);
+
+    // Pending ring or accept still in flight.
+    if (_beCalledEvent != null) {
+      final pending = _beCalledEvent!;
+      final pendingRoom = pending.data.invitation?.roomID?.trim() ?? '';
+      _beCalledEvent = null;
+      if (_isRoomEnded(pendingRoom)) return;
+
+      if (_isAcceptInProgressForRoom(pendingRoom)) {
+        Logger.print('iOS fg: accept in flight roomID=$pendingRoom');
+        final inFlight = _acceptJoinInFlight;
+        if (inFlight != null) {
+          unawaited(inFlight.then((_) {
+            if (_isRoomEnded(pendingRoom)) return;
+            if (client.hasMediaFor(pendingRoom) && !client.hasOverlay) {
+              _presentCallUi(pending.data, fromHeadless: true);
+            }
+          }));
+        }
+        return;
+      }
+
+      // Unanswered ring — in-app UI primary, silently drop CallKit.
+      await _dismissCallKitIncoming(pendingRoom);
+      final ctx = Get.overlayContext;
+      if (ctx != null) {
+        _presentCallUi(pending.data);
+      } else {
+        _beCalledEvent = pending;
+      }
+      return;
+    }
+
+    // CallKit was ringing, user opened app without _beCalledEvent set.
+    if (active != null &&
+        activeRoom.isNotEmpty &&
+        !_isRoomEnded(activeRoom) &&
+        !client.hasOverlay) {
+      await _dismissCallKitIncoming(activeRoom);
+      final ctx = Get.overlayContext;
+      if (ctx != null) {
+        _presentCallUi(active);
+      }
+    }
   }
 
   /// PushKit cancel/hungup — only tear down ringing; active calls ignore stale cancel.
@@ -752,30 +806,17 @@ mixin OpenIMLive {
     final roomID =
         info?.invitation?.roomID ?? OpenIMLiveClient().currentRoomID;
 
-    // iOS/Android CallKit dismisses incoming UI after Accept and emits "ended".
-    // That is not a user hangup — ignore while accept/join is in flight.
-    if (_isAcceptInProgressForRoom(roomID)) {
-      Logger.print(
-          'CallKit ended ignored: accept in progress roomID=$roomID');
+    if (_shouldIgnoreCallKitEnded(roomID)) {
+      Logger.print('CallKit ended ignored roomID=$roomID');
       return;
     }
 
     _beCalledEvent = null;
     _autoPickup = false;
 
-    if (roomID != null && roomID.isNotEmpty && _isRoomEnded(roomID)) {
-      return;
-    }
-
     final client = OpenIMLiveClient();
     final inCall = client.hasMediaFor(roomID) ||
         client.mediaRoom?.localParticipant != null;
-
-    // iOS dismisses CallKit after accept/setConnected — not user hangup.
-    if (inCall && client.isConnectedMedia(roomID)) {
-      Logger.print('CallKit ended ignored: live media roomID=$roomID');
-      return;
-    }
 
     if (inCall && info != null) {
       Logger.print('CallKit ended active call roomID=$roomID');
@@ -875,9 +916,8 @@ mixin OpenIMLive {
             final callType =
                 mediaType == 'audio' ? CallType.audio : CallType.video;
 
-            // Background: show CallKit / overlay. Skip when user already
-            // accepted from CallKit (_autoPickup) — go straight to LiveKit UI.
-            if (_isRunningBackground && !_autoPickup) {
+            // Background / lock: CallKit rings; foreground uses overlay below.
+            if (_iosShouldUseCallKitForRing(roomID)) {
               _beCalledEvent = event;
               _activeCallSignaling = event.data;
               if (Platform.isAndroid) {
@@ -914,12 +954,9 @@ mixin OpenIMLive {
                   );
                 }
               } else if (Platform.isIOS) {
-                // Prefer CallKit over in-app overlay when backgrounded.
                 final voip = VoipCallkitController.toOrNull;
                 if (voip != null) {
                   if (OpenIMLiveClient().hasOverlay) {
-                    Logger.print(
-                        'background invite: drop in-app overlay for CallKit');
                     OpenIMLiveClient().closeOverlayOnly();
                   }
                   if (!voip.ownsIncomingUi) {
@@ -927,7 +964,6 @@ mixin OpenIMLive {
                   }
                 }
               }
-              // Keep pending invite; CallKit / foreground restores UI.
               return;
             }
             _activeCallSignaling = event.data;
@@ -936,16 +972,12 @@ mixin OpenIMLive {
               _beCalledEvent = event;
               return;
             }
-            // Foreground: in-app invite page is primary; dismiss duplicate CallKit banner.
+            // Foreground in-app: overlay primary, dismiss duplicate CallKit.
             PackageBridge.clearCallNotification?.call();
             FlutterOpenimLiveAlert.closeLiveAlert();
             _presentCallUi(event.data, fromHeadless: _autoPickup);
             _autoPickup = false;
-            if (roomID != null && roomID.isNotEmpty) {
-              unawaited(
-                  VoipCallkitController.toOrNull?.endCall(roomID) ??
-                      Future.value());
-            }
+            unawaited(_dismissCallKitIncoming(roomID));
           } else if (event.state == CallState.beRejected) {
             insertSignalingMessageSubject.add(event);
             _terminateCallUi(roomID);
