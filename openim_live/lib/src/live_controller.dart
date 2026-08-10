@@ -111,15 +111,18 @@ mixin OpenIMLive {
     }
   }
 
-  /// End CallKit / system incoming UI — endAllCalls fallback on iOS when id mismatch.
+  /// End CallKit / system incoming UI. Never [endAllCalls] during active LiveKit.
   Future<void> _endSystemCallUi(String? roomID) async {
     final voip = VoipCallkitController.toOrNull;
     if (voip == null) return;
     final id = roomID?.trim() ?? '';
+    final client = OpenIMLiveClient();
+    final inLiveCall = id.isNotEmpty && client.isConnectedMedia(id);
     if (id.isNotEmpty) {
       await voip.endCall(id);
     }
-    if (Platform.isIOS && voip.callKitActive.value) {
+    // Ringing-only fallback — endAllCalls during live call drops audio + fires ended.
+    if (Platform.isIOS && voip.callKitActive.value && !inLiveCall) {
       await voip.endAllCalls();
     }
   }
@@ -388,27 +391,29 @@ mixin OpenIMLive {
     _promoteOverlayToInCall(active);
   }
 
-  /// PushKit cancel/hungup arrived natively before Dart WS — tear down ringing/active UI.
+  /// PushKit cancel/hungup — only tear down ringing; active calls ignore stale cancel.
   void _onVoipRemoteEnd(String? roomID, String action) {
     Logger.print('VoIP remote end action=$action roomID=$roomID');
     final id = roomID?.trim() ?? '';
     if (id.isNotEmpty && _isRoomEnded(id)) return;
 
     final client = OpenIMLiveClient();
-    final inCall = client.hasMediaFor(id) ||
-        (id.isEmpty && client.mediaRoom?.localParticipant != null);
+    final inLiveCall = id.isNotEmpty && client.isConnectedMedia(id);
 
-    if (inCall) {
+    if (!inLiveCall) {
+      _terminateCallUi(id.isEmpty ? null : id);
+      return;
+    }
+
+    final act = action.toLowerCase();
+    if (act == 'hungup' || act == 'end') {
       final info = _activeCallSignaling;
       if (info != null) {
         unawaited(onTapHangup(info..userID = OpenIM.iMManager.userID, 0, true));
       } else {
-        _terminateCallUi(id.isEmpty ? null : id);
+        _terminateCallUi(id);
       }
-      return;
     }
-
-    _terminateCallUi(id.isEmpty ? null : id);
   }
 
   /// Single callee accept pipeline: permissions → accept signal → token → LiveKit.
@@ -592,6 +597,10 @@ mixin OpenIMLive {
     }
 
     await OpenIMLiveClient().reinforceLockScreenAudio(speakerOn: isVideo);
+    unawaited(OpenIMLiveClient().onCallActive(
+      speakerOn: isVideo,
+      unmuteMic: true,
+    ));
     Logger.print('accept joined roomID=${cert.roomID} type=$callType');
     return cert;
   }
@@ -691,6 +700,11 @@ mixin OpenIMLive {
     PackageBridge.clearCallNotification?.call();
     unawaited(
         VoipCallkitController.toOrNull?.setConnected(roomID) ?? Future.value());
+    final isVideo = signaling.invitation?.mediaType == 'video';
+    unawaited(OpenIMLiveClient().onCallActive(
+      speakerOn: isVideo,
+      unmuteMic: true,
+    ));
     signalingSubject.add(CallEvent(CallState.beAccepted, signaling));
     signalingSubject.add(CallEvent(CallState.calling, signaling));
   }
@@ -756,6 +770,12 @@ mixin OpenIMLive {
     final client = OpenIMLiveClient();
     final inCall = client.hasMediaFor(roomID) ||
         client.mediaRoom?.localParticipant != null;
+
+    // iOS dismisses CallKit after accept/setConnected — not user hangup.
+    if (inCall && client.isConnectedMedia(roomID)) {
+      Logger.print('CallKit ended ignored: live media roomID=$roomID');
+      return;
+    }
 
     if (inCall && info != null) {
       Logger.print('CallKit ended active call roomID=$roomID');
@@ -946,6 +966,12 @@ mixin OpenIMLive {
               speakerOn: isVideo,
               unmuteMic: true,
             ));
+            final inviter = event.data.invitation?.inviterUserID;
+            final isCaller =
+                inviter != null && inviter == OpenIM.iMManager.userID;
+            if (isCaller && OpenIMLiveClient().hasOverlay) {
+              _promoteOverlayToInCall(event.data);
+            }
           } else if (event.state == CallState.otherReject ||
               event.state == CallState.otherAccepted) {
             await _stopSound();

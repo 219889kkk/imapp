@@ -124,8 +124,6 @@ import flutter_callkit_incoming
         ])
         let plugin = SwiftFlutterCallkitIncomingPlugin.sharedInstance
         plugin?.endCall(endData)
-        // Fallback when UUID mismatch or plugin init raced PushKit cancel.
-        plugin?.endAllCalls()
     }
 
     private func notifyDartVoipRemoteEnd(roomID: String, action: String) {
