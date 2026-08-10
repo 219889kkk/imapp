@@ -81,6 +81,7 @@ class LiveUtils {
             ? roomID!.trim()
             : OpenIMLiveClient().currentRoomID?.trim()) ??
         '';
+    if (localRoomID.isEmpty) return false;
     Logger.print(
         '${event.state}--Current roomID：$localRoomID, Signaling from roomID：$invitationRoomID');
     return localRoomID == invitationRoomID;

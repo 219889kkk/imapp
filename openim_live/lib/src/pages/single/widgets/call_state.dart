@@ -116,8 +116,30 @@ abstract class SignalState<T extends SignalView> extends State<T>
     }
   }
 
-  Stream<CallEvent> get sameRoomSignalStream =>
-      widget.callEventSubject.stream.where((event) => LiveUtils.isSameRoom(event, roomID));
+  Stream<CallEvent> get sameRoomSignalStream => widget.callEventSubject.stream
+      .where((event) => _matchesSignalingRoom(event));
+
+  bool _matchesSignalingRoom(CallEvent event) {
+    if (_acceptOutboundSignaling(event)) return true;
+    return LiveUtils.isSameRoom(event, _callRoomID);
+  }
+
+  /// Outbound dial: never drop accept/calling due to roomID bind timing.
+  bool _acceptOutboundSignaling(CallEvent event) {
+    if (widget.initState != CallState.call) return false;
+    if (event.state != CallState.beAccepted &&
+        event.state != CallState.calling) {
+      return false;
+    }
+    if (!OpenIMLiveClient().isBusy) return false;
+    final eventRoom = event.data.invitation?.roomID?.trim() ?? '';
+    if (eventRoom.isEmpty) return true;
+    final localRoom = _callRoomID?.trim() ??
+        widget.roomID?.trim() ??
+        OpenIMLiveClient().currentRoomID?.trim() ??
+        '';
+    return localRoom.isEmpty || localRoom == eventRoom;
+  }
 
   _onUpdateUserInfo(UserInfo? info) {
     if (!mounted && null != info) return;

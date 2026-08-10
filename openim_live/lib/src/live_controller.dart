@@ -24,7 +24,19 @@ mixin OpenIMLive {
   }
 
   void inviteeAccepted(SignalingInfo info) {
+    _cancelRingTimeout();
     signalingSubject.add(CallEvent(CallState.beAccepted, info));
+    final inviter = info.invitation?.inviterUserID?.trim() ?? '';
+    final acceptRoom = info.invitation?.roomID?.trim() ?? '';
+    final self = OpenIM.iMManager.userID.trim();
+    final client = OpenIMLiveClient();
+    final isOutboundDial = inviter == self ||
+        (client.isBusy &&
+            acceptRoom.isNotEmpty &&
+            client.currentRoomID?.trim() == acceptRoom);
+    if (isOutboundDial) {
+      signalingSubject.add(CallEvent(CallState.calling, info));
+    }
   }
 
   void inviteeRejected(SignalingInfo info) {
@@ -1001,10 +1013,17 @@ mixin OpenIMLive {
               unmuteMic: true,
             ));
             final inviter = event.data.invitation?.inviterUserID;
+            final acceptRoom = event.data.invitation?.roomID?.trim() ?? '';
+            final client = OpenIMLiveClient();
             final isCaller =
                 inviter != null && inviter == OpenIM.iMManager.userID;
-            if (isCaller) {
-              if (OpenIMLiveClient().hasOverlay) {
+            final isOutboundDial = client.isBusy &&
+                acceptRoom.isNotEmpty &&
+                (client.currentRoomID?.trim() == acceptRoom ||
+                    _activeCallSignaling?.invitation?.roomID?.trim() ==
+                        acceptRoom);
+            if (isCaller || isOutboundDial) {
+              if (client.hasOverlay) {
                 _promoteOverlayToInCall(event.data);
               } else {
                 signalingSubject.add(CallEvent(CallState.calling, event.data));
@@ -1340,13 +1359,12 @@ mixin OpenIMLive {
     };
     final message = await OpenIM.iMManager.messageManager.createCustomMessage(
         data: jsonEncode(data), extension: '', description: '');
-    // Persist accept so inviter still gets it if briefly offline / Doze.
+    // Deliver accept reliably — online-only can be dropped on some iOS/WS paths.
     await OpenIM.iMManager.messageManager.sendMessage(
         message: message,
         offlinePushInfo: OfflinePushInfo(),
         userID: signaling.invitation!.inviterUserID,
-        // Online-only accept reaches waiting caller faster than offline sync.
-        isOnlineOnly: true);
+        isOnlineOnly: false);
     final certificate = await Apis.getTokenForRTC(
         signaling.invitation!.roomID!, OpenIM.iMManager.userID);
 
