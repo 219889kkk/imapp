@@ -206,7 +206,7 @@ class OpenIMLiveClient implements RTCBridge {
     /// Caller waiting for answer: skip keepalive so ringback isn't ducked.
     bool enableKeepAlive = true,
     /// CallKit already activated AVAudioSession (lock-screen accept).
-    bool callKitCoexist = false,
+    bool skipSessionActivation = false,
     VoidCallback? onDisconnected,
   }) async {
     final roomID = certificate.roomID?.trim() ?? '';
@@ -268,7 +268,7 @@ class OpenIMLiveClient implements RTCBridge {
       enableCamera: enableCamera,
       enableMicrophone: enableMicrophone,
       enableKeepAlive: enableKeepAlive,
-      callKitCoexist: callKitCoexist,
+      skipSessionActivation: skipSessionActivation,
     );
     _mediaConnectInFlight = future;
     _mediaConnectRoomID = roomID;
@@ -289,7 +289,7 @@ class OpenIMLiveClient implements RTCBridge {
     required bool enableCamera,
     required bool enableMicrophone,
     required bool enableKeepAlive,
-    bool callKitCoexist = false,
+    bool skipSessionActivation = false,
   }) async {
     final roomID = certificate.roomID!;
     if (PackageBridge.isCallRoomEnded?.call(roomID) == true) {
@@ -333,12 +333,8 @@ class OpenIMLiveClient implements RTCBridge {
 
     await _disposeMediaRoomOnly();
 
-    // CallKit + WebRTC bridge owns session activation on lock-screen accept.
-    if (!callKitCoexist) {
-      await CallAudioKeepAlive.instance.prepareForRtc(
-        speakerOn: speakerOn,
-        callKitCoexist: false,
-      );
+    if (!skipSessionActivation) {
+      await CallAudioKeepAlive.instance.prepareForRtc(speakerOn: speakerOn);
     }
 
     if (PackageBridge.isCallRoomEnded?.call(roomID) == true) {
@@ -420,22 +416,15 @@ class OpenIMLiveClient implements RTCBridge {
     }
     // Waiting caller keeps mic off; unmute happens on peer accept.
     if (enableMicrophone) {
-      await ensureMediaAudible(
-        speakerOn: speakerOn,
-        forceRestartMic: callKitCoexist,
-      );
+      await ensureMediaAudible(speakerOn: speakerOn);
     } else {
       try {
-        await CallAudioKeepAlive.instance.prepareForRtc(
-          speakerOn: speakerOn,
-          callKitCoexist: callKitCoexist,
-        );
+        if (!skipSessionActivation) {
+          await CallAudioKeepAlive.instance.prepareForRtc(speakerOn: speakerOn);
+        }
         await Hardware.instance.setSpeakerphoneOn(speakerOn);
         await room.setSpeakerOn(speakerOn);
       } catch (_) {}
-    }
-    if (callKitCoexist) {
-      unawaited(_kickstartRemoteAudioPlayback());
     }
     WakelockPlus.enable();
     Logger.print('connectMedia connected roomID=$roomID keepAlive=$enableKeepAlive');
@@ -524,10 +513,7 @@ class OpenIMLiveClient implements RTCBridge {
   }
 
   /// Make sure remote audio is subscribed and local route/mic are live.
-  Future<void> ensureMediaAudible({
-    bool? speakerOn,
-    bool forceRestartMic = false,
-  }) async {
+  Future<void> ensureMediaAudible({bool? speakerOn}) async {
     final room = _mediaRoom;
     if (room == null) return;
     final on = speakerOn ??
@@ -538,17 +524,12 @@ class OpenIMLiveClient implements RTCBridge {
       await Hardware.instance.setSpeakerphoneOn(on);
       await room.setSpeakerOn(on);
       final local = room.localParticipant;
-      if (local != null) {
-        if (forceRestartMic && local.isMicrophoneEnabled() == true) {
-          await local.setMicrophoneEnabled(false);
-          await local.setMicrophoneEnabled(true);
-        } else if (local.isMicrophoneEnabled() != true) {
-          await local.setMicrophoneEnabled(true);
-        }
+      if (local != null && local.isMicrophoneEnabled() != true) {
+        await local.setMicrophoneEnabled(true);
       }
       await _subscribeRemoteTracks();
       Logger.print(
-          'ensureMediaAudible speaker=$on remotes=${room.remoteParticipants.length} forceMic=$forceRestartMic');
+          'ensureMediaAudible speaker=$on remotes=${room.remoteParticipants.length}');
     } catch (e, s) {
       Logger.print('ensureMediaAudible failed: $e $s');
     }
@@ -578,14 +559,6 @@ class OpenIMLiveClient implements RTCBridge {
         } catch (_) {}
       }
     }
-  }
-
-  /// Lock-screen: remote playout may not auto-start until tracks are kicked.
-  Future<void> _kickstartRemoteAudioPlayback() async {
-    await _subscribeRemoteTracks();
-    unawaited(Future<void>.delayed(const Duration(milliseconds: 300), () async {
-      await _subscribeRemoteTracks();
-    }));
   }
 
   Future<void> _handleRoomDisconnected(Room room, RoomDisconnectedEvent event) async {
@@ -651,46 +624,9 @@ class OpenIMLiveClient implements RTCBridge {
     scheduleMicrotask(() => cb?.call());
   }
 
-  /// Lock-screen answer: force audible route + mic + remote audio subscribe.
-  Future<void> reinforceLockScreenAudio({bool speakerOn = false}) async {
-    await restoreActiveCallAudio(
-      speakerOn: speakerOn,
-      forceRestartMic: true,
-    );
-    await _kickstartRemoteAudioPlayback();
-  }
-
   /// Re-arm mic, speaker route, keepalive, and remote track subscribe after unlock.
-  Future<void> restoreActiveCallAudio({
-    bool? speakerOn,
-    bool forceRestartMic = false,
-  }) async {
-    final room = _mediaRoom;
-    if (room == null) return;
-    final on = speakerOn ??
-        _userSpeakerPreference ??
-        (_mediaCallType == CallType.video);
-    final roomID = currentRoomID;
-    if (roomID != null && roomID.isNotEmpty) {
-      await _startKeepAlive(
-        roomID,
-        _mediaCallType ?? CallType.audio,
-        speakerOn: on,
-      );
-    }
-    await ensureMediaAudible(
-      speakerOn: on,
-      forceRestartMic: forceRestartMic,
-    );
-    Logger.print(
-        'restoreActiveCallAudio speaker=$on remotes=${room.remoteParticipants.length}');
-    await _kickstartRemoteAudioPlayback();
-    final captured = room;
-    unawaited(Future<void>.delayed(const Duration(milliseconds: 200), () async {
-      if (_mediaRoom != captured || captured == null) return;
-      await ensureMediaAudible(speakerOn: on, forceRestartMic: false);
-      await _subscribeRemoteTracks();
-    }));
+  Future<void> restoreActiveCallAudio({bool? speakerOn}) async {
+    await onCallActive(speakerOn: speakerOn, unmuteMic: true);
   }
 
   Future<void> _disposeMediaRoomOnly() async {

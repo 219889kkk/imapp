@@ -34,12 +34,8 @@ import flutter_callkit_incoming
             self.handleReplayKitFromFlutter(result: result, call: call)
         })
 
+        // CallKit owns activation on lock-screen answer — AppDelegate bridges to WebRTC.
         GeneratedPluginRegistrant.register(with: self)
-
-        // WebRTC manual audio: CallKit activates/deactivates via didActivateAudioSession below.
-        RTCAudioSession.sharedInstance().useManualAudio = true
-        RTCAudioSession.sharedInstance().isAudioEnabled = false
-        NSLog("HangXun WebRTC: useManualAudio enabled")
 
         // PushKit must be registered early so VoIP wakes can report CallKit before completion.
         self.registerVoipPush()

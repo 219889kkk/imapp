@@ -146,9 +146,9 @@ abstract class SignalState<T extends SignalView> extends State<T>
   Future<void> _restoreCallAudio() async {
     final client = OpenIMLiveClient();
     if (!client.isBusy || client.mediaRoom == null) return;
-    await client.restoreActiveCallAudio(
+    await client.onCallActive(
       speakerOn: enabledSpeaker,
-      forceRestartMic: true,
+      unmuteMic: enabledMicrophone,
     );
   }
 

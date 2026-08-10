@@ -174,7 +174,6 @@ class _SingleRoomViewState extends SignalState<SingleRoomView> {
     await client.onCallActive(speakerOn: enabledSpeaker, unmuteMic: unmute);
     if (!mounted) return;
     _syncMicStateFromRoom();
-    await client.restoreActiveCallAudio(speakerOn: enabledSpeaker);
     if (!mounted) return;
     _notifyRoomUi();
   }

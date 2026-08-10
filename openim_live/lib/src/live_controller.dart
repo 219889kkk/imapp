@@ -96,6 +96,7 @@ mixin OpenIMLive {
     _acceptJoinRoomID = null;
     _autoPickup = false;
     _pendingHeadlessMicPermission = false;
+    _iosCallKitAudioGate = null;
     _beCalledEvent = null;
     _activeCallSignaling = null;
     _callSessionGen++; // invalidate in-flight headless accept/present
@@ -148,6 +149,8 @@ mixin OpenIMLive {
 
   bool _autoPickup = false;
   bool _pendingHeadlessMicPermission = false;
+  /// Lock-screen CallKit: wait for didActivateAudioSession before LiveKit join.
+  Completer<void>? _iosCallKitAudioGate;
 
   /// After programmatic [endCall] — iOS fires spurious `actionCallEnded`.
   final Map<String, int> _suppressCallKitEndedUntilMs = {};
@@ -340,7 +343,7 @@ mixin OpenIMLive {
   void _onCallKitAccept(SignalingInfo signaling) {
     _autoPickup = true;
     _pendingHeadlessMicPermission = true;
-    CallAudioKeepAlive.instance.beginCallKitAudioSession();
+    _iosCallKitAudioGate = Completer<void>();
     _stopSound();
     PackageBridge.clearCallNotification?.call();
     final resolved = _resolveIncomingSignaling(signaling) ?? signaling;
@@ -356,18 +359,26 @@ mixin OpenIMLive {
     unawaited(_acceptIncomingCall(resolved, requestPermissions: false));
   }
 
-  /// Native CallKit didActivateAudioSession → WebRTC can capture/play.
+  Future<void> _waitForIosCallKitAudio() async {
+    final gate = _iosCallKitAudioGate ??= Completer<void>();
+    try {
+      await gate.future.timeout(const Duration(seconds: 5));
+      Logger.print('iOS CallKit audio session ready');
+    } on TimeoutException {
+      Logger.print('iOS CallKit audio session timeout — join anyway');
+    }
+  }
+
   void _onCallKitAudioActivated() {
-    CallAudioKeepAlive.instance.markCallKitAudioActivated();
+    final gate = _iosCallKitAudioGate;
+    if (gate != null && !gate.isCompleted) {
+      gate.complete();
+    }
     final client = OpenIMLiveClient();
-    if (!client.isBusy) return;
+    if (!client.isBusy || client.mediaRoom == null) return;
     final isVideo = _activeCallSignaling?.invitation?.mediaType == 'video';
-    Logger.print('CallKit audio activated — restore LiveKit audio');
-    unawaited(client.restoreActiveCallAudio(
-      speakerOn: isVideo,
-      forceRestartMic: true,
-    ));
-    client.promoteCallingUi();
+    Logger.print('CallKit audio activated — enable LiveKit audio');
+    unawaited(client.onCallActive(speakerOn: isVideo, unmuteMic: true));
   }
 
   /// Background / lock: ringing uses CallKit, not Flutter overlay.
@@ -584,10 +595,7 @@ mixin OpenIMLive {
         if (!ok) return;
       }
     }
-    await client.restoreActiveCallAudio(
-      speakerOn: isVideo,
-      forceRestartMic: true,
-    );
+    await client.restoreActiveCallAudio(speakerOn: isVideo);
     client.promoteCallingUi();
   }
 
@@ -599,10 +607,7 @@ mixin OpenIMLive {
     if (roomID.isEmpty || !client.hasMediaFor(roomID)) return;
     final isVideo = signaling?.invitation?.mediaType == 'video';
     Logger.print('restore live call audio roomID=$roomID');
-    await client.restoreActiveCallAudio(
-      speakerOn: isVideo,
-      forceRestartMic: true,
-    );
+    await client.onCallActive(speakerOn: isVideo, unmuteMic: true);
     client.promoteCallingUi();
   }
 
@@ -638,20 +643,7 @@ mixin OpenIMLive {
     _stopSound();
     PackageBridge.clearCallNotification?.call();
 
-    final callKitPath = Platform.isIOS &&
-        CallAudioKeepAlive.instance.callKitOwnsSession;
-
-    if (callKitPath) {
-      await CallAudioKeepAlive.instance.waitForCallKitAudioReady();
-    }
-
-    if (roomID != null && roomID.isNotEmpty) {
-      await CallAudioKeepAlive.instance.start(
-        roomID: roomID,
-        isVideo: isVideo,
-        speakerOn: isVideo,
-      );
-    }
+    final isCallKitAccept = Platform.isIOS && !requestPermissions;
 
     final cert =
         await onTapPickup(signaling..userID = OpenIM.iMManager.userID);
@@ -672,8 +664,18 @@ mixin OpenIMLive {
           'invalid rtc cert roomID=$roomID liveURL=$liveURL tokenLen=${token.length}');
     }
 
-    if (callKitPath) {
-      await CallAudioKeepAlive.instance.waitForCallKitAudioReady();
+    // Lock-screen: join LiveKit only after CallKit activates WebRTC audio.
+    if (isCallKitAccept) {
+      await _waitForIosCallKitAudio();
+    }
+
+    if (roomID != null && roomID.isNotEmpty) {
+      await CallAudioKeepAlive.instance.start(
+        roomID: roomID,
+        isVideo: isVideo,
+        speakerOn: isVideo,
+        skipSessionActivation: isCallKitAccept,
+      );
     }
 
     await OpenIMLiveClient().connectMedia(
@@ -683,7 +685,7 @@ mixin OpenIMLive {
       enableCamera: isVideo,
       enableMicrophone: true,
       enableKeepAlive: true,
-      callKitCoexist: callKitPath,
+      skipSessionActivation: isCallKitAccept,
       onDisconnected: () {
         final id = signaling.invitation?.roomID;
         if (_isRoomEnded(id)) return;
@@ -705,19 +707,11 @@ mixin OpenIMLive {
       throw StateError('accept aborted after connect');
     }
 
-    await OpenIMLiveClient().reinforceLockScreenAudio(speakerOn: isVideo);
-    unawaited(OpenIMLiveClient().onCallActive(
+    await OpenIMLiveClient().onCallActive(
       speakerOn: isVideo,
       unmuteMic: true,
-    ));
-    if (callKitPath) {
-      unawaited(OpenIMLiveClient().restoreActiveCallAudio(
-        speakerOn: isVideo,
-        forceRestartMic: true,
-      ));
-    }
-    Logger.print(
-        'accept joined roomID=${cert.roomID} type=$callType callKit=$callKitPath');
+    );
+    Logger.print('accept joined roomID=${cert.roomID} type=$callType');
     return cert;
   }
 
@@ -822,10 +816,6 @@ mixin OpenIMLive {
         speakerOn: isVideo,
         unmuteMic: true,
       ));
-      unawaited(OpenIMLiveClient().restoreActiveCallAudio(
-        speakerOn: isVideo,
-        forceRestartMic: true,
-      ));
     }
     signalingSubject.add(CallEvent(CallState.calling, signaling));
   }
@@ -856,10 +846,6 @@ mixin OpenIMLive {
 
     signalingSubject.add(CallEvent(CallState.calling, merged));
     OpenIMLiveClient().promoteCallingUi();
-    unawaited(OpenIMLiveClient().restoreActiveCallAudio(
-      speakerOn: isVideo,
-      forceRestartMic: true,
-    ));
   }
 
   /// Accept payload may omit fields — always merge with active outbound session.
@@ -1250,7 +1236,6 @@ mixin OpenIMLive {
       Logger.print('onError ignored: media already connected');
       unawaited(client.ensureMediaAudible(
         speakerOn: client.mediaCallType == CallType.video,
-        forceRestartMic: false,
       ));
       return;
     }
