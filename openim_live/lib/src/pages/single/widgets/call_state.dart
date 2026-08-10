@@ -117,29 +117,11 @@ abstract class SignalState<T extends SignalView> extends State<T>
   }
 
   Stream<CallEvent> get sameRoomSignalStream => widget.callEventSubject.stream
-      .where((event) => _matchesSignalingRoom(event));
-
-  bool _matchesSignalingRoom(CallEvent event) {
-    if (_acceptOutboundSignaling(event)) return true;
-    return LiveUtils.isSameRoom(event, _callRoomID);
-  }
-
-  /// Outbound dial: never drop accept/calling due to roomID bind timing.
-  bool _acceptOutboundSignaling(CallEvent event) {
-    if (widget.initState != CallState.call) return false;
-    if (event.state != CallState.beAccepted &&
-        event.state != CallState.calling) {
-      return false;
-    }
-    if (!OpenIMLiveClient().isBusy) return false;
-    final eventRoom = event.data.invitation?.roomID?.trim() ?? '';
-    if (eventRoom.isEmpty) return true;
-    final localRoom = _callRoomID?.trim() ??
-        widget.roomID?.trim() ??
-        OpenIMLiveClient().currentRoomID?.trim() ??
-        '';
-    return localRoom.isEmpty || localRoom == eventRoom;
-  }
+      .where((event) => LiveUtils.matchesActiveCall(
+            event,
+            boundRoomID: _callRoomID,
+            isOutboundDial: widget.initState == CallState.call,
+          ));
 
   _onUpdateUserInfo(UserInfo? info) {
     if (!mounted && null != info) return;
@@ -169,6 +151,7 @@ abstract class SignalState<T extends SignalView> extends State<T>
       callStateSubject.add(event.state);
       if (event.state == CallState.calling) {
         widget.onStartCalling?.call();
+        onParticipantConnected();
       }
     }
 
@@ -188,23 +171,19 @@ abstract class SignalState<T extends SignalView> extends State<T>
       ]));
     } else if (event.state == CallState.timeout) {
       widget.onClose?.call();
-    } else if (event.state == CallState.beAccepted) {
-      // Caller: peer accepted via IM — leave "请求中" even before remote joins.
-      promoteInCallUi(reason: 'peer-accepted', force: true);
-      onParticipantConnected();
     }
   }
 
   String? get _callRoomID => roomID ?? widget.roomID;
 
-  /// Move UI off "connecting" / "请求中" once in-call (or peer accepted).
+  /// Move UI off "connecting" / "请求中" once in-call.
   void promoteInCallUi({String? reason, bool force = false}) {
     if (!mounted) return;
     if (callState == CallState.calling) return;
     final client = OpenIMLiveClient();
     if (!force && !client.isConnectedMedia(_callRoomID)) {
-      final callerWaiting = widget.initState == CallState.call &&
-          (callState == CallState.call || callState == CallState.connecting);
+      final callerWaiting =
+          widget.initState == CallState.call && callState != CallState.calling;
       if (!callerWaiting) return;
     }
     Logger.print(

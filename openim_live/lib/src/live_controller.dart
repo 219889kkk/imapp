@@ -23,21 +23,8 @@ mixin OpenIMLive {
     signalingSubject.add(CallEvent(CallState.beCanceled, info));
   }
 
-  void inviteeAccepted(SignalingInfo info) {
-    _cancelRingTimeout();
-    signalingSubject.add(CallEvent(CallState.beAccepted, info));
-    final inviter = info.invitation?.inviterUserID?.trim() ?? '';
-    final acceptRoom = info.invitation?.roomID?.trim() ?? '';
-    final self = OpenIM.iMManager.userID.trim();
-    final client = OpenIMLiveClient();
-    final isOutboundDial = inviter == self ||
-        (client.isBusy &&
-            acceptRoom.isNotEmpty &&
-            client.currentRoomID?.trim() == acceptRoom);
-    if (isOutboundDial) {
-      signalingSubject.add(CallEvent(CallState.calling, info));
-    }
-  }
+  /// Caller received peer accept (IM `callingAccept`). Single entry — idempotent.
+  void inviteeAccepted(SignalingInfo info) => _onPeerAccepted(info);
 
   void inviteeRejected(SignalingInfo info) {
     signalingSubject.add(CallEvent(CallState.beRejected, info));
@@ -102,6 +89,8 @@ mixin OpenIMLive {
   /// Tear down in-app + system call UI for [roomID] (peer hangup / cancel).
   void _terminateCallUi(String? roomID) {
     _markRoomEnded(roomID);
+    final id = roomID?.trim() ?? '';
+    if (id.isNotEmpty) _peerAcceptedRooms.remove(id);
     _clearPickupCache();
     _acceptJoinInFlight = null;
     _acceptJoinRoomID = null;
@@ -152,6 +141,8 @@ mixin OpenIMLive {
   CallEvent? _beCalledEvent;
   /// Signaling for the active headless/lock-screen call (for UI attach after unlock).
   SignalingInfo? _activeCallSignaling;
+  /// Outbound rooms where peer accept was already handled (idempotent `_onPeerAccepted`).
+  final Set<String> _peerAcceptedRooms = {};
   /// Bumped on hangup/terminate so late async accept cannot reopen UI.
   int _callSessionGen = 0;
 
@@ -761,7 +752,8 @@ mixin OpenIMLive {
     }
     Logger.print(
         'promote overlay to in-call roomID=$roomID media=${client.hasMediaFor(roomID)}');
-    _stopSound();
+    unawaited(_stopRingSound());
+    _cancelRingTimeout();
     PackageBridge.clearCallNotification?.call();
     if (client.hasMediaFor(roomID)) {
       unawaited(
@@ -772,8 +764,44 @@ mixin OpenIMLive {
         unmuteMic: true,
       ));
     }
-    // beAccepted already dispatched — only advance UI to in-call.
     signalingSubject.add(CallEvent(CallState.calling, signaling));
+  }
+
+  bool _isOutboundDial(SignalingInfo info) {
+    final roomID = info.invitation?.roomID?.trim() ?? '';
+    if (roomID.isEmpty) return false;
+    final self = OpenIM.iMManager.userID.trim();
+    final inviter = info.invitation?.inviterUserID?.trim() ?? '';
+    if (inviter == self) return true;
+    final client = OpenIMLiveClient();
+    if (!client.isBusy) return false;
+    final current = client.currentRoomID?.trim() ?? '';
+    final active = _activeCallSignaling?.invitation?.roomID?.trim() ?? '';
+    return current == roomID || active == roomID;
+  }
+
+  /// Caller: peer accepted — leave ringing, unmute, show in-call UI. Safe to call repeatedly.
+  void _onPeerAccepted(SignalingInfo info) {
+    final roomID = info.invitation?.roomID?.trim() ?? '';
+    if (roomID.isEmpty || _isRoomEnded(roomID)) return;
+    if (!_isOutboundDial(info)) return;
+
+    if (!_peerAcceptedRooms.contains(roomID)) {
+      _peerAcceptedRooms.add(roomID);
+      _cancelRingTimeout();
+      unawaited(_stopRingSound());
+      _activeCallSignaling = info;
+      Logger.print('caller peer accepted roomID=$roomID');
+      final isVideo = info.invitation?.mediaType == 'video';
+      final client = OpenIMLiveClient();
+      unawaited(client.onCallActive(
+        speakerOn: isVideo,
+        unmuteMic: true,
+      ));
+      unawaited(client.ensureCallKeepAlive(speakerOn: isVideo));
+    }
+
+    signalingSubject.add(CallEvent(CallState.calling, info));
   }
 
   SignalingInfo? _resolveIncomingSignaling(SignalingInfo? primary) {
@@ -908,12 +936,12 @@ mixin OpenIMLive {
             _beCalledEvent = null;
             FlutterOpenimLiveAlert.closeLiveAlert();
             PackageBridge.clearCallNotification?.call();
-            // Stop ring on any non-ringing state (accept/hangup/etc.).
-            if (event.state == CallState.beAccepted ||
+            // Stop ring on terminal / in-call transitions (not via `_stopSound` — keeps timeout).
+            if (event.state == CallState.calling ||
                 event.state == CallState.beRejected ||
                 event.state == CallState.beCanceled ||
                 event.state == CallState.beHangup) {
-              unawaited(_stopSound());
+              unawaited(_stopRingSound());
             }
           }
           if (event.state == CallState.beCalled) {
@@ -1004,31 +1032,8 @@ mixin OpenIMLive {
           } else if (event.state == CallState.beCanceled) {
             insertSignalingMessageSubject.add(event);
             _terminateCallUi(roomID);
-          } else if (event.state == CallState.beAccepted) {
+          } else if (event.state == CallState.calling) {
             _cancelRingTimeout();
-            await _stopSound();
-            final isVideo = event.data.invitation?.mediaType == 'video';
-            unawaited(OpenIMLiveClient().onCallActive(
-              speakerOn: isVideo,
-              unmuteMic: true,
-            ));
-            final inviter = event.data.invitation?.inviterUserID;
-            final acceptRoom = event.data.invitation?.roomID?.trim() ?? '';
-            final client = OpenIMLiveClient();
-            final isCaller =
-                inviter != null && inviter == OpenIM.iMManager.userID;
-            final isOutboundDial = client.isBusy &&
-                acceptRoom.isNotEmpty &&
-                (client.currentRoomID?.trim() == acceptRoom ||
-                    _activeCallSignaling?.invitation?.roomID?.trim() ==
-                        acceptRoom);
-            if (isCaller || isOutboundDial) {
-              if (client.hasOverlay) {
-                _promoteOverlayToInCall(event.data);
-              } else {
-                signalingSubject.add(CallEvent(CallState.calling, event.data));
-              }
-            }
           } else if (event.state == CallState.otherReject ||
               event.state == CallState.otherAccepted) {
             await _stopSound();
@@ -1096,6 +1101,9 @@ mixin OpenIMLive {
       ),
     );
 
+    _activeCallSignaling = signal;
+    _peerAcceptedRooms.remove(signal.invitation!.roomID?.trim() ?? '');
+
     OpenIMLiveClient().start(
       Get.overlayContext!,
       callEventSubject: signalingSubject,
@@ -1123,11 +1131,11 @@ mixin OpenIMLive {
       },
       onBusyLine: onBusyLine,
       onStartCalling: () {
-        _stopSound();
+        unawaited(_stopRingSound());
       },
       onError: onError,
       onRoomDisconnected: () => onRoomDisconnected(signal),
-      onClose: _stopSound,
+      onClose: () => unawaited(_stopSound()),
     );
     _startRingTimeout(signal);
   }
@@ -1580,12 +1588,16 @@ mixin OpenIMLive {
     }
   }
 
-  Future<void> _stopSound() async {
+  Future<void> _stopRingSound() async {
     _ringPlayGen++;
-    _cancelRingTimeout();
     try {
       await _audioPlayer.stop();
     } catch (_) {}
+  }
+
+  Future<void> _stopSound() async {
+    await _stopRingSound();
+    _cancelRingTimeout();
   }
 
   void _insertMessage({

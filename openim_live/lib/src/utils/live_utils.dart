@@ -73,14 +73,33 @@ class LiveUtils {
   }
 
   static bool isSameRoom(CallEvent event, String? roomID) {
-    var signalingInfo = event.data;
-    var invitation = signalingInfo.invitation!;
-    final invitationRoomID = invitation.roomID?.trim() ?? '';
+    return matchesActiveCall(event, boundRoomID: roomID);
+  }
+
+  /// Match signaling to the bound/active room. Outbound dial bypasses bind races.
+  static bool matchesActiveCall(
+    CallEvent event, {
+    String? boundRoomID,
+    bool isOutboundDial = false,
+  }) {
+    final invitationRoomID = event.data.invitation?.roomID?.trim() ?? '';
     if (invitationRoomID.isEmpty) return false;
-    final localRoomID = (roomID?.trim().isNotEmpty == true
-            ? roomID!.trim()
+
+    final localRoomID = (boundRoomID?.trim().isNotEmpty == true
+            ? boundRoomID!.trim()
             : OpenIMLiveClient().currentRoomID?.trim()) ??
         '';
+
+    if (isOutboundDial &&
+        event.state == CallState.calling &&
+        OpenIMLiveClient().isBusy) {
+      if (localRoomID.isEmpty || localRoomID == invitationRoomID) {
+        Logger.print(
+            '${event.state}--outbound accept roomID：$localRoomID / $invitationRoomID');
+        return true;
+      }
+    }
+
     if (localRoomID.isEmpty) return false;
     Logger.print(
         '${event.state}--Current roomID：$localRoomID, Signaling from roomID：$invitationRoomID');

@@ -183,10 +183,9 @@ class _SingleRoomViewState extends SignalState<SingleRoomView> {
     if (room != null) roomDidUpdateSubject.add(room);
   }
 
-  /// Caller still waiting: keep mic off while ring plays to avoid feedback noise.
+  /// Caller still waiting for answer: keep mic off while ring plays.
   bool get _deferMicrophone =>
-      widget.initState == CallState.call &&
-      (callState == CallState.call || callState == CallState.connecting);
+      widget.initState == CallState.call && callState != CallState.calling;
 
   Future<void> _applySpeakerRoute() async {
     final speakerOn = enabledSpeaker;
