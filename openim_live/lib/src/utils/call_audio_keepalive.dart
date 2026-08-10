@@ -36,6 +36,11 @@ class CallAudioKeepAlive with WidgetsBindingObserver {
     CallAudioDebugLog.add('keepalive', 'releaseCallKitSession');
   }
 
+  void markCallKitOwnsSession() {
+    _callKitOwnsSession = true;
+    CallAudioDebugLog.add('keepalive', 'markCallKitOwnsSession');
+  }
+
   Future<void> prepareForRtc({
     bool speakerOn = false,
     bool skipSessionActivation = false,
@@ -97,6 +102,7 @@ class CallAudioKeepAlive with WidgetsBindingObserver {
 
   Future<void> stop() async {
     if (!_active && _roomID == null) return;
+    final wasCallKit = _callKitOwnsSession;
     _active = false;
     _callKitOwnsSession = false;
     _roomID = null;
@@ -114,9 +120,16 @@ class CallAudioKeepAlive with WidgetsBindingObserver {
         Logger.print('CallAudioKeepAlive disable FGS failed: $e $s');
       }
     } else if (Platform.isIOS) {
-      await IosWebRtcAudio.disable();
+      // CallKit will didDeactivate — avoid racing disable while system tears down.
+      if (!wasCallKit) {
+        await IosWebRtcAudio.disable();
+      } else {
+        CallAudioDebugLog.add(
+            'keepalive', 'stop skip disable (CallKit owned session)');
+      }
     }
     Logger.print('CallAudioKeepAlive stop');
+    CallAudioDebugLog.add('keepalive', 'stop wasCallKit=$wasCallKit');
   }
 
   @override

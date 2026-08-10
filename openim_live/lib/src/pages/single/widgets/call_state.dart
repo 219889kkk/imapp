@@ -145,10 +145,13 @@ abstract class SignalState<T extends SignalView> extends State<T>
   Future<void> _restoreCallAudio() async {
     final client = OpenIMLiveClient();
     if (!client.isBusy || client.mediaRoom == null) return;
-    // If CallKit still owns the session, release so prepareForRtc can re-enable WebRTC.
+    // Never steal CallKit's AVAudioSession — only re-arm mic/remote tracks.
     if (CallAudioKeepAlive.instance.callKitOwnsSession) {
-      CallAudioKeepAlive.instance.releaseCallKitSession();
-      await CallAudioKeepAlive.instance.prepareForRtc(speakerOn: enabledSpeaker);
+      await client.kickstartIosCallKitMedia(
+        speakerOn: enabledSpeaker,
+        unmuteMic: enabledMicrophone,
+      );
+      return;
     }
     await client.onCallActive(
       speakerOn: enabledSpeaker,

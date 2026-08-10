@@ -99,6 +99,8 @@ mixin OpenIMLive {
     _autoPickup = false;
     _pendingHeadlessMicPermission = false;
     _iosCallKitAudioActivated = false;
+    _iosCallKitDidActivateNative = false;
+    _callKitAcceptHandledRoomID = null;
     _iosCallKitAudioGate = null;
     _beCalledEvent = null;
     _activeCallSignaling = null;
@@ -154,6 +156,10 @@ mixin OpenIMLive {
   bool _pendingHeadlessMicPermission = false;
   /// Native didActivateAudioSession already bridged WebRTC (may arrive before gate exists).
   bool _iosCallKitAudioActivated = false;
+  /// True only for real CXProvider didActivate (not timeout/optimistic bridge).
+  bool _iosCallKitDidActivateNative = false;
+  /// Deduplicate CallKit accept storm for the same room.
+  String? _callKitAcceptHandledRoomID;
   /// Lock-screen CallKit: wait for didActivateAudioSession before LiveKit join.
   Completer<void>? _iosCallKitAudioGate;
 
@@ -343,6 +349,25 @@ mixin OpenIMLive {
   }
 
   void _onCallKitAccept(SignalingInfo signaling) {
+    final resolved = _resolveIncomingSignaling(signaling) ?? signaling;
+    final roomID = resolved.invitation?.roomID?.trim() ?? '';
+
+    // Deduplicate accept storm (plugin may re-fire onAccept / setConnected dozens of times).
+    if (roomID.isNotEmpty) {
+      if (_isRoomEnded(roomID)) {
+        Logger.print('CallKit accept ignored: room ended $roomID');
+        CallAudioDebugLog.add('callkit', 'accept ignored room ended $roomID');
+        return;
+      }
+      if (_callKitAcceptHandledRoomID == roomID ||
+          _isAcceptInProgressForRoom(roomID) ||
+          OpenIMLiveClient().hasMediaFor(roomID)) {
+        CallAudioDebugLog.add('callkit', 'accept ignored duplicate roomID=$roomID');
+        return;
+      }
+      _callKitAcceptHandledRoomID = roomID;
+    }
+
     _autoPickup = true;
     _stopSound();
     // Gate must exist before async accept — native audio may activate immediately after fulfill.
@@ -352,16 +377,8 @@ mixin OpenIMLive {
       'accept gate=${_iosCallKitAudioGate != null} activated=$_iosCallKitAudioActivated',
     );
     PackageBridge.clearCallNotification?.call();
-    final resolved = _resolveIncomingSignaling(signaling) ?? signaling;
-    final roomID = resolved.invitation?.roomID;
-    if (roomID != null && roomID.isNotEmpty && _isRoomEnded(roomID)) {
-      Logger.print('CallKit accept ignored: room ended $roomID');
-      CallAudioDebugLog.add('callkit', 'accept ignored room ended $roomID');
-      unawaited(_dismissCallKitIncoming(roomID));
-      return;
-    }
-    if (roomID != null && roomID.isNotEmpty) {
-      _suppressCallKitEnded(roomID, duration: const Duration(seconds: 12));
+    if (roomID.isNotEmpty) {
+      _suppressCallKitEnded(roomID, duration: const Duration(seconds: 20));
     }
     CallAudioDebugLog.add('callkit', 'accept join roomID=$roomID');
     unawaited(_callKitAcceptAndJoin(resolved));
@@ -418,56 +435,49 @@ mixin OpenIMLive {
     _ensureIosCallKitAudioGate();
     CallAudioDebugLog.add(
       'gate',
-      'wait start activated=$_iosCallKitAudioActivated speaker=$speakerOn',
+      'wait start activated=$_iosCallKitAudioActivated nativeDidActivate=$_iosCallKitDidActivateNative speaker=$speakerOn',
     );
-    if (_iosCallKitAudioActivated) {
-      Logger.print('iOS CallKit audio already activated');
-      CallAudioDebugLog.add('gate', 'wait skip — already activated');
-      return;
-    }
-    // MethodChannel may be lost while native is already enabled — poll as backup.
-    if (await IosWebRtcAudio.isEnabled()) {
-      _markIosCallKitAudioReady(source: 'native-poll-prewait');
+    if (_iosCallKitDidActivateNative) {
+      Logger.print('iOS CallKit audio already activated (native)');
+      CallAudioDebugLog.add('gate', 'wait skip — native didActivate');
       return;
     }
     final gate = _iosCallKitAudioGate!;
     try {
+      // Prefer real didActivate. Poll only for native flag, not timeout-bridge.
       await Future.any([
         gate.future,
-        _pollNativeCallKitAudioReady(),
-      ]).timeout(const Duration(seconds: 8));
+        _pollNativeCallKitDidActivate(),
+      ]).timeout(const Duration(seconds: 12));
       Logger.print('iOS CallKit audio session ready');
-      CallAudioDebugLog.add('gate', 'wait ready');
-    } on TimeoutException {
-      var enabled = await IosWebRtcAudio.isEnabled();
-      if (!enabled) {
-        Logger.print(
-            'iOS CallKit audio timeout — bridge WebRTC without session reconfig');
-        CallAudioDebugLog.add('gate', 'timeout — bridgeCallKitSession');
-        await IosWebRtcAudio.bridgeCallKitSession();
-        enabled = await IosWebRtcAudio.isEnabled();
-      }
-      if (enabled) {
-        _markIosCallKitAudioReady(source: 'timeout-bridge');
-      }
-      Logger.print('iOS CallKit audio timeout — proceed nativeEnabled=$enabled');
       CallAudioDebugLog.add(
-          'gate', 'timeout proceed nativeEnabled=$enabled');
+        'gate',
+        'wait ready nativeDidActivate=$_iosCallKitDidActivateNative',
+      );
+    } on TimeoutException {
+      // Proceed with soft bridge so LiveKit can join; real didActivate will kickstart later.
+      CallAudioDebugLog.add('gate', 'timeout — soft bridge then proceed');
+      await IosWebRtcAudio.bridgeCallKitSession();
+      _iosCallKitAudioActivated = true;
+      final g = _iosCallKitAudioGate;
+      if (g != null && !g.isCompleted) g.complete();
+      Logger.print('iOS CallKit audio timeout — soft bridge, await late didActivate');
     }
   }
 
-  Future<void> _pollNativeCallKitAudioReady() async {
-    while (!_iosCallKitAudioActivated) {
+  Future<void> _pollNativeCallKitDidActivate() async {
+    final gen = _callSessionGen;
+    while (!_iosCallKitDidActivateNative && gen == _callSessionGen) {
       await Future<void>.delayed(const Duration(milliseconds: 200));
-      if (await IosWebRtcAudio.isEnabled()) {
-        _markIosCallKitAudioReady(source: 'native-poll');
-        return;
-      }
     }
   }
 
-  void _markIosCallKitAudioReady({String source = 'native'}) {
+  void _markIosCallKitAudioReady({
+    String source = 'native',
+    bool fromNativeDidActivate = false,
+  }) {
     _iosCallKitAudioActivated = true;
+    if (fromNativeDidActivate) _iosCallKitDidActivateNative = true;
     final gate = _iosCallKitAudioGate;
     if (gate != null && !gate.isCompleted) {
       gate.complete();
@@ -475,11 +485,19 @@ mixin OpenIMLive {
       _iosCallKitAudioGate = Completer<void>()..complete();
     }
     Logger.print('iOS CallKit audio ready ($source)');
-    CallAudioDebugLog.add('gate', 'ready source=$source');
+    CallAudioDebugLog.add(
+      'gate',
+      'ready source=$source nativeDidActivate=$_iosCallKitDidActivateNative',
+    );
   }
 
   void _onCallKitAudioActivated() {
-    _markIosCallKitAudioReady(source: 'didActivate');
+    _markIosCallKitAudioReady(
+      source: 'didActivate',
+      fromNativeDidActivate: true,
+    );
+    // Keep CallKit as session owner — do not hand off to in-app enable.
+    CallAudioKeepAlive.instance.markCallKitOwnsSession();
     final client = OpenIMLiveClient();
     if (!client.isBusy || client.mediaRoom == null) {
       CallAudioDebugLog.add(
@@ -488,7 +506,7 @@ mixin OpenIMLive {
     }
     final isVideo = _activeCallSignaling?.invitation?.mediaType == 'video';
     Logger.print('CallKit audio activated (native) — enable LiveKit audio');
-    CallAudioDebugLog.add('callkit', 'didActivate — kickstart media');
+    CallAudioDebugLog.add('callkit', 'didActivate — kickstart media (keep CallKit session)');
     unawaited(client.kickstartIosCallKitMedia(speakerOn: isVideo));
   }
 
@@ -635,7 +653,8 @@ mixin OpenIMLive {
     final client = OpenIMLiveClient();
     if (client.hasMediaFor(roomID) && client.mediaCertificate != null) {
       Logger.print('acceptIncomingCall: reuse media roomID=$roomID');
-      if (presentUiAfter) {
+      CallAudioDebugLog.add('accept', 'reuse media roomID=$roomID');
+      if (presentUiAfter && !client.hasOverlay) {
         _promoteOverlayToInCall(signaling);
       }
       return client.mediaCertificate!;
@@ -709,9 +728,12 @@ mixin OpenIMLive {
         _pendingHeadlessMicPermission = false;
       }
     }
-    // After unlock + mic grant: CallKit no longer owns session — reconfigure and republish.
-    CallAudioKeepAlive.instance.releaseCallKitSession();
-    await CallAudioKeepAlive.instance.prepareForRtc(speakerOn: isVideo);
+    // Unlock during CallKit call: never release/reconfigure session (fights CallKit).
+    // Only republish mic + subscribe remotes.
+    CallAudioDebugLog.add(
+      'fg',
+      'mic restore kickstart only owns=${CallAudioKeepAlive.instance.callKitOwnsSession} nativeDidActivate=$_iosCallKitDidActivateNative',
+    );
     await client.kickstartIosCallKitMedia(speakerOn: isVideo);
     client.promoteCallingUi();
   }
@@ -724,8 +746,15 @@ mixin OpenIMLive {
     if (roomID.isEmpty || !client.hasMediaFor(roomID)) return;
     final isVideo = signaling?.invitation?.mediaType == 'video';
     Logger.print('restore live call audio roomID=$roomID');
-    CallAudioKeepAlive.instance.releaseCallKitSession();
-    await CallAudioKeepAlive.instance.prepareForRtc(speakerOn: isVideo);
+    CallAudioDebugLog.add(
+      'fg',
+      'restore kickstart only owns=${CallAudioKeepAlive.instance.callKitOwnsSession} nativeDidActivate=$_iosCallKitDidActivateNative',
+    );
+    // Keep CallKit session ownership while call is live — only kickstart media.
+    if (!CallAudioKeepAlive.instance.callKitOwnsSession &&
+        !_iosCallKitDidActivateNative) {
+      await CallAudioKeepAlive.instance.prepareForRtc(speakerOn: isVideo);
+    }
     await client.kickstartIosCallKitMedia(speakerOn: isVideo);
     client.promoteCallingUi();
   }
@@ -948,6 +977,7 @@ mixin OpenIMLive {
     final roomID = signaling.invitation?.roomID;
     if (_isRoomEnded(roomID)) return;
     final client = OpenIMLiveClient();
+    final alreadyInCall = client.hasMediaFor(roomID) && client.hasOverlay;
     if (!client.hasOverlay) {
       _presentCallUi(signaling, fromHeadless: true);
     }
@@ -957,15 +987,21 @@ mixin OpenIMLive {
     _cancelRingTimeout();
     PackageBridge.clearCallNotification?.call();
     if (client.hasMediaFor(roomID)) {
-      unawaited(
-          VoipCallkitController.toOrNull?.setConnected(roomID) ?? Future.value());
-      final isVideo = signaling.invitation?.mediaType == 'video';
-      unawaited(OpenIMLiveClient().onCallActive(
-        speakerOn: isVideo,
-        unmuteMic: true,
-      ));
+      // Avoid setConnected/onCallActive storm from duplicate CallKit accepts.
+      if (!alreadyInCall) {
+        unawaited(
+            VoipCallkitController.toOrNull?.setConnected(roomID) ??
+                Future.value());
+        final isVideo = signaling.invitation?.mediaType == 'video';
+        unawaited(OpenIMLiveClient().onCallActive(
+          speakerOn: isVideo,
+          unmuteMic: true,
+        ));
+        signalingSubject.add(CallEvent(CallState.calling, signaling));
+      }
+    } else {
+      signalingSubject.add(CallEvent(CallState.calling, signaling));
     }
-    signalingSubject.add(CallEvent(CallState.calling, signaling));
   }
 
   /// Caller: peer accepted — leave ringing, unmute, show in-call UI. Safe to call repeatedly.

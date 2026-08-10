@@ -467,10 +467,24 @@ class VoipCallkitController extends GetxService {
     );
   }
 
+  String? _lastAcceptRoomID;
+  int _lastAcceptAtMs = 0;
+
   void _onAccept(dynamic body) {
     PackageBridge.clearCallNotification?.call();
     final signaling = signalingFromCallKitBody(body);
     if (signaling != null) {
+      final roomID = signaling.invitation?.roomID?.trim() ?? '';
+      final now = DateTime.now().millisecondsSinceEpoch;
+      // Plugin can re-fire accept many times around setConnected / unlock.
+      if (roomID.isNotEmpty &&
+          roomID == _lastAcceptRoomID &&
+          now - _lastAcceptAtMs < 5000) {
+        CallAudioDebugLog.add('callkit', 'plugin accept debounced roomID=$roomID');
+        return;
+      }
+      _lastAcceptRoomID = roomID;
+      _lastAcceptAtMs = now;
       // Prefer CallKit path only — avoid double receiveNewInvitation via
       // handleCallNotificationAction + onCallKitAccept.
       PackageBridge.onCallKitAccept?.call(signaling);

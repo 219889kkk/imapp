@@ -82,7 +82,19 @@ import flutter_callkit_incoming
     /// Dart handles accept via FlutterCallkitIncoming.onEvent — fulfill so CallKit activates audio.
     func onAccept(_ call: Call, _ action: CXAnswerCallAction) {
         NSLog("HangXun CallKit: onAccept room=%@", call.data.uuid)
-        emitAudioDebug("CallKit onAccept room=\(call.data.uuid)")
+        // Configure category BEFORE fulfill so CallKit can activate session on lock screen.
+        // Do NOT setActive here — CallKit owns activation (didActivateAudioSession).
+        let session = AVAudioSession.sharedInstance()
+        do {
+            try session.setCategory(
+                .playAndRecord,
+                mode: .voiceChat,
+                options: [.allowBluetooth, .allowBluetoothA2DP]
+            )
+            emitAudioDebug("CallKit onAccept category configured room=\(call.data.uuid)")
+        } catch {
+            emitAudioDebug("CallKit onAccept category failed \(error.localizedDescription)")
+        }
         action.fulfill()
     }
 
