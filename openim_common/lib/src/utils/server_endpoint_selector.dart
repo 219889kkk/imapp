@@ -103,10 +103,15 @@ class ServerEndpointSelector {
     return h;
   }
 
-  static String liveKitWsUrlForHost(String imHost) =>
-      'wss://livekit.${liveKitDomainForHost(imHost)}';
+  /// LiveKit/WebRTC media is only deployed on the primary CDN domain today.
+  /// Backup IM line (`im.hangxun19939.top`) has no `livekit.*` DNS — using it
+  /// for RTC breaks voice/video with a generic "network error" on dial.
+  static String get canonicalLiveKitWsUrl =>
+      'wss://livekit.${liveKitDomainForHost(primaryHost)}';
 
-  /// Fix cached configs that used `livekit.im.*` (no matching TLS cert).
+  static String liveKitWsUrlForHost(String imHost) => canonicalLiveKitWsUrl;
+
+  /// Fix cached configs that used wrong LiveKit hosts.
   static String normalizeLiveKitWsUrl(String url) {
     final trimmed = url.trim();
     if (trimmed.isEmpty) return trimmed;
@@ -117,7 +122,12 @@ class ServerEndpointSelector {
         host = 'livekit.${host.substring('livekit.im.'.length)}';
         return uri.replace(host: host).toString();
       }
-      if (host.contains('127.0.0.1') || host == 'localhost') return '';
+      // Backup CDN has IM/API but no LiveKit — always use primary media edge.
+      if (host == 'livekit.hangxun19939.top' ||
+          host.contains('127.0.0.1') ||
+          host == 'localhost') {
+        return canonicalLiveKitWsUrl;
+      }
     } catch (_) {}
     return trimmed;
   }
@@ -131,7 +141,7 @@ class ServerEndpointSelector {
       'authUrl': 'https://$h/chat',
       'chatTokenUrl': 'https://$h/chat',
       'botApiUrl': 'https://$h/bot',
-      'liveKitUrl': liveKitWsUrlForHost(h),
+      'liveKitUrl': canonicalLiveKitWsUrl,
     };
   }
 

@@ -175,8 +175,8 @@ class Config {
     return url ?? (_isIP ? "ws://$_activeHost:10001" : "wss://$_activeHost/msg_gateway");
   }
 
-  /// Public WebSocket URL for LiveKit — phones cannot use 127.0.0.1 from API.
-  /// TLS cert is on `livekit.zghtchat9.top`, not `livekit.im.zghtchat9.top`.
+  /// Public WebSocket URL for LiveKit — always primary media edge (see
+  /// [ServerEndpointSelector.canonicalLiveKitWsUrl]).
   static String get liveKitWsUrl {
     final server = DataSp.getServerConfig();
     final fromConfig = server?['liveKitUrl']?.toString().trim();
@@ -184,7 +184,7 @@ class Config {
       final normalized = ServerEndpointSelector.normalizeLiveKitWsUrl(fromConfig);
       if (normalized.isNotEmpty) return normalized;
     }
-    return ServerEndpointSelector.liveKitWsUrlForHost(_activeHost);
+    return ServerEndpointSelector.canonicalLiveKitWsUrl;
   }
 
   static int get logLevel {

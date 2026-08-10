@@ -984,6 +984,17 @@ mixin OpenIMLive {
     if (msg.contains('permission') || msg.contains('Permission')) {
       return;
     }
+    if (msg.contains('missing liveURL/token') ||
+        msg.contains('RTC token or LiveKit URL missing')) {
+      IMViews.showToast(StrRes.networkError);
+      return;
+    }
+    if (msg.contains('Connection refused') ||
+        msg.contains('Failed host lookup') ||
+        msg.contains('Network is unreachable')) {
+      IMViews.showToast(StrRes.networkError);
+      return;
+    }
     IMViews.showToast(StrRes.networkError);
   }
 
