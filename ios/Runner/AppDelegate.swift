@@ -3,6 +3,7 @@ import Flutter
 import FirebaseCore
 import PushKit
 import AVFAudio
+import CallKit
 import WebRTC
 import flutter_callkit_incoming
 
@@ -53,6 +54,32 @@ import flutter_callkit_incoming
         fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
     ) {
         completionHandler(.newData)
+    }
+
+    // MARK: - CallkitIncomingAppDelegate (required by flutter_callkit_incoming)
+
+    /// Dart handles accept via FlutterCallkitIncoming.onEvent — fulfill so CallKit activates audio.
+    func onAccept(_ call: Call, _ action: CXAnswerCallAction) {
+        NSLog("HangXun CallKit: onAccept room=%@", call.data.uuid)
+        action.fulfill()
+    }
+
+    func onDecline(_ call: Call, _ action: CXEndCallAction) {
+        NSLog("HangXun CallKit: onDecline room=%@", call.data.uuid)
+        action.fulfill()
+    }
+
+    func onEnd(_ call: Call, _ action: CXEndCallAction) {
+        NSLog("HangXun CallKit: onEnd room=%@", call.data.uuid)
+        action.fulfill()
+    }
+
+    func onTimeOut(_ call: Call) {
+        NSLog("HangXun CallKit: onTimeOut room=%@", call.data.uuid)
+    }
+
+    func providerDidReset() {
+        NSLog("HangXun CallKit: providerDidReset")
     }
 
     // MARK: - CallKit audio session → WebRTC (lock-screen talk)
