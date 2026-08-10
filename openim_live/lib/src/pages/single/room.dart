@@ -42,9 +42,11 @@ class _SingleRoomViewState extends SignalState<SingleRoomView> {
   Room? _room;
   bool _peerAudioArmed = false;
   bool _sharedMediaAttached = false;
+  Timer? _remoteLeaveTimer;
 
   @override
   void dispose() {
+    _remoteLeaveTimer?.cancel();
     // Media room is owned by OpenIMLiveClient — do not disconnect here.
     // Otherwise unlocking into the app would tear down an active lock-screen call.
     final room = _room;
@@ -215,14 +217,17 @@ class _SingleRoomViewState extends SignalState<SingleRoomView> {
 
   @override
   void onParticipantConnected() {
+    _remoteLeaveTimer?.cancel();
     // Caller: peer joined LiveKit — unmute immediately, don't wait IM accept.
     if (_deferMicrophone) {
       promoteInCallUi(reason: 'remote-joined-livekit');
     }
     super.onParticipantConnected();
-    if (_peerAudioArmed) {
-      return;
-    }
+
+    final hasRemote = _room?.remoteParticipants.isNotEmpty ?? false;
+    // IM accept can arrive before LiveKit remote — do not block real remote join.
+    if (_peerAudioArmed && !hasRemote) return;
+
     _peerAudioArmed = true;
     if (widget.callType == CallType.video) {
       unawaited(_publish());
@@ -230,11 +235,29 @@ class _SingleRoomViewState extends SignalState<SingleRoomView> {
     final unmute = enabledMicrophone && !_deferMicrophone;
     unawaited(OpenIMLiveClient()
         .onCallActive(speakerOn: enabledSpeaker, unmuteMic: unmute)
-        .then((_) {
+        .then((_) async {
       if (!mounted) return;
       _syncMicStateFromRoom();
+      if (hasRemote) {
+        await OpenIMLiveClient().ensureMediaAudible(
+          speakerOn: enabledSpeaker,
+          forceRestartMic: false,
+        );
+      }
       _notifyRoomUi();
     }));
+  }
+
+  @override
+  void onParticipantDisconnected() {
+    if (callState != CallState.calling) return;
+    _remoteLeaveTimer?.cancel();
+    _remoteLeaveTimer = Timer(const Duration(seconds: 2), () {
+      if (!mounted) return;
+      if (_room?.remoteParticipants.isEmpty ?? true) {
+        onTapHangup(false);
+      }
+    });
   }
 
   void _onRoomDidUpdate() {

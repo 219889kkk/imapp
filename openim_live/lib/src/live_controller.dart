@@ -798,7 +798,6 @@ mixin OpenIMLive {
         speakerOn: isVideo,
         unmuteMic: true,
       ));
-      unawaited(client.ensureCallKeepAlive(speakerOn: isVideo));
     }
 
     signalingSubject.add(CallEvent(CallState.calling, info));

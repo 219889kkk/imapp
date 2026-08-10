@@ -151,7 +151,6 @@ abstract class SignalState<T extends SignalView> extends State<T>
       callStateSubject.add(event.state);
       if (event.state == CallState.calling) {
         widget.onStartCalling?.call();
-        onParticipantConnected();
       }
     }
 

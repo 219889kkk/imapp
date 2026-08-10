@@ -483,9 +483,12 @@ class IMController extends GetxController with IMCallback, OpenIMLive {
         case CustomMessageType.callingAccept:
           inviteeAccepted(signaling);
           _clearCallNotification();
-          // Peer accepted: mark CallKit connected — do not endCall (hangup).
-          VoipCallkitController.toOrNull
-              ?.setConnected(signaling.invitation?.roomID);
+          // Callee only — caller outbound dial has no CallKit session.
+          final inviter = signaling.invitation?.inviterUserID;
+          if (inviter != OpenIM.iMManager.userID) {
+            VoipCallkitController.toOrNull
+                ?.setConnected(signaling.invitation?.roomID);
+          }
           break;
         case CustomMessageType.callingReject:
           inviteeRejected(signaling);
