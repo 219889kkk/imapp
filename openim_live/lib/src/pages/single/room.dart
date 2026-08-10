@@ -40,13 +40,14 @@ class SingleRoomView extends SignalView {
 
 class _SingleRoomViewState extends SignalState<SingleRoomView> {
   Room? _room;
-  bool _peerAudioArmed = false;
   bool _sharedMediaAttached = false;
   Timer? _remoteLeaveTimer;
+  Timer? _disconnectCloseTimer;
 
   @override
   void dispose() {
     _remoteLeaveTimer?.cancel();
+    _disconnectCloseTimer?.cancel();
     // Media room is owned by OpenIMLiveClient — do not disconnect here.
     // Otherwise unlocking into the app would tear down an active lock-screen call.
     final room = _room;
@@ -84,13 +85,7 @@ class _SingleRoomViewState extends SignalState<SingleRoomView> {
       // Waiting caller: mute mic so ringback doesn't feedback.
       enableMicrophone: !waitingForPeer,
       enableKeepAlive: !waitingForPeer,
-      onDisconnected: () {
-        if (!mounted) return;
-        WidgetsBindingCompatible.instance?.addPostFrameCallback((_) {
-          widget.onRoomDisconnected?.call();
-          widget.onClose?.call();
-        });
-      },
+      onDisconnected: _onLiveKitDisconnected,
     );
     await _attachSharedMedia(client);
     if (CallState.call == callState || CallState.connecting == callState) {
@@ -139,13 +134,7 @@ class _SingleRoomViewState extends SignalState<SingleRoomView> {
         if (!mounted) return;
         onParticipantDisconnected();
       },
-      onDisconnected: () {
-        if (!mounted) return;
-        WidgetsBindingCompatible.instance?.addPostFrameCallback((_) {
-          widget.onRoomDisconnected?.call();
-          widget.onClose?.call();
-        });
-      },
+      onDisconnected: _onLiveKitDisconnected,
     );
 
     // Ensure tracks still published after unlock / in-app join.
@@ -174,7 +163,33 @@ class _SingleRoomViewState extends SignalState<SingleRoomView> {
         OpenIMLiveClient().peerAcceptedForUi) {
       promoteInCallUi(reason: 'attach-after-accept', force: true);
     }
+    unawaited(_refreshCallAudio());
     _notifyRoomUi();
+  }
+
+  Future<void> _refreshCallAudio() async {
+    final client = OpenIMLiveClient();
+    if (!client.isBusy || _room == null) return;
+    final unmute = enabledMicrophone && !_deferMicrophone;
+    await client.onCallActive(speakerOn: enabledSpeaker, unmuteMic: unmute);
+    if (!mounted) return;
+    _syncMicStateFromRoom();
+    await client.restoreActiveCallAudio(speakerOn: enabledSpeaker);
+    if (!mounted) return;
+    _notifyRoomUi();
+  }
+
+  void _onLiveKitDisconnected() {
+    if (!mounted) return;
+    widget.onRoomDisconnected?.call();
+    _disconnectCloseTimer?.cancel();
+    _disconnectCloseTimer = Timer(const Duration(seconds: 8), () {
+      if (!mounted) return;
+      final room = _room;
+      if (room?.connectionState == ConnectionState.connected) return;
+      if (room?.remoteParticipants.isNotEmpty == true) return;
+      widget.onClose?.call();
+    });
   }
 
   void _syncMicStateFromRoom() {
@@ -221,43 +236,29 @@ class _SingleRoomViewState extends SignalState<SingleRoomView> {
   @override
   void onParticipantConnected() {
     _remoteLeaveTimer?.cancel();
-    // Caller: peer joined LiveKit — unmute immediately, don't wait IM accept.
+    _disconnectCloseTimer?.cancel();
     if (_deferMicrophone) {
       promoteInCallUi(reason: 'remote-joined-livekit');
     }
     super.onParticipantConnected();
-
-    final hasRemote = _room?.remoteParticipants.isNotEmpty ?? false;
-    // IM accept can arrive before LiveKit remote — do not block real remote join.
-    if (_peerAudioArmed && !hasRemote) return;
-
-    _peerAudioArmed = true;
     if (widget.callType == CallType.video) {
       unawaited(_publish());
     }
-    final unmute = enabledMicrophone && !_deferMicrophone;
-    unawaited(OpenIMLiveClient()
-        .onCallActive(speakerOn: enabledSpeaker, unmuteMic: unmute)
-        .then((_) async {
-      if (!mounted) return;
-      _syncMicStateFromRoom();
-      if (hasRemote) {
-        await OpenIMLiveClient().ensureMediaAudible(
-          speakerOn: enabledSpeaker,
-          forceRestartMic: false,
-        );
-      }
-      _notifyRoomUi();
-    }));
+    unawaited(_refreshCallAudio());
   }
 
   @override
   void onParticipantDisconnected() {
     if (callState != CallState.calling) return;
     _remoteLeaveTimer?.cancel();
-    _remoteLeaveTimer = Timer(const Duration(seconds: 2), () {
+    _remoteLeaveTimer = Timer(const Duration(seconds: 5), () {
       if (!mounted) return;
-      if (_room?.remoteParticipants.isEmpty ?? true) {
+      final room = _room;
+      if (room?.connectionState == ConnectionState.connected &&
+          room!.remoteParticipants.isNotEmpty) {
+        return;
+      }
+      if (room?.remoteParticipants.isEmpty ?? true) {
         onTapHangup(false);
       }
     });

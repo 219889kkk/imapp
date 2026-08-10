@@ -400,6 +400,7 @@ mixin OpenIMLive {
       } else {
         _promoteOverlayToInCall(active);
       }
+      await _restoreLiveCallAudio(active);
       return;
     }
 
@@ -546,27 +547,36 @@ mixin OpenIMLive {
   }
 
   Future<void> _ensureMicPermissionAfterHeadlessAccept() async {
-    if (!_pendingHeadlessMicPermission) return;
-    if (!OpenIMLiveClient().isBusy) {
+    final client = OpenIMLiveClient();
+    if (!client.isBusy) {
       _pendingHeadlessMicPermission = false;
       return;
     }
-    final mic = await Permission.microphone.status;
-    if (mic.isGranted) {
-      _pendingHeadlessMicPermission = false;
-      return;
-    }
-    _pendingHeadlessMicPermission = false;
     final isVideo =
         _activeCallSignaling?.invitation?.mediaType == 'video';
-    Logger.print('headless accept: request mic permission on foreground');
-    final ok = await Permissions.requestCallMedia(needCamera: isVideo);
-    if (ok) {
-      unawaited(OpenIMLiveClient().onCallActive(
-        speakerOn: isVideo,
-        unmuteMic: true,
-      ));
+    if (_pendingHeadlessMicPermission) {
+      final mic = await Permission.microphone.status;
+      _pendingHeadlessMicPermission = false;
+      if (!mic.isGranted) {
+        Logger.print('headless accept: request mic permission on foreground');
+        final ok = await Permissions.requestCallMedia(needCamera: isVideo);
+        if (!ok) return;
+      }
     }
+    await client.restoreActiveCallAudio(speakerOn: isVideo);
+    client.promoteCallingUi();
+  }
+
+  Future<void> _restoreLiveCallAudio(SignalingInfo? signaling) async {
+    final client = OpenIMLiveClient();
+    final roomID = signaling?.invitation?.roomID?.trim() ??
+        client.currentRoomID?.trim() ??
+        '';
+    if (roomID.isEmpty || !client.hasMediaFor(roomID)) return;
+    final isVideo = signaling?.invitation?.mediaType == 'video';
+    Logger.print('restore live call audio roomID=$roomID');
+    await client.restoreActiveCallAudio(speakerOn: isVideo);
+    client.promoteCallingUi();
   }
 
   Future<void> _acceptIncomingCall(
@@ -637,9 +647,12 @@ mixin OpenIMLive {
       enableKeepAlive: true,
       onDisconnected: () {
         final id = signaling.invitation?.roomID;
-        if (!_isRoomEnded(id)) {
+        if (_isRoomEnded(id)) return;
+        unawaited(Future<void>.delayed(const Duration(seconds: 8), () {
+          if (_isRoomEnded(id)) return;
+          if (OpenIMLiveClient().isConnectedMedia(id)) return;
           _terminateCallUi(id);
-        }
+        }));
       },
     );
 
@@ -763,6 +776,7 @@ mixin OpenIMLive {
         speakerOn: isVideo,
         unmuteMic: true,
       ));
+      unawaited(OpenIMLiveClient().restoreActiveCallAudio(speakerOn: isVideo));
     }
     signalingSubject.add(CallEvent(CallState.calling, signaling));
   }
@@ -777,13 +791,13 @@ mixin OpenIMLive {
       return;
     }
 
+    final isVideo = merged.invitation?.mediaType == 'video';
     if (!_peerAcceptedRooms.contains(roomID)) {
       _peerAcceptedRooms.add(roomID);
       _cancelRingTimeout();
       unawaited(_stopRingSound());
       _activeCallSignaling = merged;
       Logger.print('caller peer accepted roomID=$roomID');
-      final isVideo = merged.invitation?.mediaType == 'video';
       final client = OpenIMLiveClient();
       unawaited(client.onCallActive(
         speakerOn: isVideo,
@@ -793,6 +807,7 @@ mixin OpenIMLive {
 
     signalingSubject.add(CallEvent(CallState.calling, merged));
     OpenIMLiveClient().promoteCallingUi();
+    unawaited(OpenIMLiveClient().restoreActiveCallAudio(speakerOn: isVideo));
   }
 
   /// Accept payload may omit fields — always merge with active outbound session.

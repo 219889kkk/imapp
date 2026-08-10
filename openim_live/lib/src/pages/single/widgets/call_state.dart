@@ -111,11 +111,15 @@ abstract class SignalState<T extends SignalView> extends State<T>
 
   void _syncUiAfterForeground() {
     final client = OpenIMLiveClient();
-    if (callState == CallState.calling) return;
+    if (callState == CallState.calling) {
+      unawaited(_restoreCallAudio());
+      return;
+    }
     if (client.peerAcceptedForUi ||
         client.isConnectedMedia(_callRoomID) ||
-        (_roomHasRemote(client))) {
+        _roomHasRemote(client)) {
       promoteInCallUi(reason: 'app-resumed', force: true);
+      unawaited(_restoreCallAudio());
     }
   }
 
@@ -125,15 +129,24 @@ abstract class SignalState<T extends SignalView> extends State<T>
   }
 
   void _applyCallingUi() {
-    if (callState == CallState.calling) return;
-    Logger.print(
-        'apply calling UI direct from=$callState roomID=$_callRoomID mounted=$mounted');
-    callState = CallState.calling;
-    if (!callStateSubject.isClosed) {
-      callStateSubject.add(CallState.calling);
+    final alreadyCalling = callState == CallState.calling;
+    if (!alreadyCalling) {
+      Logger.print(
+          'apply calling UI direct from=$callState roomID=$_callRoomID mounted=$mounted');
+      callState = CallState.calling;
+      if (!callStateSubject.isClosed) {
+        callStateSubject.add(CallState.calling);
+      }
+      widget.onStartCalling?.call();
+      if (mounted) setState(() {});
     }
-    widget.onStartCalling?.call();
-    if (mounted) setState(() {});
+    unawaited(_restoreCallAudio());
+  }
+
+  Future<void> _restoreCallAudio() async {
+    final client = OpenIMLiveClient();
+    if (!client.isBusy || client.mediaRoom == null) return;
+    await client.restoreActiveCallAudio(speakerOn: enabledSpeaker);
   }
 
   bool _acceptCallEvent(CallEvent event) {

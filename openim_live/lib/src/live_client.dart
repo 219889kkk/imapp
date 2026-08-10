@@ -620,22 +620,38 @@ class OpenIMLiveClient implements RTCBridge {
 
   /// Lock-screen answer: force audible route + mic + remote audio subscribe.
   Future<void> reinforceLockScreenAudio({bool speakerOn = false}) async {
-    final roomID = currentRoomID;
-    if (roomID == null || roomID.isEmpty) return;
-    final prefer = _userSpeakerPreference ??
-        (speakerOn || (_mediaCallType == CallType.video));
-    await _startKeepAlive(
-      roomID,
-      _mediaCallType ?? CallType.audio,
-      speakerOn: prefer,
-    );
-    // Once after lock-screen accept — avoid repeated mic off/on (causes harsh pops).
-    await ensureMediaAudible(speakerOn: prefer, forceRestartMic: false);
+    await restoreActiveCallAudio(speakerOn: speakerOn, forceRestartMic: false);
+  }
+
+  /// Re-arm mic, speaker route, keepalive, and remote track subscribe after unlock.
+  Future<void> restoreActiveCallAudio({
+    bool? speakerOn,
+    bool forceRestartMic = false,
+  }) async {
     final room = _mediaRoom;
-    unawaited(Future<void>.delayed(const Duration(milliseconds: 150), () async {
-      if (_mediaRoom != room || room == null) return;
-      final on = _userSpeakerPreference ?? prefer;
+    if (room == null) return;
+    final on = speakerOn ??
+        _userSpeakerPreference ??
+        (_mediaCallType == CallType.video);
+    final roomID = currentRoomID;
+    if (roomID != null && roomID.isNotEmpty) {
+      await _startKeepAlive(
+        roomID,
+        _mediaCallType ?? CallType.audio,
+        speakerOn: on,
+      );
+    }
+    await ensureMediaAudible(
+      speakerOn: on,
+      forceRestartMic: forceRestartMic,
+    );
+    Logger.print(
+        'restoreActiveCallAudio speaker=$on remotes=${room.remoteParticipants.length}');
+    final captured = room;
+    unawaited(Future<void>.delayed(const Duration(milliseconds: 200), () async {
+      if (_mediaRoom != captured || captured == null) return;
       await ensureMediaAudible(speakerOn: on, forceRestartMic: false);
+      await _subscribeRemoteTracks();
     }));
   }
 
