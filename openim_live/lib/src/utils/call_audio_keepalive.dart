@@ -6,6 +6,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_background/flutter_background.dart';
 import 'package:flutter_callkit_incoming/entities/call_kit_params.dart';
 import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
+import 'package:livekit_client/livekit_client.dart';
 import 'package:openim_common/openim_common.dart';
 
 /// Keeps call mic/audio alive when the app is backgrounded (e.g. switch to WeChat text).
@@ -22,13 +23,41 @@ class CallAudioKeepAlive with WidgetsBindingObserver {
   String _peerName = '通话中';
   StreamSubscription? _interruptionSub;
   Future<void> Function()? onNeedRepublishMic;
+  /// CallKit already activated AVAudioSession — never call setActive again.
+  bool _callKitOwnsSession = false;
 
   bool get isActive => _active;
+  bool get callKitOwnsSession => _callKitOwnsSession;
+
+  /// Lock-screen CallKit accept: LiveKit must not steal/reactivate the session.
+  void beginCallKitAudioSession() {
+    _callKitOwnsSession = true;
+    if (Platform.isIOS) {
+      Hardware.instance.setAutomaticConfigurationEnabled(enable: false);
+      Logger.print('CallAudioKeepAlive: CallKit owns audio session');
+    }
+  }
+
+  Future<void> endCallKitAudioSession() async {
+    if (!_callKitOwnsSession) return;
+    _callKitOwnsSession = false;
+    if (Platform.isIOS) {
+      Hardware.instance.setAutomaticConfigurationEnabled(enable: true);
+      Logger.print('CallAudioKeepAlive: restored LiveKit audio auto-config');
+    }
+  }
 
   /// Configure a LiveKit/WebRTC-friendly session BEFORE room.connect.
-  /// Must not use an exclusive session that steals the WebRTC audio unit.
-  Future<void> prepareForRtc({bool speakerOn = false}) async {
-    await _activateCallSession(preferSpeaker: speakerOn);
+  /// When [callKitCoexist] is true, category/mode only — CallKit keeps activation.
+  Future<void> prepareForRtc({
+    bool speakerOn = false,
+    bool callKitCoexist = false,
+  }) async {
+    if (callKitCoexist) beginCallKitAudioSession();
+    await _activateCallSession(
+      preferSpeaker: speakerOn,
+      skipSessionActivation: callKitCoexist || _callKitOwnsSession,
+    );
   }
 
   Future<void> start({
@@ -43,12 +72,18 @@ class CallAudioKeepAlive with WidgetsBindingObserver {
       _peerName = peerName.trim();
     }
     if (_active) {
-      await _activateCallSession(preferSpeaker: speakerOn);
+      await _activateCallSession(
+        preferSpeaker: speakerOn,
+        skipSessionActivation: _callKitOwnsSession,
+      );
       return;
     }
     _active = true;
     WidgetsBinding.instance.addObserver(this);
-    await _activateCallSession(preferSpeaker: speakerOn);
+    await _activateCallSession(
+      preferSpeaker: speakerOn,
+      skipSessionActivation: _callKitOwnsSession,
+    );
     await _listenInterruptions();
     if (Platform.isAndroid) {
       await _enableAndroidCallForegroundService();
@@ -60,13 +95,14 @@ class CallAudioKeepAlive with WidgetsBindingObserver {
   }
 
   Future<void> stop() async {
-    if (!_active && _roomID == null) return;
+    if (!_active && _roomID == null && !_callKitOwnsSession) return;
     _active = false;
     _roomID = null;
     WidgetsBinding.instance.removeObserver(this);
     await _interruptionSub?.cancel();
     _interruptionSub = null;
     onNeedRepublishMic = null;
+    await endCallKitAudioSession();
 
     if (Platform.isAndroid) {
       try {
@@ -93,7 +129,9 @@ class CallAudioKeepAlive with WidgetsBindingObserver {
   }
 
   Future<void> _recoverMic() async {
-    await _activateCallSession();
+    await _activateCallSession(
+      skipSessionActivation: _callKitOwnsSession,
+    );
     if (onNeedRepublishMic == null) return;
     try {
       await onNeedRepublishMic?.call();
@@ -120,7 +158,10 @@ class CallAudioKeepAlive with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _activateCallSession({bool preferSpeaker = false}) async {
+  Future<void> _activateCallSession({
+    bool preferSpeaker = false,
+    bool skipSessionActivation = false,
+  }) async {
     try {
       final session = await AudioSession.instance;
       // mixWithOthers is required so LiveKit/WebRTC can keep its audio unit.
@@ -145,7 +186,12 @@ class CallAudioKeepAlive with WidgetsBindingObserver {
         androidAudioFocusGainType: AndroidAudioFocusGainType.gain,
         androidWillPauseWhenDucked: false,
       ));
-      await session.setActive(true);
+      if (!skipSessionActivation) {
+        await session.setActive(true);
+      } else {
+        Logger.print(
+            'CallAudioKeepAlive: skip setActive (CallKit owns session)');
+      }
     } catch (e, s) {
       Logger.print('CallAudioKeepAlive activate session failed: $e $s');
     }

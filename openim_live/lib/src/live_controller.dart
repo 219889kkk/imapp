@@ -336,6 +336,7 @@ mixin OpenIMLive {
   void _onCallKitAccept(SignalingInfo signaling) {
     _autoPickup = true;
     _pendingHeadlessMicPermission = true;
+    CallAudioKeepAlive.instance.beginCallKitAudioSession();
     _stopSound();
     PackageBridge.clearCallNotification?.call();
     final resolved = _resolveIncomingSignaling(signaling) ?? signaling;
@@ -344,6 +345,9 @@ mixin OpenIMLive {
       Logger.print('CallKit accept ignored: room ended $roomID');
       unawaited(_dismissCallKitIncoming(roomID));
       return;
+    }
+    if (roomID != null && roomID.isNotEmpty) {
+      _suppressCallKitEnded(roomID, duration: const Duration(seconds: 12));
     }
     // setConnected only after LiveKit join — early call triggers spurious ended.
     unawaited(_acceptIncomingCall(resolved, requestPermissions: false));
@@ -563,7 +567,10 @@ mixin OpenIMLive {
         if (!ok) return;
       }
     }
-    await client.restoreActiveCallAudio(speakerOn: isVideo);
+    await client.restoreActiveCallAudio(
+      speakerOn: isVideo,
+      forceRestartMic: true,
+    );
     client.promoteCallingUi();
   }
 
@@ -575,7 +582,10 @@ mixin OpenIMLive {
     if (roomID.isEmpty || !client.hasMediaFor(roomID)) return;
     final isVideo = signaling?.invitation?.mediaType == 'video';
     Logger.print('restore live call audio roomID=$roomID');
-    await client.restoreActiveCallAudio(speakerOn: isVideo);
+    await client.restoreActiveCallAudio(
+      speakerOn: isVideo,
+      forceRestartMic: true,
+    );
     client.promoteCallingUi();
   }
 
@@ -619,6 +629,9 @@ mixin OpenIMLive {
       );
     }
 
+    final callKitPath = Platform.isIOS &&
+        CallAudioKeepAlive.instance.callKitOwnsSession;
+
     final cert =
         await onTapPickup(signaling..userID = OpenIM.iMManager.userID);
     if (gen != _callSessionGen || _isRoomEnded(roomID)) {
@@ -645,6 +658,7 @@ mixin OpenIMLive {
       enableCamera: isVideo,
       enableMicrophone: true,
       enableKeepAlive: true,
+      callKitCoexist: callKitPath,
       onDisconnected: () {
         final id = signaling.invitation?.roomID;
         if (_isRoomEnded(id)) return;
@@ -671,7 +685,14 @@ mixin OpenIMLive {
       speakerOn: isVideo,
       unmuteMic: true,
     ));
-    Logger.print('accept joined roomID=${cert.roomID} type=$callType');
+    if (callKitPath) {
+      unawaited(OpenIMLiveClient().restoreActiveCallAudio(
+        speakerOn: isVideo,
+        forceRestartMic: true,
+      ));
+    }
+    Logger.print(
+        'accept joined roomID=${cert.roomID} type=$callType callKit=$callKitPath');
     return cert;
   }
 
@@ -776,7 +797,10 @@ mixin OpenIMLive {
         speakerOn: isVideo,
         unmuteMic: true,
       ));
-      unawaited(OpenIMLiveClient().restoreActiveCallAudio(speakerOn: isVideo));
+      unawaited(OpenIMLiveClient().restoreActiveCallAudio(
+        speakerOn: isVideo,
+        forceRestartMic: true,
+      ));
     }
     signalingSubject.add(CallEvent(CallState.calling, signaling));
   }
@@ -807,7 +831,10 @@ mixin OpenIMLive {
 
     signalingSubject.add(CallEvent(CallState.calling, merged));
     OpenIMLiveClient().promoteCallingUi();
-    unawaited(OpenIMLiveClient().restoreActiveCallAudio(speakerOn: isVideo));
+    unawaited(OpenIMLiveClient().restoreActiveCallAudio(
+      speakerOn: isVideo,
+      forceRestartMic: true,
+    ));
   }
 
   /// Accept payload may omit fields — always merge with active outbound session.
