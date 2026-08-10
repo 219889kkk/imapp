@@ -98,6 +98,7 @@ mixin OpenIMLive {
     _acceptJoinRoomID = null;
     _autoPickup = false;
     _pendingHeadlessMicPermission = false;
+    _iosCallKitAudioActivated = false;
     _iosCallKitAudioGate = null;
     _beCalledEvent = null;
     _activeCallSignaling = null;
@@ -151,6 +152,8 @@ mixin OpenIMLive {
 
   bool _autoPickup = false;
   bool _pendingHeadlessMicPermission = false;
+  /// Native didActivateAudioSession already bridged WebRTC (may arrive before gate exists).
+  bool _iosCallKitAudioActivated = false;
   /// Lock-screen CallKit: wait for didActivateAudioSession before LiveKit join.
   Completer<void>? _iosCallKitAudioGate;
 
@@ -342,7 +345,8 @@ mixin OpenIMLive {
   void _onCallKitAccept(SignalingInfo signaling) {
     _autoPickup = true;
     _stopSound();
-    unawaited(_refreshHeadlessMicPending());
+    // Gate must exist before async accept — native audio may activate immediately after fulfill.
+    _ensureIosCallKitAudioGate();
     PackageBridge.clearCallNotification?.call();
     final resolved = _resolveIncomingSignaling(signaling) ?? signaling;
     final roomID = resolved.invitation?.roomID;
@@ -362,8 +366,21 @@ mixin OpenIMLive {
     await _acceptIncomingCall(signaling, requestPermissions: false);
   }
 
-  Future<void> _refreshHeadlessMicPending() async {
+  /// Create or preserve the CallKit audio gate (never reset a pending gate — fixes race).
+  void _ensureIosCallKitAudioGate() {
+    if (_iosCallKitAudioActivated) {
+      final gate = _iosCallKitAudioGate;
+      if (gate == null || gate.isCompleted) {
+        _iosCallKitAudioGate = Completer<void>()..complete();
+      }
+      return;
+    }
+    final gate = _iosCallKitAudioGate;
+    if (gate != null && !gate.isCompleted) return;
     _iosCallKitAudioGate = Completer<void>();
+  }
+
+  Future<void> _refreshHeadlessMicPending() async {
     try {
       final mic = await Permission.microphone.status;
       _pendingHeadlessMicPermission = !mic.isGranted;
@@ -383,17 +400,29 @@ mixin OpenIMLive {
   }
 
   Future<void> _waitForIosCallKitAudio({bool speakerOn = false}) async {
-    final gate = _iosCallKitAudioGate ??= Completer<void>();
+    _ensureIosCallKitAudioGate();
+    if (_iosCallKitAudioActivated) {
+      Logger.print('iOS CallKit audio already activated');
+      return;
+    }
+    final gate = _iosCallKitAudioGate!;
     try {
       await gate.future.timeout(const Duration(seconds: 8));
       Logger.print('iOS CallKit audio session ready');
     } on TimeoutException {
-      Logger.print('iOS CallKit audio timeout — fallback enable WebRTC');
-      await IosWebRtcAudio.enable(speakerOn: speakerOn);
+      var enabled = await IosWebRtcAudio.isEnabled();
+      if (!enabled) {
+        Logger.print('iOS CallKit audio timeout — bridge WebRTC without session reconfig');
+        await IosWebRtcAudio.bridgeCallKitSession();
+        enabled = await IosWebRtcAudio.isEnabled();
+      }
+      if (enabled) _iosCallKitAudioActivated = true;
+      Logger.print('iOS CallKit audio timeout — proceed nativeEnabled=$enabled');
     }
   }
 
   void _onCallKitAudioActivated() {
+    _iosCallKitAudioActivated = true;
     final gate = _iosCallKitAudioGate;
     if (gate != null && !gate.isCompleted) {
       gate.complete();
@@ -743,12 +772,15 @@ mixin OpenIMLive {
 
     await OpenIMLiveClient().onCallActive(
       speakerOn: isVideo,
-      unmuteMic: true,
+      unmuteMic: micGranted,
     );
     if (isCallKitAccept) {
       // Mic/playout may need a beat after CallKit → WebRTC bridge.
       await Future<void>.delayed(const Duration(milliseconds: 250));
-      await OpenIMLiveClient().kickstartIosCallKitMedia(speakerOn: isVideo);
+      await OpenIMLiveClient().kickstartIosCallKitMedia(
+        speakerOn: isVideo,
+        unmuteMic: micGranted,
+      );
     }
     Logger.print('accept joined roomID=${cert.roomID} type=$callType');
     return cert;

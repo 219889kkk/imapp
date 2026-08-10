@@ -431,6 +431,10 @@ class OpenIMLiveClient implements RTCBridge {
         }
         await Hardware.instance.setSpeakerphoneOn(speakerOn);
         await room.setSpeakerOn(speakerOn);
+        // CallKit lock-screen: subscribe remote audio even when mic deferred.
+        if (skipSessionActivation) {
+          await _subscribeRemoteTracks();
+        }
       } catch (_) {}
     }
     WakelockPlus.enable();
@@ -646,18 +650,23 @@ class OpenIMLiveClient implements RTCBridge {
   }
 
   /// Lock-screen CallKit: republish mic + start remote playout after WebRTC bridge.
-  Future<void> kickstartIosCallKitMedia({bool speakerOn = false}) async {
+  Future<void> kickstartIosCallKitMedia({
+    bool speakerOn = false,
+    bool unmuteMic = true,
+  }) async {
     if (!Platform.isIOS) return;
     final room = _mediaRoom;
     if (room == null) return;
     try {
-      await onCallActive(speakerOn: speakerOn, unmuteMic: true);
-      final local = room.localParticipant;
-      if (local != null) {
-        if (local.isMicrophoneEnabled() == true) {
-          await local.setMicrophoneEnabled(false);
+      await onCallActive(speakerOn: speakerOn, unmuteMic: unmuteMic);
+      if (unmuteMic) {
+        final local = room.localParticipant;
+        if (local != null) {
+          if (local.isMicrophoneEnabled() == true) {
+            await local.setMicrophoneEnabled(false);
+          }
+          await local.setMicrophoneEnabled(true);
         }
-        await local.setMicrophoneEnabled(true);
       }
       await _subscribeRemoteTracks();
       Logger.print(

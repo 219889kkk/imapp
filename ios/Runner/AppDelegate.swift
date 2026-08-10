@@ -41,6 +41,10 @@ import flutter_callkit_incoming
                 self.enableWebRtcAudio(preferSpeaker: speaker, result: result)
             case "disableWebRtcAudio":
                 self.disableWebRtcAudio(result: result)
+            case "isWebRtcAudioEnabled":
+                result(RTCAudioSession.sharedInstance().isAudioEnabled)
+            case "bridgeCallKitWebRtcAudio":
+                self.bridgeCallKitWebRtcAudio(result: result)
             default:
                 result(FlutterMethodNotImplemented)
             }
@@ -142,6 +146,15 @@ import flutter_callkit_incoming
         RTCAudioSession.sharedInstance().audioSessionDidDeactivate(session)
         RTCAudioSession.sharedInstance().isAudioEnabled = false
         NSLog("HangXun WebRTC: in-app audio disabled")
+        result(true)
+    }
+
+    /// CallKit already activated AVAudioSession — bridge WebRTC without reconfiguring.
+    private func bridgeCallKitWebRtcAudio(result: @escaping FlutterResult) {
+        let session = AVAudioSession.sharedInstance()
+        RTCAudioSession.sharedInstance().audioSessionDidActivate(session)
+        RTCAudioSession.sharedInstance().isAudioEnabled = true
+        NSLog("HangXun WebRTC: CallKit bridge (no setActive)")
         result(true)
     }
 
