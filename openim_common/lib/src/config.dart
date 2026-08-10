@@ -175,16 +175,18 @@ class Config {
     return url ?? (_isIP ? "ws://$_activeHost:10001" : "wss://$_activeHost/msg_gateway");
   }
 
-  /// Public WebSocket URL for LiveKit — always primary media edge (see
-  /// [ServerEndpointSelector.canonicalLiveKitWsUrl]).
+  /// Public WebSocket URL for LiveKit — paired with the active IM CDN line.
   static String get liveKitWsUrl {
     final server = DataSp.getServerConfig();
     final fromConfig = server?['liveKitUrl']?.toString().trim();
     if (fromConfig != null && fromConfig.isNotEmpty) {
-      final normalized = ServerEndpointSelector.normalizeLiveKitWsUrl(fromConfig);
+      final normalized = ServerEndpointSelector.normalizeLiveKitWsUrl(
+        fromConfig,
+        imHost: _activeHost,
+      );
       if (normalized.isNotEmpty) return normalized;
     }
-    return ServerEndpointSelector.canonicalLiveKitWsUrl;
+    return ServerEndpointSelector.liveKitWsUrlForHost(_activeHost);
   }
 
   static int get logLevel {
