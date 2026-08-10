@@ -153,6 +153,11 @@ class _ControlsViewState extends State<ControlsView> {
         _pickupPressed = false;
         _terminalActionBusy = false;
       }
+      if (_callState == CallState.calling ||
+          _callState == CallState.connecting) {
+        // Never block hang-up after answer/connecting transitions.
+        _terminalActionBusy = false;
+      }
       if (_callState == CallState.calling) {
         _startCallingTimer();
         _syncMicFromParticipant();

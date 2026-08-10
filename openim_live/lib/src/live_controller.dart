@@ -258,6 +258,16 @@ mixin OpenIMLive {
             // Lock-screen accept is joining LiveKit — do not endCall (iOS fires ended on accept).
             Logger.print(
                 'foreground: accept in flight, skip endCall roomID=$pendingRoom');
+            final inFlight = _acceptJoinInFlight;
+            if (inFlight != null) {
+              unawaited(inFlight.then((_) {
+                if (_isRoomEnded(pendingRoom)) return;
+                final client = OpenIMLiveClient();
+                if (client.hasMediaFor(pendingRoom) && !client.hasOverlay) {
+                  _presentCallUi(pending.data, fromHeadless: true);
+                }
+              }));
+            }
           } else {
             // Unanswered: drop system incoming UI so only in-app Accept remains.
             unawaited(
@@ -360,7 +370,12 @@ mixin OpenIMLive {
             VoipCallkitController.toOrNull?.setConnected(roomID) ??
                 Future.value());
         if (presentUiAfter) {
-          _promoteOverlayToInCall(signaling);
+          final client = OpenIMLiveClient();
+          if (!client.hasOverlay) {
+            _presentCallUi(signaling, fromHeadless: true);
+          } else {
+            _promoteOverlayToInCall(signaling);
+          }
         }
       }
       return cert;
@@ -389,8 +404,10 @@ mixin OpenIMLive {
     Logger.print('headless accept: request mic permission on foreground');
     final ok = await Permissions.requestCallMedia(needCamera: isVideo);
     if (ok) {
-      unawaited(
-          OpenIMLiveClient().onCallActive(speakerOn: true, unmuteMic: true));
+      unawaited(OpenIMLiveClient().onCallActive(
+        speakerOn: isVideo,
+        unmuteMic: true,
+      ));
     }
   }
 
@@ -430,7 +447,7 @@ mixin OpenIMLive {
       await CallAudioKeepAlive.instance.start(
         roomID: roomID,
         isVideo: isVideo,
-        speakerOn: true,
+        speakerOn: isVideo,
       );
     }
 
@@ -456,7 +473,7 @@ mixin OpenIMLive {
     await OpenIMLiveClient().connectMedia(
       certificate: cert,
       callType: callType,
-      speakerOn: true,
+      speakerOn: isVideo,
       enableCamera: isVideo,
       enableMicrophone: true,
       enableKeepAlive: true,
@@ -478,7 +495,7 @@ mixin OpenIMLive {
       throw StateError('accept aborted after connect');
     }
 
-    await OpenIMLiveClient().reinforceLockScreenAudio(speakerOn: true);
+    await OpenIMLiveClient().reinforceLockScreenAudio(speakerOn: isVideo);
     Logger.print('accept joined roomID=${cert.roomID} type=$callType');
     return cert;
   }
@@ -568,7 +585,11 @@ mixin OpenIMLive {
     final roomID = signaling.invitation?.roomID;
     if (_isRoomEnded(roomID)) return;
     final client = OpenIMLiveClient();
-    if (!client.hasOverlay || !client.hasMediaFor(roomID)) return;
+    if (!client.hasMediaFor(roomID)) return;
+    if (!client.hasOverlay) {
+      _presentCallUi(signaling, fromHeadless: true);
+      return;
+    }
     Logger.print('promote overlay to in-call roomID=$roomID');
     _stopSound();
     PackageBridge.clearCallNotification?.call();
@@ -819,7 +840,11 @@ mixin OpenIMLive {
             _terminateCallUi(roomID);
           } else if (event.state == CallState.beAccepted) {
             await _stopSound();
-            unawaited(OpenIMLiveClient().onCallActive(speakerOn: true, unmuteMic: true));
+            final isVideo = event.data.invitation?.mediaType == 'video';
+            unawaited(OpenIMLiveClient().onCallActive(
+              speakerOn: isVideo,
+              unmuteMic: true,
+            ));
           } else if (event.state == CallState.otherReject ||
               event.state == CallState.otherAccepted) {
             await _stopSound();
@@ -929,7 +954,10 @@ mixin OpenIMLive {
     final client = OpenIMLiveClient();
     if (client.mediaRoom?.localParticipant != null) {
       Logger.print('onError ignored: media already connected');
-      unawaited(client.ensureMediaAudible(speakerOn: true, forceRestartMic: false));
+      unawaited(client.ensureMediaAudible(
+        speakerOn: client.mediaCallType == CallType.video,
+        forceRestartMic: false,
+      ));
       return;
     }
     client.close();
@@ -989,7 +1017,9 @@ mixin OpenIMLive {
       isOnlineOnly: false,
     );
     // iOS CallKit: after invite(200), ask chat server to fire APNs VoIP.
-    unawaited(_triggerVoipPush(signaling, action: 'invite'));
+    if (!_isRoomEnded(roomID)) {
+      unawaited(_triggerVoipPush(signaling, action: 'invite'));
+    }
     try {
       final certificate = await Apis.getTokenForRTC(
           invitation.roomID!, OpenIM.iMManager.userID);
@@ -1024,7 +1054,10 @@ mixin OpenIMLive {
         isOnlineOnly: false,
       );
     }
-    unawaited(_triggerVoipPush(signaling, action: 'invite'));
+    final roomID = invitation.roomID;
+    if (roomID != null && !_isRoomEnded(roomID)) {
+      unawaited(_triggerVoipPush(signaling, action: 'invite'));
+    }
     final certificate = await Apis.getTokenForRTC(
       invitation.roomID!,
       OpenIM.iMManager.userID,
@@ -1219,8 +1252,11 @@ mixin OpenIMLive {
           isOnlineOnly: false);
     }
     final peers = _recvUserIDList(signaling);
-    unawaited(
-        _triggerVoipPush(signaling, action: 'cancel', toUserIDs: peers));
+    try {
+      await _triggerVoipPush(signaling, action: 'cancel', toUserIDs: peers);
+    } catch (e, s) {
+      Logger.print('voip cancel push failed: $e $s');
+    }
     return true;
   }
 
@@ -1239,11 +1275,15 @@ mixin OpenIMLive {
           userID: userID,
           isOnlineOnly: false);
     }
-    unawaited(_triggerVoipPush(
-      signaling,
-      action: 'cancel',
-      toUserIDs: recvUserIDList,
-    ));
+    try {
+      await _triggerVoipPush(
+        signaling,
+        action: 'cancel',
+        toUserIDs: recvUserIDList,
+      );
+    } catch (e, s) {
+      Logger.print('voip timeout cancel push failed: $e $s');
+    }
     return true;
   }
 

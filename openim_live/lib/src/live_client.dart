@@ -174,7 +174,7 @@ class OpenIMLiveClient implements RTCBridge {
   Future<void> connectMedia({
     required SignalingCertificate certificate,
     required CallType callType,
-    bool speakerOn = true,
+    bool speakerOn = false,
     bool enableCamera = false,
     bool enableMicrophone = true,
     /// Caller waiting for answer: skip keepalive so ringback isn't ducked.
@@ -398,30 +398,60 @@ class OpenIMLiveClient implements RTCBridge {
     Logger.print('connectMedia connected roomID=$roomID keepAlive=$enableKeepAlive');
   }
 
+  /// Accumulated while another onCallActive is in flight (fixes caller mic stuck off).
+  bool _pendingUnmuteMic = false;
+  bool? _pendingSpeakerOn;
+
   /// Single debounced path when call becomes active (peer joined / accepted).
   Future<void> onCallActive({bool? speakerOn, bool unmuteMic = true}) async {
+    if (unmuteMic) _pendingUnmuteMic = true;
+    if (speakerOn != null) _pendingSpeakerOn = speakerOn;
+
     if (_callActiveInFlight != null) {
       await _callActiveInFlight;
+      await _applyPendingCallActive();
       return;
     }
+
     final now = DateTime.now();
     if (_lastCallActiveAt != null &&
         now.difference(_lastCallActiveAt!) < const Duration(milliseconds: 400)) {
+      await Future<void>.delayed(
+        Duration(
+          milliseconds: 400 - now.difference(_lastCallActiveAt!).inMilliseconds,
+        ),
+      );
+      await _applyPendingCallActive();
       return;
     }
-    _lastCallActiveAt = now;
-    _callActiveInFlight = _doCallActive(speakerOn: speakerOn, unmuteMic: unmuteMic);
+
+    await _applyPendingCallActive();
+  }
+
+  Future<void> _applyPendingCallActive() async {
+    if (!_pendingUnmuteMic && _pendingSpeakerOn == null) return;
+    final unmute = _pendingUnmuteMic;
+    final spk = _pendingSpeakerOn;
+    _pendingUnmuteMic = false;
+    _pendingSpeakerOn = null;
+    _lastCallActiveAt = DateTime.now();
+    _callActiveInFlight = _doCallActive(speakerOn: spk, unmuteMic: unmute);
     try {
       await _callActiveInFlight;
     } finally {
       _callActiveInFlight = null;
+      if (_pendingUnmuteMic || _pendingSpeakerOn != null) {
+        await _applyPendingCallActive();
+      }
     }
   }
 
   Future<void> _doCallActive({bool? speakerOn, bool unmuteMic = true}) async {
     final room = _mediaRoom;
     if (room == null) return;
-    final on = speakerOn ?? _userSpeakerPreference ?? true;
+    final on = speakerOn ??
+        _userSpeakerPreference ??
+        (_mediaCallType == CallType.video);
     final roomID = currentRoomID;
     final callType = _mediaCallType ?? CallType.audio;
     if (roomID != null && roomID.isNotEmpty) {
@@ -457,7 +487,9 @@ class OpenIMLiveClient implements RTCBridge {
   }) async {
     final room = _mediaRoom;
     if (room == null) return;
-    final on = speakerOn ?? _userSpeakerPreference ?? true;
+    final on = speakerOn ??
+        _userSpeakerPreference ??
+        (_mediaCallType == CallType.video);
     try {
       await CallAudioKeepAlive.instance.prepareForRtc(speakerOn: on);
       await Hardware.instance.setSpeakerphoneOn(on);
@@ -525,13 +557,15 @@ class OpenIMLiveClient implements RTCBridge {
                 highPassFilter: true,
               ),
               defaultAudioOutputOptions: AudioOutputOptions(
-                speakerOn: _userSpeakerPreference ?? true,
+                speakerOn: _userSpeakerPreference ??
+                    (_mediaCallType == CallType.video),
               ),
             ),
           );
           await _ensurePublished(
             callType: _mediaCallType ?? CallType.audio,
-            speakerOn: _userSpeakerPreference ?? true,
+            speakerOn: _userSpeakerPreference ??
+                (_mediaCallType == CallType.video),
             enableCamera: _mediaCallType == CallType.video,
             enableMicrophone: true,
           );
@@ -559,10 +593,11 @@ class OpenIMLiveClient implements RTCBridge {
   }
 
   /// Lock-screen answer: force audible route + mic + remote audio subscribe.
-  Future<void> reinforceLockScreenAudio({bool speakerOn = true}) async {
+  Future<void> reinforceLockScreenAudio({bool speakerOn = false}) async {
     final roomID = currentRoomID;
     if (roomID == null || roomID.isEmpty) return;
-    final prefer = _userSpeakerPreference ?? speakerOn;
+    final prefer = _userSpeakerPreference ??
+        (speakerOn || (_mediaCallType == CallType.video));
     await _startKeepAlive(
       roomID,
       _mediaCallType ?? CallType.audio,
@@ -622,7 +657,7 @@ class OpenIMLiveClient implements RTCBridge {
   Future<void> _startKeepAlive(
     String roomID,
     CallType callType, {
-    bool speakerOn = true,
+    bool speakerOn = false,
   }) async {
     final keep = CallAudioKeepAlive.instance;
     keep.onNeedRepublishMic = () async {

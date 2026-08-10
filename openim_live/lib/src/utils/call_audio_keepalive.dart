@@ -27,7 +27,7 @@ class CallAudioKeepAlive with WidgetsBindingObserver {
 
   /// Configure a LiveKit/WebRTC-friendly session BEFORE room.connect.
   /// Must not use an exclusive session that steals the WebRTC audio unit.
-  Future<void> prepareForRtc({bool speakerOn = true}) async {
+  Future<void> prepareForRtc({bool speakerOn = false}) async {
     await _activateCallSession(preferSpeaker: speakerOn);
   }
 
@@ -35,7 +35,7 @@ class CallAudioKeepAlive with WidgetsBindingObserver {
     required String roomID,
     required bool isVideo,
     String? peerName,
-    bool speakerOn = true,
+    bool speakerOn = false,
   }) async {
     _roomID = roomID;
     _isVideo = isVideo;
@@ -120,7 +120,7 @@ class CallAudioKeepAlive with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _activateCallSession({bool preferSpeaker = true}) async {
+  Future<void> _activateCallSession({bool preferSpeaker = false}) async {
     try {
       final session = await AudioSession.instance;
       // mixWithOthers is required so LiveKit/WebRTC can keep its audio unit.

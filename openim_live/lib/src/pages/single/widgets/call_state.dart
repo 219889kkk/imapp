@@ -81,9 +81,8 @@ abstract class SignalState<T extends SignalView> extends State<T> {
   void initState() {
     roomID ??= widget.roomID;
     callState = widget.initState;
-    // Default speaker on so in-app calls are audible without putting phone to ear.
-    // User can still switch to earpiece via the speaker button.
-    enabledSpeaker = true;
+    // Audio: earpiece by default; video: speaker for preview.
+    enabledSpeaker = widget.callType == CallType.video;
     callEventSub = sameRoomSignalStream.listen(_onStateDidUpdate);
     widget.onSyncUserInfo?.call(widget.userID).then(_onUpdateUserInfo);
     onDail();
