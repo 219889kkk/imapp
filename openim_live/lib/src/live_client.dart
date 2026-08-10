@@ -835,6 +835,7 @@ class OpenIMLiveClient implements RTCBridge {
 
     isBusy = true;
     currentRoomID = roomID ?? currentRoomID;
+    _peerAcceptedForUi = false;
     this.onTapHangup = onTapHangup;
 
     FocusScope.of(ctx).requestFocus(FocusNode());

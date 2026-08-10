@@ -115,9 +115,7 @@ abstract class SignalState<T extends SignalView> extends State<T>
       unawaited(_restoreCallAudio());
       return;
     }
-    if (client.peerAcceptedForUi ||
-        client.isConnectedMedia(_callRoomID) ||
-        _roomHasRemote(client)) {
+    if (client.peerAcceptedForUi || _roomHasRemote(client)) {
       promoteInCallUi(reason: 'app-resumed', force: true);
       unawaited(_restoreCallAudio());
     }
