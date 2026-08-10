@@ -219,15 +219,22 @@ abstract class SignalState<T extends SignalView> extends State<T>
 
   String? get _callRoomID => roomID ?? widget.roomID;
 
-  /// Move UI off "connecting" / "请求中" once in-call.
+  /// Move UI off "等待接听" once truly in-call (peer accepted / remote joined).
   void promoteInCallUi({String? reason, bool force = false}) {
     if (callState == CallState.calling) return;
     final client = OpenIMLiveClient();
-    if (!force && !client.isConnectedMedia(_callRoomID)) {
-      final callerWaiting =
-          widget.initState == CallState.call && callState != CallState.calling;
-      if (!callerWaiting) return;
+    final isOutboundWaiting =
+        widget.initState == CallState.call && callState != CallState.calling;
+
+    // Outbound caller: joined LiveKit ≠ answered — wait for accept or remote.
+    if (isOutboundWaiting) {
+      if (!client.peerAcceptedForUi && !_roomHasRemote(client)) {
+        return;
+      }
+    } else if (!force && !client.isConnectedMedia(_callRoomID)) {
+      return;
     }
+
     Logger.print(
         'promote in-call UI reason=$reason from=$callState roomID=$_callRoomID');
     _applyCallingUi();
