@@ -236,6 +236,10 @@ class _SingleRoomViewState extends SignalState<SingleRoomView> {
   void onParticipantConnected() {
     _remoteLeaveTimer?.cancel();
     _disconnectCloseTimer?.cancel();
+    // Caller waiting: remote in LiveKit means answered — cancel 30s ring timeout.
+    if (widget.initState == CallState.call) {
+      PackageBridge.markOutboundPeerPresent?.call(_callRoomID);
+    }
     if (_deferMicrophone) {
       promoteInCallUi(reason: 'remote-joined-livekit');
     }
@@ -248,18 +252,17 @@ class _SingleRoomViewState extends SignalState<SingleRoomView> {
 
   @override
   void onParticipantDisconnected() {
-    if (callState != CallState.calling) return;
+    // Even if UI never promoted to "calling", peer leave must end the session.
     _remoteLeaveTimer?.cancel();
-    _remoteLeaveTimer = Timer(const Duration(seconds: 5), () {
+    _remoteLeaveTimer = Timer(const Duration(seconds: 2), () {
       if (!mounted) return;
       final room = _room;
       if (room?.connectionState == ConnectionState.connected &&
           room!.remoteParticipants.isNotEmpty) {
         return;
       }
-      if (room?.remoteParticipants.isEmpty ?? true) {
-        onTapHangup(false);
-      }
+      // Single end path — avoid double hangup (bridge terminate + UI hangup).
+      PackageBridge.onPeerLeftCall?.call(_callRoomID);
     });
   }
 

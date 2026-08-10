@@ -605,6 +605,7 @@ class OpenIMLiveClient implements RTCBridge {
     final roomID = currentRoomID;
     if (roomID == null || roomID.isEmpty) return;
     Logger.print('LiveKit remote participant left roomID=$roomID');
+    CallAudioDebugLog.add('livekit', 'remote left — end call roomID=$roomID');
     PackageBridge.onPeerLeftCall?.call(roomID);
   }
 
@@ -612,8 +613,24 @@ class OpenIMLiveClient implements RTCBridge {
       Room room, RoomDisconnectedEvent event) async {
     final roomID = currentRoomID;
     Logger.print('Headless room disconnected: ${event.reason} roomID=$roomID');
+    CallAudioDebugLog.add(
+      'livekit',
+      'disconnected reason=${event.reason} remotes=${room.remoteParticipants.length} roomID=$roomID',
+    );
+
+    // Peer hangup / room already ended / alone in room — never revive a zombie call.
+    final roomEnded =
+        roomID != null && PackageBridge.isCallRoomEnded?.call(roomID) == true;
+    final alone = room.remoteParticipants.isEmpty;
+    if (roomEnded || alone) {
+      if (roomID != null && roomID.isNotEmpty) {
+        PackageBridge.onPeerLeftCall?.call(roomID);
+      }
+      _dispatchRoomDisconnected();
+      return;
+    }
+
     if (roomID != null &&
-        PackageBridge.isCallRoomEnded?.call(roomID) != true &&
         _liveKitReconnectAttempts < _maxLiveKitReconnectAttempts &&
         _isRecoverableDisconnect(event.reason)) {
       _liveKitReconnectAttempts++;
@@ -651,6 +668,11 @@ class OpenIMLiveClient implements RTCBridge {
           );
           await _subscribeRemoteTracks();
           _liveKitReconnectAttempts = 0;
+          // Reconnected but peer gone — end call instead of empty forever-timer.
+          if (room.remoteParticipants.isEmpty) {
+            PackageBridge.onPeerLeftCall?.call(roomID);
+            _dispatchRoomDisconnected();
+          }
           return;
         } catch (e, s) {
           Logger.print('LiveKit manual reconnect failed: $e $s');
@@ -793,6 +815,7 @@ class OpenIMLiveClient implements RTCBridge {
       ..on<LocalTrackUnpublishedEvent>((_) => _uiOnRoom?.call(room))
       ..on<ParticipantConnectedEvent>((_) {
         _uiOnRemotePresent?.call();
+        PackageBridge.markOutboundPeerPresent?.call(currentRoomID);
         unawaited(_subscribeRemoteTracks());
       })
       ..on<ParticipantDisconnectedEvent>((_) {

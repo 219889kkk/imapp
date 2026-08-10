@@ -160,11 +160,6 @@ abstract class SignalState<T extends SignalView> extends State<T>
   }
 
   bool _acceptCallEvent(CallEvent event) {
-    if (widget.initState == CallState.call &&
-        event.state == CallState.calling &&
-        OpenIMLiveClient().isBusy) {
-      return true;
-    }
     return LiveUtils.matchesActiveCall(
       event,
       boundRoomID: _callRoomID,

@@ -43,6 +43,9 @@ class PackageBridge {
 
   /// 1:1 call: remote participant left the LiveKit room (peer hangup).
   static void Function(String? roomID)? onPeerLeftCall;
+
+  /// Caller: remote joined LiveKit while waiting — cancel ring timeout / start in-call UI.
+  static void Function(String? roomID)? markOutboundPeerPresent;
 }
 
 abstract class ScanBridge {

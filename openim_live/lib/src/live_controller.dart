@@ -262,9 +262,28 @@ mixin OpenIMLive {
     _ringTimeoutRoomID = roomID;
     _ringTimeoutTimer = Timer(Duration(seconds: seconds), () {
       if (_isRoomEnded(roomID)) return;
+      // Already answered (signal or LiveKit remote) — never auto-hang as "ring timeout".
+      if (_peerAcceptedRooms.contains(roomID) ||
+          OpenIMLiveClient().peerAcceptedForUi ||
+          (OpenIMLiveClient().mediaRoom?.remoteParticipants.isNotEmpty ??
+              false)) {
+        Logger.print('call ring timeout ignored: already in-call roomID=$roomID');
+        _cancelRingTimeout();
+        return;
+      }
       Logger.print('call ring timeout roomID=$roomID after ${seconds}s');
       signalingSubject.add(CallEvent(CallState.timeout, signaling));
     });
+  }
+
+  /// Caller: remote joined LiveKit ⇒ treat as answered (cancel 30s ring timeout).
+  void markOutboundPeerPresent(String? roomID) {
+    final id = roomID?.trim() ?? '';
+    if (id.isEmpty || _isRoomEnded(id)) return;
+    _peerAcceptedRooms.add(id);
+    _cancelRingTimeout();
+    OpenIMLiveClient().promoteCallingUi();
+    Logger.print('outbound peer present (LiveKit) roomID=$id');
   }
 
   void _cancelRingTimeout() {
@@ -306,6 +325,9 @@ mixin OpenIMLive {
     if (identical(PackageBridge.onPeerLeftCall, _onPeerLeftCall)) {
       PackageBridge.onPeerLeftCall = null;
     }
+    if (identical(PackageBridge.markOutboundPeerPresent, markOutboundPeerPresent)) {
+      PackageBridge.markOutboundPeerPresent = null;
+    }
     if (identical(PackageBridge.onCallKitAudioActivated, _onCallKitAudioActivated)) {
       PackageBridge.onCallKitAudioActivated = null;
     }
@@ -331,6 +353,7 @@ mixin OpenIMLive {
     PackageBridge.suppressCallKitEnded = _suppressCallKitEnded;
     PackageBridge.isCallRoomEnded = _isRoomEnded;
     PackageBridge.onPeerLeftCall = _onPeerLeftCall;
+    PackageBridge.markOutboundPeerPresent = markOutboundPeerPresent;
     PackageBridge.onCallKitAudioActivated = _onCallKitAudioActivated;
     PackageBridge.onCallKitAudioDeactivated = _onCallKitAudioDeactivated;
     _signalingListener();
@@ -881,24 +904,56 @@ mixin OpenIMLive {
       );
     }
 
-    await OpenIMLiveClient().connectMedia(
-      certificate: cert,
-      callType: callType,
-      speakerOn: isVideo,
-      enableCamera: isVideo && micGranted,
-      enableMicrophone: micGranted,
-      enableKeepAlive: true,
-      skipSessionActivation: isCallKitAccept,
-      onDisconnected: () {
-        final id = signaling.invitation?.roomID;
-        if (_isRoomEnded(id)) return;
-        unawaited(Future<void>.delayed(const Duration(seconds: 8), () {
+    try {
+      await OpenIMLiveClient().connectMedia(
+        certificate: cert,
+        callType: callType,
+        speakerOn: isVideo,
+        enableCamera: isVideo && micGranted,
+        enableMicrophone: micGranted,
+        enableKeepAlive: true,
+        skipSessionActivation: isCallKitAccept,
+        onDisconnected: () {
+          final id = signaling.invitation?.roomID;
           if (_isRoomEnded(id)) return;
-          if (OpenIMLiveClient().isConnectedMedia(id)) return;
-          _terminateCallUi(id);
-        }));
-      },
-    );
+          // Peer left / room dead — end immediately (no 8s zombie timer).
+          if (!OpenIMLiveClient().isConnectedMedia(id) ||
+              (OpenIMLiveClient().mediaRoom?.remoteParticipants.isEmpty ??
+                  true)) {
+            _terminateCallUi(id);
+            return;
+          }
+          unawaited(Future<void>.delayed(const Duration(seconds: 3), () {
+            if (_isRoomEnded(id)) return;
+            if (OpenIMLiveClient().isConnectedMedia(id) &&
+                (OpenIMLiveClient()
+                        .mediaRoom
+                        ?.remoteParticipants
+                        .isNotEmpty ??
+                    false)) {
+              return;
+            }
+            _terminateCallUi(id);
+          }));
+        },
+      );
+    } on TimeoutException {
+      CallAudioDebugLog.add('accept', 'connect timeout — retry once');
+      // One retry after CallKit audio is up (common on lock-screen first join).
+      await Future<void>.delayed(const Duration(milliseconds: 400));
+      if (gen != _callSessionGen || _isRoomEnded(roomID)) {
+        throw StateError('accept aborted after connect timeout');
+      }
+      await OpenIMLiveClient().connectMedia(
+        certificate: cert,
+        callType: callType,
+        speakerOn: isVideo,
+        enableCamera: isVideo && micGranted,
+        enableMicrophone: micGranted,
+        enableKeepAlive: true,
+        skipSessionActivation: isCallKitAccept,
+      );
+    }
 
     if (gen != _callSessionGen || _isRoomEnded(roomID)) {
       Logger.print('abort accept after connect roomID=$roomID');
@@ -1356,14 +1411,28 @@ mixin OpenIMLive {
             _cancelRingTimeout();
             insertSignalingMessageSubject.add(event);
             final data = event.data;
-            final roomID = data.invitation?.roomID;
+            final roomID = data.invitation?.roomID?.trim() ?? '';
             final isCaller =
                 data.invitation?.inviterUserID == OpenIM.iMManager.userID;
-            _terminateCallUi(roomID);
-            if (isCaller) {
-              unawaited(onTimeoutCancelled(data));
+            final wasAnswered = roomID.isNotEmpty &&
+                (_peerAcceptedRooms.contains(roomID) ||
+                    OpenIMLiveClient().peerAcceptedForUi ||
+                    (OpenIMLiveClient()
+                            .mediaRoom
+                            ?.remoteParticipants
+                            .isNotEmpty ??
+                        false));
+            if (isCaller && wasAnswered) {
+              // Already in-call — hangup so callee gets hungup/VoIP end (not ring-cancel).
+              unawaited(onTapHangup(
+                  data..userID = OpenIM.iMManager.userID, 0, true));
             } else {
-              unawaited(onTapReject(data..userID = OpenIM.iMManager.userID));
+              _terminateCallUi(roomID.isEmpty ? null : roomID);
+              if (isCaller) {
+                unawaited(onTimeoutCancelled(data));
+              } else {
+                unawaited(onTapReject(data..userID = OpenIM.iMManager.userID));
+              }
             }
           }
         },
