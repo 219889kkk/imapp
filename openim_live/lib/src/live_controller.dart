@@ -938,6 +938,9 @@ mixin OpenIMLive {
     if (error is (int, String?)) {
       return;
     }
+    if (error is String && error.startsWith('接口：')) {
+      return;
+    }
     if (error is PlatformException) {
       final code = int.tryParse(error.code);
       if (code == SDKErrorCode.hasBeenBlocked) {
@@ -987,13 +990,20 @@ mixin OpenIMLive {
     );
     // iOS CallKit: after invite(200), ask chat server to fire APNs VoIP.
     unawaited(_triggerVoipPush(signaling, action: 'invite'));
-    final certificate = await Apis.getTokenForRTC(
-        invitation.roomID!, OpenIM.iMManager.userID);
-    if (_isRoomEnded(roomID)) {
-      throw StateError('dial aborted after token: room cancelled $roomID');
+    try {
+      final certificate = await Apis.getTokenForRTC(
+          invitation.roomID!, OpenIM.iMManager.userID);
+      if (_isRoomEnded(roomID)) {
+        throw StateError('dial aborted after token: room cancelled $roomID');
+      }
+      return certificate;
+    } catch (e, s) {
+      if (!_isRoomEnded(roomID)) {
+        insertSignalingMessageSubject
+            .add(CallEvent(CallState.networkError, signaling));
+      }
+      Error.throwWithStackTrace(e, s);
     }
-
-    return certificate;
   }
 
   Future<SignalingCertificate> onDialGroup(SignalingInfo signaling) async {
@@ -1372,7 +1382,7 @@ mixin OpenIMLive {
 
       var msg = await OpenIM.iMManager.messageManager
           .insertSingleMessageToLocalStorage(
-        receiverID: inviteeUserID,
+        receiverID: receiverID!,
         senderID: inviterUserID,
         message: message
           ..status = MessageStatus.succeeded

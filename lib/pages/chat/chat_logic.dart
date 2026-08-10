@@ -244,6 +244,7 @@ class ChatLogic extends SuperController {
             _showTypingStatus(nickname: nickname);
           }
         } else if (!message.isCallingSignalingType) {
+          _normalizeCallRecordMessage(message);
           if (!messageList.contains(message) &&
               !scrollingCacheMessageList.contains(message)) {
             _isReceivedMessageWhenSyncing = true;

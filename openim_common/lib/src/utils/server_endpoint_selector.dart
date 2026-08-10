@@ -96,6 +96,32 @@ class ServerEndpointSelector {
     await DataSp.putServerConfig(buildServerConfig(host));
   }
 
+  /// IM host `im.zghtchat9.top` → base `zghtchat9.top` for LiveKit cert/DNS.
+  static String liveKitDomainForHost(String imHost) {
+    final h = imHost.trim().toLowerCase();
+    if (h.startsWith('im.')) return h.substring(3);
+    return h;
+  }
+
+  static String liveKitWsUrlForHost(String imHost) =>
+      'wss://livekit.${liveKitDomainForHost(imHost)}';
+
+  /// Fix cached configs that used `livekit.im.*` (no matching TLS cert).
+  static String normalizeLiveKitWsUrl(String url) {
+    final trimmed = url.trim();
+    if (trimmed.isEmpty) return trimmed;
+    try {
+      final uri = Uri.parse(trimmed);
+      var host = uri.host.toLowerCase();
+      if (host.startsWith('livekit.im.')) {
+        host = 'livekit.${host.substring('livekit.im.'.length)}';
+        return uri.replace(host: host).toString();
+      }
+      if (host.contains('127.0.0.1') || host == 'localhost') return '';
+    } catch (_) {}
+    return trimmed;
+  }
+
   static Map<String, String> buildServerConfig(String host) {
     final h = host.trim();
     return {
@@ -105,7 +131,7 @@ class ServerEndpointSelector {
       'authUrl': 'https://$h/chat',
       'chatTokenUrl': 'https://$h/chat',
       'botApiUrl': 'https://$h/bot',
-      'liveKitUrl': 'wss://livekit.$h',
+      'liveKitUrl': liveKitWsUrlForHost(h),
     };
   }
 

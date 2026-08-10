@@ -386,6 +386,13 @@ class Apis {
           busyLineUserIDList: signaling.busyLineUserIDList,
         );
       }
+      final token = signaling.token?.trim() ?? '';
+      final liveURL = signaling.liveURL?.trim() ?? '';
+      if (token.isEmpty || liveURL.isEmpty) {
+        Logger.print(
+            'getTokenForRTC invalid response tokenEmpty=${token.isEmpty} liveURLEmpty=${liveURL.isEmpty}');
+        throw StateError('RTC token or LiveKit URL missing');
+      }
       return signaling;
     }).catchError((e, s) {
       _catchErrorHelper(e, s);

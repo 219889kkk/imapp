@@ -870,6 +870,7 @@ class IMUtils {
                       content = StrRes.networkAnomaly;
                       break;
                     default:
+                      content = StrRes.missedCall;
                       break;
                   }
                   if (content != null) {

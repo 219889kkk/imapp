@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_openim_sdk/flutter_openim_sdk.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
@@ -174,6 +176,16 @@ class ChatPage extends StatelessWidget {
   CustomTypeInfo? _buildCustomTypeItemView(
       BuildContext context, Message message) {
     final data = IMUtils.parseCustomMessage(message);
+    if (data == null && message.isCallRecordType) {
+      String type = 'audio';
+      try {
+        final map = json.decode(message.customElem!.data!);
+        type = map['data']?['type']?.toString() ?? type;
+      } catch (_) {}
+      return CustomTypeInfo(
+        ChatCallItemView(type: type, content: StrRes.missedCall),
+      );
+    }
     if (null != data) {
       final viewType = data['viewType'];
       if (viewType == CustomMessageType.call) {
