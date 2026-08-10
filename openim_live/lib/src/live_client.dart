@@ -334,6 +334,12 @@ class OpenIMLiveClient implements RTCBridge {
 
     await _disposeMediaRoomOnly();
 
+    if (Platform.isIOS) {
+      Hardware.instance.setAutomaticConfigurationEnabled(
+        enable: !skipSessionActivation,
+      );
+    }
+
     if (!skipSessionActivation) {
       await CallAudioKeepAlive.instance.prepareForRtc(speakerOn: speakerOn);
     }

@@ -42,6 +42,9 @@ class CallAudioKeepAlive with WidgetsBindingObserver {
     if (skipSessionActivation) _callKitOwnsSession = true;
     if (_callKitOwnsSession || skipSessionActivation) return;
     await _activateCallSession(preferSpeaker: speakerOn);
+    if (Platform.isIOS) {
+      await IosWebRtcAudio.enable(speakerOn: speakerOn);
+    }
   }
 
   Future<void> start({
@@ -96,6 +99,8 @@ class CallAudioKeepAlive with WidgetsBindingObserver {
       } catch (e, s) {
         Logger.print('CallAudioKeepAlive disable FGS failed: $e $s');
       }
+    } else if (Platform.isIOS) {
+      await IosWebRtcAudio.disable();
     }
     Logger.print('CallAudioKeepAlive stop');
   }
@@ -114,6 +119,9 @@ class CallAudioKeepAlive with WidgetsBindingObserver {
   Future<void> _recoverMic() async {
     if (!_callKitOwnsSession) {
       await _activateCallSession();
+      if (Platform.isIOS) {
+        await IosWebRtcAudio.enable();
+      }
     }
     if (onNeedRepublishMic == null) return;
     try {

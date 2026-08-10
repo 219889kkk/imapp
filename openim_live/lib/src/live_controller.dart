@@ -8,7 +8,6 @@ import 'package:flutter_openim_live_alert/flutter_openim_live_alert.dart';
 import 'package:flutter_openim_sdk/flutter_openim_sdk.dart';
 import 'package:get/get.dart';
 import 'package:just_audio/just_audio.dart';
-import 'package:livekit_client/livekit_client.dart';
 import 'package:openim_common/openim_common.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:rxdart/rxdart.dart';
@@ -311,11 +310,6 @@ mixin OpenIMLive {
   }
 
   onInitLive() async {
-    if (Platform.isIOS) {
-      // CallKit owns AVAudioSession on lock-screen answer — LiveKit must not reconfigure it.
-      Hardware.instance.setAutomaticConfigurationEnabled(enable: false);
-      Logger.print('LiveKit iOS: automatic native audio configuration disabled');
-    }
     PackageBridge.handleCallNotificationAction = _handleCallNotificationAction;
     PackageBridge.onCallKitAccept = _onCallKitAccept;
     PackageBridge.onCallKitDecline = _onCallKitDecline;
@@ -360,7 +354,12 @@ mixin OpenIMLive {
     if (roomID != null && roomID.isNotEmpty) {
       _suppressCallKitEnded(roomID, duration: const Duration(seconds: 12));
     }
-    unawaited(_acceptIncomingCall(resolved, requestPermissions: false));
+    unawaited(_callKitAcceptAndJoin(resolved));
+  }
+
+  Future<void> _callKitAcceptAndJoin(SignalingInfo signaling) async {
+    await _refreshHeadlessMicPending();
+    await _acceptIncomingCall(signaling, requestPermissions: false);
   }
 
   Future<void> _refreshHeadlessMicPending() async {
@@ -383,13 +382,14 @@ mixin OpenIMLive {
     _terminateCallUi(id);
   }
 
-  Future<void> _waitForIosCallKitAudio() async {
+  Future<void> _waitForIosCallKitAudio({bool speakerOn = false}) async {
     final gate = _iosCallKitAudioGate ??= Completer<void>();
     try {
-      await gate.future.timeout(const Duration(seconds: 5));
+      await gate.future.timeout(const Duration(seconds: 8));
       Logger.print('iOS CallKit audio session ready');
     } on TimeoutException {
-      Logger.print('iOS CallKit audio session timeout — join anyway');
+      Logger.print('iOS CallKit audio timeout — fallback enable WebRTC');
+      await IosWebRtcAudio.enable(speakerOn: speakerOn);
     }
   }
 
@@ -698,8 +698,10 @@ mixin OpenIMLive {
 
     // Lock-screen: join LiveKit only after CallKit activates WebRTC audio.
     if (isCallKitAccept) {
-      await _waitForIosCallKitAudio();
+      await _waitForIosCallKitAudio(speakerOn: isVideo);
     }
+
+    final micGranted = !isCallKitAccept || !_pendingHeadlessMicPermission;
 
     if (roomID != null && roomID.isNotEmpty) {
       await CallAudioKeepAlive.instance.start(
@@ -714,8 +716,8 @@ mixin OpenIMLive {
       certificate: cert,
       callType: callType,
       speakerOn: isVideo,
-      enableCamera: isVideo,
-      enableMicrophone: true,
+      enableCamera: isVideo && micGranted,
+      enableMicrophone: micGranted,
       enableKeepAlive: true,
       skipSessionActivation: isCallKitAccept,
       onDisconnected: () {

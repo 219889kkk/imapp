@@ -29,6 +29,23 @@ import flutter_callkit_incoming
         replayKitChannel = FlutterMethodChannel(name: "io.livekit.example.flutter/replaykit-channel", binaryMessenger: controller.binaryMessenger)
         voipChannel = FlutterMethodChannel(name: "top.hangxun.app/voip", binaryMessenger: controller.binaryMessenger)
 
+        voipChannel.setMethodCallHandler { [weak self] call, result in
+            guard let self = self else {
+                result(FlutterMethodNotImplemented)
+                return
+            }
+            switch call.method {
+            case "enableWebRtcAudio":
+                let args = call.arguments as? [String: Any]
+                let speaker = args?["speakerOn"] as? Bool ?? false
+                self.enableWebRtcAudio(preferSpeaker: speaker, result: result)
+            case "disableWebRtcAudio":
+                self.disableWebRtcAudio(result: result)
+            default:
+                result(FlutterMethodNotImplemented)
+            }
+        }
+
         replayKitChannel.setMethodCallHandler({
             (call: FlutterMethodCall, result: @escaping FlutterResult) -> Void in
             self.handleReplayKitFromFlutter(result: result, call: call)
@@ -97,6 +114,35 @@ import flutter_callkit_incoming
         RTCAudioSession.sharedInstance().audioSessionDidDeactivate(audioSession)
         RTCAudioSession.sharedInstance().isAudioEnabled = false
         NSLog("HangXun WebRTC: CallKit audio session deactivated")
+    }
+
+    // MARK: - WebRTC audio (in-app calls — useManualAudio requires explicit enable)
+
+    private func enableWebRtcAudio(preferSpeaker: Bool, result: @escaping FlutterResult) {
+        let session = AVAudioSession.sharedInstance()
+        do {
+            var options: AVAudioSession.CategoryOptions = [.allowBluetooth, .allowBluetoothA2DP]
+            if preferSpeaker {
+                options.insert(.defaultToSpeaker)
+            }
+            try session.setCategory(.playAndRecord, mode: .voiceChat, options: options)
+            try session.setActive(true)
+            RTCAudioSession.sharedInstance().audioSessionDidActivate(session)
+            RTCAudioSession.sharedInstance().isAudioEnabled = true
+            NSLog("HangXun WebRTC: in-app audio enabled speaker=%d", preferSpeaker)
+            result(true)
+        } catch {
+            NSLog("HangXun WebRTC: in-app enable failed %@", error.localizedDescription)
+            result(FlutterError(code: "audio", message: error.localizedDescription, details: nil))
+        }
+    }
+
+    private func disableWebRtcAudio(result: @escaping FlutterResult) {
+        let session = AVAudioSession.sharedInstance()
+        RTCAudioSession.sharedInstance().audioSessionDidDeactivate(session)
+        RTCAudioSession.sharedInstance().isAudioEnabled = false
+        NSLog("HangXun WebRTC: in-app audio disabled")
+        result(true)
     }
 
     // MARK: - PushKit (VoIP)

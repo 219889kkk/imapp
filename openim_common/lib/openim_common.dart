@@ -34,6 +34,7 @@ export 'src/utils/session_guard.dart';
 export 'src/utils/server_endpoint_selector.dart';
 export 'src/utils/http_util.dart';
 export 'src/utils/image_util.dart';
+export 'src/utils/ios_webrtc_audio.dart';
 export 'src/utils/last_online_cache.dart';
 export 'src/utils/logger.dart';
 export 'src/utils/permissions.dart';
