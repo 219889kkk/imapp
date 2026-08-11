@@ -109,7 +109,7 @@ mixin OpenIMLive {
     _activeCallSignaling = null;
     _callSessionGen++; // invalidate in-flight headless accept/present
     _cancelRingTimeout();
-    _ringTimeoutExtended = false;
+    _ringTimeoutExtendCount = 0;
     _stopSound();
     PackageBridge.clearCallNotification?.call();
     FlutterOpenimLiveAlert.closeLiveAlert();
@@ -259,17 +259,18 @@ mixin OpenIMLive {
   int _ringPlayGen = 0;
   Timer? _ringTimeoutTimer;
   String? _ringTimeoutRoomID;
-  /// Caller already waiting in LiveKit — allow one extra ring window after first timeout.
-  bool _ringTimeoutExtended = false;
+  /// Caller waiting in LiveKit — allow up to 2 extra windows after first timeout.
+  int _ringTimeoutExtendCount = 0;
 
   void _startRingTimeout(SignalingInfo signaling, {bool isExtension = false}) {
     _cancelRingTimeout();
     final roomID = signaling.invitation?.roomID?.trim() ?? '';
     if (roomID.isEmpty || _isRoomEnded(roomID)) return;
-    final configured = signaling.invitation?.timeout ?? 30;
-    final seconds = configured <= 0 ? 30 : configured;
+    // Lock-screen ICE often needs >30s end-to-end; default ring window 60s.
+    final configured = signaling.invitation?.timeout ?? 60;
+    final seconds = configured <= 0 ? 60 : configured;
     _ringTimeoutRoomID = roomID;
-    if (!isExtension) _ringTimeoutExtended = false;
+    if (!isExtension) _ringTimeoutExtendCount = 0;
     _ringTimeoutTimer = Timer(Duration(seconds: seconds), () {
       if (_isRoomEnded(roomID)) return;
       // Already answered (signal or LiveKit remote) — never auto-hang as "ring timeout".
@@ -285,16 +286,18 @@ mixin OpenIMLive {
       final client = OpenIMLiveClient();
       final isCaller =
           signaling.invitation?.inviterUserID == OpenIM.iMManager.userID;
-      // Callee answered late / ICE slow: caller is alone in LiveKit — extend once.
+      // Callee answering / ICE slow: keep waiting (up to 2 extensions).
       if (isCaller &&
-          !_ringTimeoutExtended &&
+          _ringTimeoutExtendCount < 2 &&
           client.isBusy &&
           client.currentRoomID == roomID) {
-        _ringTimeoutExtended = true;
+        _ringTimeoutExtendCount++;
         Logger.print(
-            'call ring timeout extended 30s (still in LiveKit) roomID=$roomID');
+            'call ring timeout extended #$_ringTimeoutExtendCount roomID=$roomID');
         CallAudioDebugLog.add(
-            'ring', 'timeout extended 30s still in LiveKit roomID=$roomID');
+          'ring',
+          'timeout extended #$_ringTimeoutExtendCount still in LiveKit roomID=$roomID',
+        );
         _startRingTimeout(signaling, isExtension: true);
         return;
       }
@@ -304,14 +307,16 @@ mixin OpenIMLive {
     });
   }
 
-  /// Caller: remote joined LiveKit ⇒ treat as answered (cancel 30s ring timeout).
+  /// Caller: remote joined LiveKit ⇒ treat as answered (cancel ring timeout).
   void markOutboundPeerPresent(String? roomID) {
     final id = roomID?.trim() ?? '';
     if (id.isEmpty || _isRoomEnded(id)) return;
     _peerAcceptedRooms.add(id);
     _cancelRingTimeout();
+    _ringTimeoutExtendCount = 0;
     OpenIMLiveClient().promoteCallingUi();
     Logger.print('outbound peer present (LiveKit) roomID=$id');
+    CallAudioDebugLog.add('ring', 'LiveKit remote present — cancel timeout roomID=$id');
   }
 
   void _cancelRingTimeout() {
@@ -733,13 +738,29 @@ mixin OpenIMLive {
     }
   }
 
-  /// PushKit cancel/hungup — tear down ringing or active 1:1 calls.
+  /// PushKit cancel/hungup/accept — tear down or mark answered.
   void _onVoipRemoteEnd(String? roomID, String action) {
     Logger.print('VoIP remote end action=$action roomID=$roomID');
     final id = roomID?.trim() ?? '';
+    final act = action.toLowerCase();
+
+    // Callee answered — cancel caller ring timeout even if IM accept is delayed.
+    if (act == 'accept' || act == 'answered') {
+      if (id.isEmpty || _isRoomEnded(id)) return;
+      final info = _activeCallSignaling;
+      if (info?.invitation?.roomID?.trim() == id) {
+        CallAudioDebugLog.add('voip', 'peer accept push — cancel ring roomID=$id');
+        _onPeerAccepted(info!);
+      } else {
+        _peerAcceptedRooms.add(id);
+        _cancelRingTimeout();
+        CallAudioDebugLog.add('voip', 'peer accept push — mark answered roomID=$id');
+      }
+      return;
+    }
+
     if (id.isNotEmpty && _isRoomEnded(id)) return;
 
-    final act = action.toLowerCase();
     if (act != 'hungup' && act != 'end' && act != 'cancel' && act != 'reject') {
       return;
     }
@@ -993,6 +1014,13 @@ mixin OpenIMLive {
           onDisconnected: () {
             final id = signaling.invitation?.roomID;
             if (_isRoomEnded(id)) return;
+            // Never tear down while CallKit accept/join is still running.
+            if (_isAcceptInProgressForRoom(id) ||
+                OpenIMLiveClient().isMediaConnecting) {
+              CallAudioDebugLog.add(
+                  'accept', 'onDisconnected ignored — join in flight');
+              return;
+            }
             // Peer left / room dead — end immediately (no 8s zombie timer).
             if (!OpenIMLiveClient().isConnectedMedia(id) ||
                 (OpenIMLiveClient().mediaRoom?.remoteParticipants.isEmpty ??
@@ -1024,17 +1052,20 @@ mixin OpenIMLive {
         CallAudioDebugLog.add('accept', 'peer left during connect — no retry');
         rethrow;
       }
+      // Only retry real ICE/peer-connection timeouts — not clientInitiated cleanup.
       final retryable = e is TimeoutException ||
-          e is MediaConnectException ||
-          e is ConnectException ||
-          msg.contains('MediaConnectException') ||
-          msg.contains('PeerConnection') ||
-          msg.contains('disconnect during connect');
+          msg.contains('Timed out waiting for PeerConnection') ||
+          msg.contains('PeerConnection to connect') ||
+          (e is MediaConnectException &&
+              !msg.contains('clientInitiated') &&
+              !msg.contains('peer left')) ||
+          (e is ConnectException);
       if (!retryable || gen != _callSessionGen || _isRoomEnded(roomID)) {
+        CallAudioDebugLog.add('accept', 'connect failed — no retry err=$e');
         rethrow;
       }
       CallAudioDebugLog.add('accept', 'connect failed — retry once err=$e');
-      await Future<void>.delayed(const Duration(milliseconds: 400));
+      await Future<void>.delayed(const Duration(milliseconds: 600));
       if (gen != _callSessionGen || _isRoomEnded(roomID)) {
         throw StateError('accept aborted after connect retry');
       }
@@ -1055,6 +1086,7 @@ mixin OpenIMLive {
       }
       if (isCallKitAccept) {
         await IosWebRtcAudio.bridgeCallKitSession();
+        await Future<void>.delayed(const Duration(milliseconds: 300));
       }
       await joinOnce();
     }
@@ -1216,9 +1248,11 @@ mixin OpenIMLive {
     if (!_peerAcceptedRooms.contains(roomID)) {
       _peerAcceptedRooms.add(roomID);
       _cancelRingTimeout();
+      _ringTimeoutExtendCount = 0;
       unawaited(_stopRingSound());
       _activeCallSignaling = merged;
       Logger.print('caller peer accepted roomID=$roomID');
+      CallAudioDebugLog.add('ring', 'peer accepted — cancel timeout roomID=$roomID');
       final client = OpenIMLiveClient();
       unawaited(client.onCallActive(
         speakerOn: isVideo,
@@ -1596,7 +1630,7 @@ mixin OpenIMLive {
         inviterUserID: inviterUserID,
         inviteeUserIDList: inviteeUserIDList,
         roomID: roomID ?? groupID ?? const Uuid().v4(),
-        timeout: 30,
+        timeout: 60,
         mediaType: mediaType,
         sessionType: sessionType,
         platformID: IMUtils.getPlatform(),
@@ -1606,6 +1640,7 @@ mixin OpenIMLive {
 
     _activeCallSignaling = signal;
     _peerAcceptedRooms.remove(signal.invitation!.roomID?.trim() ?? '');
+    _ringTimeoutExtendCount = 0;
 
     OpenIMLiveClient().start(
       Get.overlayContext!,
@@ -1875,6 +1910,15 @@ mixin OpenIMLive {
         offlinePushInfo: OfflinePushInfo(),
         userID: signaling.invitation!.inviterUserID,
         isOnlineOnly: false);
+    // VoIP push so caller cancels 30/60s ring timeout even if IM is slow.
+    final inviter = signaling.invitation!.inviterUserID?.trim() ?? '';
+    if (inviter.isNotEmpty) {
+      unawaited(_triggerVoipPush(
+        signaling,
+        action: 'accept',
+        toUserIDs: [inviter],
+      ));
+    }
     final certificate = await Apis.getTokenForRTC(
         signaling.invitation!.roomID!, OpenIM.iMManager.userID);
 
@@ -2004,7 +2048,7 @@ mixin OpenIMLive {
     _acceptJoinRoomID = null;
     _clearPickupCache();
     _cancelRingTimeout();
-    _ringTimeoutExtended = false;
+    _ringTimeoutExtendCount = 0;
     _suppressCallKitEnded(roomID, duration: const Duration(seconds: 2));
     CallAudioDebugLog.add('hangup', 'local roomID=$roomID positive=$isPositive');
     if (isPositive) {

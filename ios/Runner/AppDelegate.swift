@@ -321,6 +321,14 @@ import flutter_callkit_incoming
             return
         }
 
+        // Callee answered — notify caller Dart to cancel ring timeout (no CallKit UI).
+        if action == "accept" || action == "answered" {
+            NSLog("HangXun VoIP peer accept room=%@", roomID)
+            notifyDartVoipRemoteEnd(roomID: roomID, action: "accept")
+            DispatchQueue.main.async { completion() }
+            return
+        }
+
         if UIApplication.shared.applicationState == .active {
             NSLog("HangXun VoIP: skip CallKit (app foreground, room=%@)", roomID)
             DispatchQueue.main.async { completion() }

@@ -84,6 +84,8 @@ class OpenIMLiveClient implements RTCBridge {
   String? _mediaConnectRoomID;
   Completer<void>? _connectAbort;
   VoidCallback? _onMediaDisconnected;
+  /// True while we are disposing the room ourselves — ignore disconnect side-effects.
+  bool _suppressDisconnectSideEffects = false;
 
   /// True while [connectMedia] / LiveKit join is still in flight.
   bool get isMediaConnecting => _mediaConnectInFlight != null;
@@ -188,7 +190,9 @@ class OpenIMLiveClient implements RTCBridge {
     _mediaCallType = null;
     _mediaConnectInFlight = null;
     _mediaConnectRoomID = null;
+    _connectAbort = null;
     unawaited(CallAudioKeepAlive.instance.stop());
+    _suppressDisconnectSideEffects = true;
     try {
       room?.removeListener(_noopRoomListener);
       await listener?.dispose();
@@ -196,6 +200,10 @@ class OpenIMLiveClient implements RTCBridge {
       await room?.dispose();
     } catch (e, s) {
       Logger.print('dispose media failed: $e $s');
+    } finally {
+      scheduleMicrotask(() {
+        _suppressDisconnectSideEffects = false;
+      });
     }
   }
 
@@ -397,14 +405,20 @@ class OpenIMLiveClient implements RTCBridge {
       'livekit',
       'room.connect begin roomID=$roomID url=$liveURL tokenLen=${token.length} skipSession=$skipSessionActivation',
     );
-    // CallKit path: re-bridge + brief settle so PeerConnection starts on a live session.
+    // CallKit path: re-bridge + settle so PeerConnection starts on a live session.
     if (skipSessionActivation && Platform.isIOS) {
       await IosWebRtcAudio.bridgeCallKitSession();
-      await Future<void>.delayed(const Duration(milliseconds: 250));
+      await Future<void>.delayed(const Duration(milliseconds: 400));
+      CallAudioDebugLog.add(
+        'livekit',
+        'pre-connect audio enabled=${await IosWebRtcAudio.isEnabled()}',
+      );
     }
     _connectAbort = Completer<void>();
     final abortFuture = _connectAbort!.future;
     try {
+      // Publish mic AFTER connect — FastConnect under CallKit caused early
+      // clientInitiated disconnects before ICE finished.
       await Future.any<void>([
         room
             .connect(
@@ -412,13 +426,12 @@ class OpenIMLiveClient implements RTCBridge {
           token,
           connectOptions: const ConnectOptions(
             autoSubscribe: true,
-            // Default peerConnection is 10s — lock-screen ICE often needs longer.
             timeouts: Timeouts(
-              connection: Duration(seconds: 25),
+              connection: Duration(seconds: 30),
               debounce: Duration(milliseconds: 100),
-              publish: Duration(seconds: 10),
-              peerConnection: Duration(seconds: 25),
-              iceRestart: Duration(seconds: 10),
+              publish: Duration(seconds: 15),
+              peerConnection: Duration(seconds: 30),
+              iceRestart: Duration(seconds: 15),
             ),
           ),
           roomOptions: RoomOptions(
@@ -439,12 +452,8 @@ class OpenIMLiveClient implements RTCBridge {
               videoCodec: 'VP8',
             ),
           ),
-          // CallKit: publish mic during join so ADM/ICE start under an active session.
-          fastConnectOptions: FastConnectOptions(
-            microphone: TrackOption(enabled: enableMicrophone),
-          ),
         )
-            .timeout(const Duration(seconds: 30)),
+            .timeout(const Duration(seconds: 35)),
         abortFuture,
       ]);
       CallAudioDebugLog.add(
@@ -452,7 +461,7 @@ class OpenIMLiveClient implements RTCBridge {
         'room.connect ok roomID=$roomID remotes=${room.remoteParticipants.length}',
       );
     } on TimeoutException {
-      CallAudioDebugLog.add('livekit', 'room.connect TIMEOUT 30s roomID=$roomID');
+      CallAudioDebugLog.add('livekit', 'room.connect TIMEOUT 35s roomID=$roomID');
       await _disposeMediaRoomOnly();
       isBusy = false;
       currentRoomID = null;
@@ -673,22 +682,42 @@ class OpenIMLiveClient implements RTCBridge {
     Logger.print('Headless room disconnected: ${event.reason} roomID=$roomID');
     CallAudioDebugLog.add(
       'livekit',
-      'disconnected reason=${event.reason} remotes=${room.remoteParticipants.length} roomID=$roomID',
+      'disconnected reason=${event.reason} remotes=${room.remoteParticipants.length} roomID=$roomID suppress=$_suppressDisconnectSideEffects connecting=${_mediaConnectInFlight != null}',
     );
 
-    // Connect still running — fail-fast so accept can retry with a clean Room
-    // (do not sit on a dead PC until the full ICE timeout).
-    if (_mediaConnectInFlight != null) {
+    if (_suppressDisconnectSideEffects) {
       CallAudioDebugLog.add(
-        'livekit',
-        'disconnect during connect — abort join reason=${event.reason}',
-      );
-      final abort = _connectAbort;
-      if (abort != null && !abort.isCompleted) {
-        abort.completeError(
-          MediaConnectException(
-            'disconnect during connect: ${event.reason}',
-          ),
+          'livekit', 'disconnect ignored — local dispose in progress');
+      return;
+    }
+
+    // Connect still running: only abort on fatal server reasons.
+    // clientInitiated is usually our own dispose/SDK cleanup — never treat as ICE retry.
+    if (_mediaConnectInFlight != null) {
+      final reason = event.reason;
+      final fatal = reason == DisconnectReason.stateMismatch ||
+          reason == DisconnectReason.roomDeleted ||
+          reason == DisconnectReason.duplicateIdentity ||
+          reason == DisconnectReason.joinFailure ||
+          reason == DisconnectReason.serverShutdown ||
+          reason == DisconnectReason.participantRemoved;
+      if (fatal) {
+        CallAudioDebugLog.add(
+          'livekit',
+          'disconnect during connect — abort join reason=$reason',
+        );
+        final abort = _connectAbort;
+        if (abort != null && !abort.isCompleted) {
+          abort.completeError(
+            MediaConnectException(
+              'disconnect during connect: $reason',
+            ),
+          );
+        }
+      } else {
+        CallAudioDebugLog.add(
+          'livekit',
+          'disconnect during connect — ignore reason=$reason (wait room.connect)',
         );
       }
       return;
@@ -823,12 +852,19 @@ class OpenIMLiveClient implements RTCBridge {
     final listener = _mediaListener;
     _mediaRoom = null;
     _mediaListener = null;
+    _suppressDisconnectSideEffects = true;
     try {
       room?.removeListener(_noopRoomListener);
       await listener?.dispose();
       await room?.disconnect();
       await room?.dispose();
-    } catch (_) {}
+    } catch (_) {
+    } finally {
+      // Keep suppress until the next microtask so late RoomDisconnectedEvent is ignored.
+      scheduleMicrotask(() {
+        _suppressDisconnectSideEffects = false;
+      });
+    }
   }
 
   Future<void> _ensurePublished({
