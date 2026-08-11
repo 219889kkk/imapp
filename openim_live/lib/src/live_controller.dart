@@ -1633,14 +1633,14 @@ mixin OpenIMLive {
       return;
     }
 
-    // Still ringing: programmatic/duplicate CallKit end — local dismiss only.
-    // Real user reject goes through Decline → onTapReject.
+    // Still ringing and not suppressed → real dismiss/swipe. Notify caller
+    // (duplicate CallKit Ended is filtered by _shouldIgnoreCallKitEnded above).
     if (info != null && !inCall) {
       Logger.print(
-          'CallKit ended before connect — local dismiss only roomID=$roomID');
+          'CallKit ended before connect — reject peer roomID=$roomID');
       CallAudioDebugLog.add(
-          'callkit', 'ended before connect local only roomID=$roomKey');
-      _terminateCallUi(roomID);
+          'callkit', 'ended before connect → reject roomID=$roomKey');
+      unawaited(onTapReject(info..userID = OpenIM.iMManager.userID));
       return;
     }
 
@@ -2240,6 +2240,7 @@ mixin OpenIMLive {
   onTapReject(SignalingInfo signaling) async {
     final resolved = _resolveIncomingSignaling(signaling) ?? signaling;
     final roomID = resolved.invitation?.roomID;
+    final alreadyEnded = _isRoomEnded(roomID);
     // Resolve peer BEFORE terminate (which clears _activeCallSignaling).
     var inviter = resolved.invitation?.inviterUserID?.trim() ?? '';
     if (inviter.isEmpty) {
@@ -2257,6 +2258,10 @@ mixin OpenIMLive {
     // Always tear down local UI — mark-ended-only left zombie overlays.
     _terminateCallUi(roomID);
     _stopSound();
+    if (alreadyEnded) {
+      Logger.print('onTapReject skip signal — room already ended $roomID');
+      return null;
+    }
     insertSignalingMessageSubject.add(CallEvent(CallState.reject, resolved));
 
     if (recvUserID == null || recvUserID.isEmpty) {
@@ -2393,8 +2398,9 @@ mixin OpenIMLive {
 
   onTapHangup(SignalingInfo signaling, int duration, bool isPositive) async {
     final roomID = signaling.invitation?.roomID;
-    // Prefer UI timer; fall back to wall-clock from answer (CallKit often passes 0).
-    final sec = duration > 0 ? duration : _connectedDurationSec();
+    // UI timer can reset after CallKit/unlock — take the longer of UI vs wall-clock.
+    final wall = _connectedDurationSec();
+    final sec = duration > wall ? duration : wall;
     // Mark ended + bump session gen FIRST so late invite/accept cannot reopen UI.
     _markRoomEnded(roomID);
     _callConnectedAtMs = null;

@@ -301,6 +301,7 @@ import flutter_callkit_incoming
     // MARK: - PushKit (VoIP)
 
     private func registerVoipPush() {
+        loadEndedVoipRoomsIfNeeded()
         let registry = PKPushRegistry(queue: DispatchQueue.main)
         registry.delegate = self
         registry.desiredPushTypes = [.voIP]
@@ -362,14 +363,19 @@ import flutter_callkit_incoming
     }
 
 
+    private let endedVoipRoomsDefaultsKey = "hangxun.endedVoipRooms"
+
     private func markVoipRoomEnded(_ roomID: String) {
+        loadEndedVoipRoomsIfNeeded()
         let id = roomID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !id.isEmpty else { return }
         pruneEndedVoipRooms()
         endedVoipRooms[id] = Date()
+        persistEndedVoipRooms()
     }
 
     private func isVoipRoomEnded(_ roomID: String) -> Bool {
+        loadEndedVoipRoomsIfNeeded()
         pruneEndedVoipRooms()
         let id = roomID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !id.isEmpty else { return false }
@@ -378,7 +384,36 @@ import flutter_callkit_incoming
 
     private func pruneEndedVoipRooms() {
         let cutoff = Date().addingTimeInterval(-endedVoipRoomTTL)
+        let before = endedVoipRooms.count
         endedVoipRooms = endedVoipRooms.filter { $0.value >= cutoff }
+        if endedVoipRooms.count != before {
+            persistEndedVoipRooms()
+        }
+    }
+
+    private var endedVoipRoomsLoaded = false
+
+    private func loadEndedVoipRoomsIfNeeded() {
+        guard !endedVoipRoomsLoaded else { return }
+        endedVoipRoomsLoaded = true
+        guard let raw = UserDefaults.standard.dictionary(
+            forKey: endedVoipRoomsDefaultsKey
+        ) as? [String: Double] else { return }
+        let now = Date()
+        for (id, ts) in raw {
+            let date = Date(timeIntervalSince1970: ts)
+            if now.timeIntervalSince(date) <= endedVoipRoomTTL {
+                endedVoipRooms[id] = date
+            }
+        }
+    }
+
+    private func persistEndedVoipRooms() {
+        var map: [String: Double] = [:]
+        for (id, date) in endedVoipRooms {
+            map[id] = date.timeIntervalSince1970
+        }
+        UserDefaults.standard.set(map, forKey: endedVoipRoomsDefaultsKey)
     }
 
     private func endCallKitCalls(roomID: String) {
