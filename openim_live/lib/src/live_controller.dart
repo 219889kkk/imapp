@@ -108,10 +108,13 @@ mixin OpenIMLive {
     _activeCallSignaling = null;
     _callSessionGen++; // invalidate in-flight headless accept/present
     _cancelRingTimeout();
+    _ringTimeoutExtended = false;
     _stopSound();
     PackageBridge.clearCallNotification?.call();
     FlutterOpenimLiveAlert.closeLiveAlert();
     unawaited(CallAudioKeepAlive.instance.stop());
+    // Suppress programmatic endCall → actionCallEnded echo (not user hangup).
+    _suppressCallKitEnded(roomID, duration: const Duration(seconds: 2));
     unawaited(_endSystemCallUi(roomID));
     if (roomID != null && roomID.isNotEmpty) {
       OpenIMLiveClient().closeByRoomID(roomID);
@@ -187,7 +190,8 @@ mixin OpenIMLive {
   }
 
   bool _shouldIgnoreCallKitEnded(String? roomID) {
-    if (_isAcceptInProgressForRoom(roomID)) return true;
+    // Do NOT ignore while accept/connect is in flight — user End on CallKit
+    // must abort join (was: ignored → unlock reopened a zombie call page).
     if (_isRoomEnded(roomID)) return true;
     final id = roomID?.trim() ?? '';
     if (id.isNotEmpty) {
@@ -254,14 +258,17 @@ mixin OpenIMLive {
   int _ringPlayGen = 0;
   Timer? _ringTimeoutTimer;
   String? _ringTimeoutRoomID;
+  /// Caller already waiting in LiveKit — allow one extra ring window after first timeout.
+  bool _ringTimeoutExtended = false;
 
-  void _startRingTimeout(SignalingInfo signaling) {
+  void _startRingTimeout(SignalingInfo signaling, {bool isExtension = false}) {
     _cancelRingTimeout();
     final roomID = signaling.invitation?.roomID?.trim() ?? '';
     if (roomID.isEmpty || _isRoomEnded(roomID)) return;
     final configured = signaling.invitation?.timeout ?? 30;
     final seconds = configured <= 0 ? 30 : configured;
     _ringTimeoutRoomID = roomID;
+    if (!isExtension) _ringTimeoutExtended = false;
     _ringTimeoutTimer = Timer(Duration(seconds: seconds), () {
       if (_isRoomEnded(roomID)) return;
       // Already answered (signal or LiveKit remote) — never auto-hang as "ring timeout".
@@ -270,10 +277,28 @@ mixin OpenIMLive {
           (OpenIMLiveClient().mediaRoom?.remoteParticipants.isNotEmpty ??
               false)) {
         Logger.print('call ring timeout ignored: already in-call roomID=$roomID');
+        CallAudioDebugLog.add('ring', 'timeout ignored — already answered roomID=$roomID');
         _cancelRingTimeout();
         return;
       }
+      final client = OpenIMLiveClient();
+      final isCaller =
+          signaling.invitation?.inviterUserID == OpenIM.iMManager.userID;
+      // Callee answered late / ICE slow: caller is alone in LiveKit — extend once.
+      if (isCaller &&
+          !_ringTimeoutExtended &&
+          client.isBusy &&
+          client.currentRoomID == roomID) {
+        _ringTimeoutExtended = true;
+        Logger.print(
+            'call ring timeout extended 30s (still in LiveKit) roomID=$roomID');
+        CallAudioDebugLog.add(
+            'ring', 'timeout extended 30s still in LiveKit roomID=$roomID');
+        _startRingTimeout(signaling, isExtension: true);
+        return;
+      }
       Logger.print('call ring timeout roomID=$roomID after ${seconds}s');
+      CallAudioDebugLog.add('ring', 'timeout fire roomID=$roomID caller=$isCaller');
       signalingSubject.add(CallEvent(CallState.timeout, signaling));
     });
   }
@@ -408,7 +433,8 @@ mixin OpenIMLive {
     );
     PackageBridge.clearCallNotification?.call();
     if (roomID.isNotEmpty) {
-      _suppressCallKitEnded(roomID, duration: const Duration(seconds: 20));
+      // Short suppress only for setConnected echo — user End must still hang up.
+      _suppressCallKitEnded(roomID, duration: const Duration(seconds: 2));
       // Mark connected immediately so CallKit keeps the audio session while LiveKit joins.
       unawaited(VoipCallkitController.toOrNull?.setConnected(roomID) ??
           Future.value());
@@ -673,15 +699,31 @@ mixin OpenIMLive {
       return;
     }
 
-    // CallKit was ringing, user opened app without _beCalledEvent set.
+    // Stale active signaling after lock-screen hangup must NOT reopen a call page.
     if (active != null &&
         activeRoom.isNotEmpty &&
         !_isRoomEnded(activeRoom) &&
         !client.hasOverlay) {
-      await _dismissCallKitIncoming(activeRoom);
-      final ctx = Get.overlayContext;
-      if (ctx != null) {
-        _presentCallUi(active);
+      if (client.hasMediaFor(activeRoom) ||
+          _isAcceptInProgressForRoom(activeRoom)) {
+        Logger.print('iOS fg: attach mid-call UI roomID=$activeRoom');
+        _presentCallUi(active, fromHeadless: true);
+        return;
+      }
+      final callKitAlive =
+          VoipCallkitController.toOrNull?.callKitActive.value == true;
+      if (callKitAlive) {
+        await _dismissCallKitIncoming(activeRoom);
+        final ctx = Get.overlayContext;
+        if (ctx != null) {
+          _presentCallUi(active);
+        }
+      } else {
+        Logger.print(
+            'iOS fg: drop stale active signaling (no media/CallKit) roomID=$activeRoom');
+        CallAudioDebugLog.add(
+            'fg', 'drop stale signaling roomID=$activeRoom');
+        _activeCallSignaling = null;
       }
     }
   }
@@ -1271,6 +1313,7 @@ mixin OpenIMLive {
 
     if (_shouldIgnoreCallKitEnded(roomID)) {
       Logger.print('CallKit ended ignored roomID=$roomID');
+      CallAudioDebugLog.add('callkit', 'ended ignored roomID=$roomID');
       return;
     }
 
@@ -1278,11 +1321,28 @@ mixin OpenIMLive {
     _autoPickup = false;
 
     final client = OpenIMLiveClient();
+    final roomKey = roomID?.trim() ?? '';
     final inCall = client.hasMediaFor(roomID) ||
         client.mediaRoom?.localParticipant != null;
+    // Accept already sent / join in flight — must hungup (not reject) so caller stops.
+    final acceptSent = roomKey.isNotEmpty &&
+        (_pickupCertRoomID == roomKey ||
+            _acceptJoinRoomID == roomKey ||
+            _callKitAcceptHandledRoomID == roomKey ||
+            _isAcceptInProgressForRoom(roomKey));
 
-    if (inCall && info != null) {
-      Logger.print('CallKit ended active call roomID=$roomID');
+    CallAudioDebugLog.add(
+      'callkit',
+      'ended roomID=$roomKey inCall=$inCall acceptSent=$acceptSent',
+    );
+
+    // Invalidate in-flight join before hangup/reject.
+    _acceptJoinInFlight = null;
+    _acceptJoinRoomID = null;
+    _callSessionGen++;
+
+    if (info != null && (inCall || acceptSent)) {
+      Logger.print('CallKit ended after accept roomID=$roomID');
       unawaited(onTapHangup(info..userID = OpenIM.iMManager.userID, 0, true));
       return;
     }
@@ -1935,7 +1995,13 @@ mixin OpenIMLive {
     _activeCallSignaling = null;
     _beCalledEvent = null;
     _autoPickup = false;
+    _acceptJoinInFlight = null;
+    _acceptJoinRoomID = null;
     _clearPickupCache();
+    _cancelRingTimeout();
+    _ringTimeoutExtended = false;
+    _suppressCallKitEnded(roomID, duration: const Duration(seconds: 2));
+    CallAudioDebugLog.add('hangup', 'local roomID=$roomID positive=$isPositive');
     if (isPositive) {
       final data = {
         'customType': CustomMessageType.callingHungup,
