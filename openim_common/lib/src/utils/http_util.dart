@@ -5,7 +5,7 @@ import 'dart:ui';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_easyloading/flutter_easyloading.dart';
-import 'package:get/get.dart' hide FormData, MultipartFile;
+import 'package:get/get.dart' hide FormData, MultipartFile, Response;
 import 'package:image_gallery_saver_plus/image_gallery_saver_plus.dart';
 import 'package:openim_common/openim_common.dart';
 import 'package:talker_dio_logger/talker_dio_logger.dart';
