@@ -228,14 +228,32 @@ class _SingleRoomViewState extends SignalState<SingleRoomView> {
 
   Future<void> _applySpeakerRoute() async {
     final speakerOn = enabledSpeaker;
+    final local = _room?.localParticipant;
+    final wasMic = local?.isMicrophoneEnabled() == true;
     try {
+      if (wasMic) {
+        try {
+          await local?.setMicrophoneEnabled(false);
+        } catch (_) {}
+      }
       if (Platform.isIOS) {
         await IosWebRtcAudio.setSpeakerRoute(speakerOn);
       }
       await Hardware.instance.setSpeakerphoneOn(speakerOn);
       await _room?.setSpeakerOn(speakerOn);
+      if (wasMic && OpenIMLiveClient().userMicPreference != false) {
+        await Future<void>.delayed(
+          Duration(milliseconds: speakerOn ? 350 : 180),
+        );
+        await local?.setMicrophoneEnabled(true);
+      }
     } catch (error, stackTrace) {
       Logger.print('could not set speaker: $error $stackTrace');
+      if (wasMic && OpenIMLiveClient().userMicPreference != false) {
+        try {
+          await local?.setMicrophoneEnabled(true);
+        } catch (_) {}
+      }
     }
   }
 

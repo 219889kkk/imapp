@@ -248,7 +248,8 @@ mixin OpenIMLive {
     if (!Platform.isIOS) return;
     final id = roomID?.trim() ?? '';
     if (id.isEmpty) return;
-    _suppressCallKitEnded(id);
+    // Prefer keeping a longer accept suppress if already armed.
+    _suppressCallKitEnded(id, duration: const Duration(seconds: 45));
     await VoipCallkitController.toOrNull?.endCall(id);
   }
 
@@ -635,7 +636,7 @@ mixin OpenIMLive {
     CallAudioDebugLog.add(
         'callkit', 'didActivate — re-arm media (no setConnected storm)');
     // Subscribe remotes / unmute only if off — never setConnected here.
-    unawaited(client.kickstartIosCallKitMedia(speakerOn: isVideo));
+    unawaited(client.kickstartIosCallKitMedia(speakerOn: OpenIMLiveClient().userSpeakerPreference));
   }
 
   /// CallKit dropped AVAudioSession mid-call — take over so LiveKit can keep audio.
@@ -663,10 +664,10 @@ mixin OpenIMLive {
     );
     CallAudioKeepAlive.instance.releaseCallKitSession();
     unawaited(() async {
-      await IosWebRtcAudio.enable(speakerOn: isVideo);
+      await IosWebRtcAudio.enable(speakerOn: OpenIMLiveClient().userSpeakerPreference);
       // Session handoff only — do not force mic cycle (was causing mute flicker).
       if (!client.isMediaConnecting && client.mediaRoom != null) {
-        await client.onCallActive(speakerOn: isVideo, unmuteMic: false);
+        await client.onCallActive(speakerOn: OpenIMLiveClient().userSpeakerPreference, unmuteMic: false);
       }
     }());
   }
@@ -984,14 +985,14 @@ mixin OpenIMLive {
     );
     if (owns && !_iosCallKitDidActivateNative) {
       CallAudioKeepAlive.instance.releaseCallKitSession();
-      await IosWebRtcAudio.enable(speakerOn: isVideo);
+      await IosWebRtcAudio.enable(speakerOn: OpenIMLiveClient().userSpeakerPreference);
       CallAudioDebugLog.add('fg', 'took over audio after CallKit deactivate');
     }
     if (client.isMediaConnecting) {
       CallAudioDebugLog.add('fg', 'skip audio restore — connect in flight');
       return;
     }
-    await client.onCallActive(speakerOn: isVideo, unmuteMic: true);
+    await client.onCallActive(speakerOn: OpenIMLiveClient().userSpeakerPreference, unmuteMic: true);
     // Do NOT promoteCallingUi here — that was starting caller timer before answer.
   }
 
@@ -1016,16 +1017,16 @@ mixin OpenIMLive {
     );
     if (owns && !_iosCallKitDidActivateNative) {
       CallAudioKeepAlive.instance.releaseCallKitSession();
-      await IosWebRtcAudio.enable(speakerOn: isVideo);
+      await IosWebRtcAudio.enable(speakerOn: OpenIMLiveClient().userSpeakerPreference);
       CallAudioDebugLog.add('fg', 'took over audio after CallKit deactivate');
     } else if (!owns && !_iosCallKitDidActivateNative) {
-      await CallAudioKeepAlive.instance.prepareForRtc(speakerOn: isVideo);
+      await CallAudioKeepAlive.instance.prepareForRtc(speakerOn: OpenIMLiveClient().userSpeakerPreference);
     }
     if (client.isMediaConnecting) {
       CallAudioDebugLog.add('fg', 'skip audio restore — connect in flight');
       return;
     }
-    await client.onCallActive(speakerOn: isVideo, unmuteMic: true);
+    await client.onCallActive(speakerOn: OpenIMLiveClient().userSpeakerPreference, unmuteMic: true);
   }
 
   Future<void> _acceptIncomingCall(
@@ -1102,7 +1103,7 @@ mixin OpenIMLive {
 
     // Lock-screen: join LiveKit only after CallKit activates WebRTC audio.
     if (isCallKitAccept) {
-      await _waitForIosCallKitAudio(speakerOn: isVideo);
+      await _waitForIosCallKitAudio(speakerOn: OpenIMLiveClient().userSpeakerPreference);
     }
 
     final micGranted = !isCallKitAccept || !_pendingHeadlessMicPermission;
@@ -1115,7 +1116,7 @@ mixin OpenIMLive {
       await CallAudioKeepAlive.instance.start(
         roomID: roomID,
         isVideo: isVideo,
-        speakerOn: isVideo,
+        speakerOn: OpenIMLiveClient().userSpeakerPreference,
         skipSessionActivation: isCallKitAccept,
       );
     }
@@ -1125,7 +1126,7 @@ mixin OpenIMLive {
     Future<void> joinOnce() => OpenIMLiveClient().connectMedia(
           certificate: workingCert,
           callType: callType,
-          speakerOn: isVideo,
+          speakerOn: OpenIMLiveClient().userSpeakerPreference,
           enableCamera: false,
           enableMicrophone: micGranted,
           enableKeepAlive: true,
@@ -1223,7 +1224,7 @@ mixin OpenIMLive {
     _markRoomAnswered(roomID);
     // One unmute/subscribe path after join — no second kickstart (mic flicker).
     await OpenIMLiveClient().onCallActive(
-      speakerOn: isVideo,
+      speakerOn: OpenIMLiveClient().userSpeakerPreference,
       unmuteMic: micGranted,
     );
     if (isVideo && micGranted) {
@@ -1232,7 +1233,7 @@ mixin OpenIMLive {
     if (isCallKitAccept) {
       await Future<void>.delayed(const Duration(milliseconds: 200));
       await OpenIMLiveClient().kickstartIosCallKitMedia(
-        speakerOn: isVideo,
+        speakerOn: OpenIMLiveClient().userSpeakerPreference,
         unmuteMic: false, // already handled by onCallActive
       );
     }
@@ -1373,7 +1374,7 @@ mixin OpenIMLive {
                 Future.value());
         final isVideo = signaling.invitation?.mediaType == 'video';
         unawaited(OpenIMLiveClient().onCallActive(
-          speakerOn: isVideo,
+          speakerOn: OpenIMLiveClient().userSpeakerPreference,
           unmuteMic: true,
         ));
         signalingSubject.add(CallEvent(CallState.calling, signaling));
@@ -1407,7 +1408,7 @@ mixin OpenIMLive {
       // Waiting dial keeps mic off — clear preference so answer can unmute.
       client.setUserMicPreference(true);
       unawaited(client.onCallActive(
-        speakerOn: isVideo,
+        speakerOn: OpenIMLiveClient().userSpeakerPreference,
         unmuteMic: true,
       ));
     }
@@ -1880,7 +1881,7 @@ mixin OpenIMLive {
     if (client.mediaRoom?.localParticipant != null) {
       Logger.print('onError ignored: media already connected');
       unawaited(client.ensureMediaAudible(
-        speakerOn: client.mediaCallType == CallType.video,
+        speakerOn: client.userSpeakerPreference,
       ));
       return;
     }

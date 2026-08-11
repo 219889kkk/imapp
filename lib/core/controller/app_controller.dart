@@ -654,7 +654,7 @@ class AppController extends GetxController
   void removeBadge() {
     unawaited(_clearLocalIconBadge());
     // OpenIM SetAppBadge crashes / asserts when not logged in — never call then.
-    if (OpenIM.iMManager.isLogined) {
+    if (_imLoggedIn) {
       unawaited(
         OpenIM.iMManager.messageManager.setAppBadge(0).catchError((_) {}),
       );

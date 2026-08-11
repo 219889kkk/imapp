@@ -143,12 +143,7 @@ import flutter_callkit_incoming
         // Do NOT setActive here — CallKit owns activation (didActivateAudioSession).
         let session = AVAudioSession.sharedInstance()
         do {
-            try session.setCategory(
-                .playAndRecord,
-                mode: .voiceChat,
-                options: [.allowBluetooth, .allowBluetoothA2DP]
-            )
-            try configureLowLatencyAudio(session)
+            try applyVoipAudioSession(session, preferSpeaker: false, activate: false)
             emitAudioDebug("CallKit onAccept category configured room=\(call.data.uuid)")
         } catch {
             emitAudioDebug("CallKit onAccept category failed \(error.localizedDescription)")
@@ -156,24 +151,41 @@ import flutter_callkit_incoming
         action.fulfill()
     }
 
-    /// Prefer 48 kHz / 5 ms buffers — closer to Opus framing, less mouth-to-ear delay.
-    private func configureLowLatencyAudio(_ session: AVAudioSession) throws {
+    /// VoIP audio: voiceChat + HFP bluetooth only (no A2DP — A2DP kills hardware AEC).
+    /// Speaker uses ~20ms IO buffer so echo cancellation can converge; earpiece can be tighter.
+    private func applyVoipAudioSession(
+        _ session: AVAudioSession,
+        preferSpeaker: Bool,
+        activate: Bool
+    ) throws {
+        var options: AVAudioSession.CategoryOptions = [.allowBluetooth]
+        if preferSpeaker {
+            options.insert(.defaultToSpeaker)
+        }
+        try session.setCategory(.playAndRecord, mode: .voiceChat, options: options)
         try session.setPreferredSampleRate(48000)
-        try session.setPreferredIOBufferDuration(0.005)
+        // 5ms was too aggressive with speaker and caused howling; 20ms stabilizes AEC.
+        try session.setPreferredIOBufferDuration(preferSpeaker ? 0.02 : 0.01)
+        if activate {
+            try session.setActive(true, options: [])
+        }
+        try session.overrideOutputAudioPort(preferSpeaker ? .speaker : .none)
     }
 
-    /// Switch earpiece ↔ speaker while keeping voiceChat (AEC). Used under CallKit too.
+    /// Switch earpiece ↔ speaker while keeping voiceChat AEC. Sync RTCAudioSession.
     private func setSpeakerRoute(preferSpeaker: Bool, result: @escaping FlutterResult) {
         let session = AVAudioSession.sharedInstance()
+        let rtc = RTCAudioSession.sharedInstance()
+        rtc.lockForConfiguration()
+        defer { rtc.unlockForConfiguration() }
         do {
-            var options: AVAudioSession.CategoryOptions = [.allowBluetooth, .allowBluetoothA2DP]
-            if preferSpeaker {
-                options.insert(.defaultToSpeaker)
+            try applyVoipAudioSession(session, preferSpeaker: preferSpeaker, activate: false)
+            // Keep WebRTC's view of the session in sync after route flips.
+            if rtc.isActive {
+                rtc.audioSessionDidActivate(session)
             }
-            try session.setCategory(.playAndRecord, mode: .voiceChat, options: options)
-            try configureLowLatencyAudio(session)
-            try session.overrideOutputAudioPort(preferSpeaker ? .speaker : .none)
-            emitAudioDebug("setSpeakerRoute speaker=\(preferSpeaker)")
+            rtc.isAudioEnabled = true
+            emitAudioDebug("setSpeakerRoute speaker=\(preferSpeaker) mode=voiceChat aec=on")
             result(true)
         } catch {
             emitAudioDebug("setSpeakerRoute failed \(error.localizedDescription)")
@@ -212,21 +224,17 @@ import flutter_callkit_incoming
     }
 
     func didActivateAudioSession(_ audioSession: AVAudioSession) {
-        // Configure the system session CallKit just activated (do not use String rawValues
-        // on RTCAudioSession — current WebRTC Swift API expects Category/Mode types).
+        // Keep voiceChat (hardware AEC). Do not add A2DP — it breaks echo cancellation.
         do {
-            try audioSession.setCategory(
-                .playAndRecord,
-                mode: .voiceChat,
-                options: [.allowBluetooth, .allowBluetoothA2DP]
-            )
-            try configureLowLatencyAudio(audioSession)
+            try applyVoipAudioSession(audioSession, preferSpeaker: false, activate: false)
         } catch {
             emitAudioDebug("CallKit didActivate category failed \(error.localizedDescription)")
         }
         let rtc = RTCAudioSession.sharedInstance()
+        rtc.lockForConfiguration()
         rtc.audioSessionDidActivate(audioSession)
         rtc.isAudioEnabled = true
+        rtc.unlockForConfiguration()
         emitAudioDebug("CallKit audio session activated isAudioEnabled=true")
         DispatchQueue.main.async {
             self.voipChannel?.invokeMethod("onCallKitAudioActivated", arguments: nil)
@@ -247,17 +255,13 @@ import flutter_callkit_incoming
 
     private func enableWebRtcAudio(preferSpeaker: Bool, result: @escaping FlutterResult) {
         let session = AVAudioSession.sharedInstance()
+        let rtc = RTCAudioSession.sharedInstance()
+        rtc.lockForConfiguration()
+        defer { rtc.unlockForConfiguration() }
         do {
-            var options: AVAudioSession.CategoryOptions = [.allowBluetooth, .allowBluetoothA2DP]
-            if preferSpeaker {
-                options.insert(.defaultToSpeaker)
-            }
-            try session.setCategory(.playAndRecord, mode: .voiceChat, options: options)
-            try configureLowLatencyAudio(session)
-            try session.setActive(true)
-            try session.overrideOutputAudioPort(preferSpeaker ? .speaker : .none)
-            RTCAudioSession.sharedInstance().audioSessionDidActivate(session)
-            RTCAudioSession.sharedInstance().isAudioEnabled = true
+            try applyVoipAudioSession(session, preferSpeaker: preferSpeaker, activate: true)
+            rtc.audioSessionDidActivate(session)
+            rtc.isAudioEnabled = true
             emitAudioDebug("in-app audio enabled speaker=\(preferSpeaker)")
             result(true)
         } catch {
@@ -268,8 +272,11 @@ import flutter_callkit_incoming
 
     private func disableWebRtcAudio(result: @escaping FlutterResult) {
         let session = AVAudioSession.sharedInstance()
-        RTCAudioSession.sharedInstance().audioSessionDidDeactivate(session)
-        RTCAudioSession.sharedInstance().isAudioEnabled = false
+        let rtc = RTCAudioSession.sharedInstance()
+        rtc.lockForConfiguration()
+        rtc.audioSessionDidDeactivate(session)
+        rtc.isAudioEnabled = false
+        rtc.unlockForConfiguration()
         emitAudioDebug("in-app audio disabled")
         result(true)
     }
@@ -277,17 +284,14 @@ import flutter_callkit_incoming
     /// CallKit already activated AVAudioSession — bridge WebRTC without setActive.
     private func bridgeCallKitWebRtcAudio(result: @escaping FlutterResult) {
         let session = AVAudioSession.sharedInstance()
+        let rtc = RTCAudioSession.sharedInstance()
+        rtc.lockForConfiguration()
+        defer { rtc.unlockForConfiguration() }
         do {
-            try session.setCategory(
-                .playAndRecord,
-                mode: .voiceChat,
-                options: [.allowBluetooth, .allowBluetoothA2DP]
-            )
-            try configureLowLatencyAudio(session)
+            try applyVoipAudioSession(session, preferSpeaker: false, activate: false)
         } catch {
             emitAudioDebug("CallKit bridge category failed \(error.localizedDescription)")
         }
-        let rtc = RTCAudioSession.sharedInstance()
         rtc.audioSessionDidActivate(session)
         rtc.isAudioEnabled = true
         emitAudioDebug("CallKit bridge (no setActive) isAudioEnabled=true")

@@ -84,8 +84,10 @@ abstract class SignalState<T extends SignalView> extends State<T>
   void initState() {
     roomID ??= widget.roomID;
     callState = widget.initState;
-    // Audio: earpiece by default; video: speaker for preview.
-    enabledSpeaker = widget.callType == CallType.video;
+    // Default earpiece for both — speaker-on-by-default howls when AEC is cold.
+    // User can tap speaker; video still allows speaker after AEC is up.
+    enabledSpeaker = false;
+    OpenIMLiveClient().setUserSpeakerPreference(false);
     OpenIMLiveClient().setPromoteCallingUiHandler(_applyCallingUi);
     callEventSub = widget.callEventSubject.stream.listen(_onStateDidUpdate);
     widget.onSyncUserInfo?.call(widget.userID).then(_onUpdateUserInfo);

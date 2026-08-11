@@ -254,7 +254,7 @@ class _ControlsViewState extends State<ControlsView> with WidgetsBindingObserver
     final local = _participant;
     final wasMic = local?.isMicrophoneEnabled() == true;
     try {
-      // Mute briefly across route change — avoids lock-screen speaker howl burst.
+      // Mute mic longer while AEC re-converges on speaker — prevents howl burst.
       if (wasMic) {
         try {
           await local?.setMicrophoneEnabled(false);
@@ -268,8 +268,8 @@ class _ControlsViewState extends State<ControlsView> with WidgetsBindingObserver
       if (gen != _speakerApplyGen) return;
       await _room?.setSpeakerOn(on);
       if (gen != _speakerApplyGen) return;
-      // iOS/CallKit sometimes snaps route back — reinforce once.
-      await Future<void>.delayed(const Duration(milliseconds: 150));
+      // Give voiceChat AEC time to adapt before opening the mic again.
+      await Future<void>.delayed(Duration(milliseconds: on ? 350 : 180));
       if (gen != _speakerApplyGen || !mounted) return;
       if (_enabledSpeaker != on) return;
       if (Platform.isIOS) {
@@ -278,6 +278,8 @@ class _ControlsViewState extends State<ControlsView> with WidgetsBindingObserver
       await Hardware.instance.setSpeakerphoneOn(on);
       await _room?.setSpeakerOn(on);
       if (wasMic && OpenIMLiveClient().userMicPreference != false) {
+        await Future<void>.delayed(const Duration(milliseconds: 80));
+        if (gen != _speakerApplyGen || !mounted) return;
         await local?.setMicrophoneEnabled(true);
       }
     } catch (e, s) {

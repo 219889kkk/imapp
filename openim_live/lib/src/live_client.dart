@@ -110,6 +110,9 @@ class OpenIMLiveClient implements RTCBridge {
     _userSpeakerPreference = on;
   }
 
+  /// Explicit user tap only — never infer speaker from video (AEC howls when cold).
+  bool get userSpeakerPreference => _userSpeakerPreference == true;
+
   bool get hasOverlay => _holder != null;
 
   bool hasMediaFor(String? roomID) {
@@ -625,9 +628,7 @@ class OpenIMLiveClient implements RTCBridge {
   Future<void> _doCallActive({bool? speakerOn, bool unmuteMic = true}) async {
     final room = _mediaRoom;
     if (room == null) return;
-    final on = speakerOn ??
-        _userSpeakerPreference ??
-        (_mediaCallType == CallType.video);
+    final on = speakerOn ?? _userSpeakerPreference ?? false;
     final roomID = currentRoomID;
     final callType = _mediaCallType ?? CallType.audio;
     if (roomID != null && roomID.isNotEmpty) {
@@ -663,9 +664,7 @@ class OpenIMLiveClient implements RTCBridge {
   Future<void> ensureMediaAudible({bool? speakerOn}) async {
     final room = _mediaRoom;
     if (room == null) return;
-    final on = speakerOn ??
-        _userSpeakerPreference ??
-        (_mediaCallType == CallType.video);
+    final on = speakerOn ?? _userSpeakerPreference ?? false;
     try {
       await CallAudioKeepAlive.instance.prepareForRtc(speakerOn: on);
       if (Platform.isIOS) {
@@ -811,16 +810,14 @@ class OpenIMLiveClient implements RTCBridge {
             liveURL,
             token,
             roomOptions: _roomOptionsForCall(
-              speakerOn: _userSpeakerPreference ??
-                  (_mediaCallType == CallType.video),
+              speakerOn: _userSpeakerPreference ?? false,
             ),
           );
           final micOn = (_userMicPreference ?? true) &&
               (_peerAcceptedForUi || room.remoteParticipants.isNotEmpty);
           await _ensurePublished(
             callType: _mediaCallType ?? CallType.audio,
-            speakerOn: _userSpeakerPreference ??
-                (_mediaCallType == CallType.video),
+            speakerOn: _userSpeakerPreference ?? false,
             enableCamera: _mediaCallType == CallType.video && micOn,
             enableMicrophone: micOn,
           );
