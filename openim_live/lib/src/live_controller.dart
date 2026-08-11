@@ -2032,17 +2032,31 @@ mixin OpenIMLive {
       throw StateError('dial aborted after invite: room cancelled $roomID');
     }
     final isVideo = invitation.mediaType == 'video';
-    OpenIM.iMManager.messageManager.sendMessage(
-      message: message,
-      offlinePushInfo:
-          Config.offlineCallPushInfo(isVideo: isVideo, invitation: invitation),
-      userID: invitation.inviteeUserIDList!.first,
-      // Keep WS delivery when online; also allow offline push when away.
-      isOnlineOnly: false,
-    );
-    // iOS CallKit: after invite(200), ask chat server to fire APNs VoIP.
-    if (!_isRoomEnded(roomID)) {
-      unawaited(_triggerVoipPush(signaling, action: 'invite'));
+    // Await invite IM + VoIP so a quick cancel cannot outrun a late invite push
+    // (home/lock CallKit zombie ring).
+    try {
+      await OpenIM.iMManager.messageManager.sendMessage(
+        message: message,
+        offlinePushInfo:
+            Config.offlineCallPushInfo(isVideo: isVideo, invitation: invitation),
+        userID: invitation.inviteeUserIDList!.first,
+        isOnlineOnly: false,
+      );
+    } catch (e, s) {
+      Logger.print('dial invite IM failed: $e $s');
+      rethrow;
+    }
+    if (_isRoomEnded(roomID)) {
+      throw StateError('dial aborted after invite send: room cancelled $roomID');
+    }
+    try {
+      await _triggerVoipPush(signaling, action: 'invite');
+    } catch (e, s) {
+      Logger.print('dial invite VoIP failed: $e $s');
+      // Continue — IM invite may still ring in-app; cancel path still works.
+    }
+    if (_isRoomEnded(roomID)) {
+      throw StateError('dial aborted after invite voip: room cancelled $roomID');
     }
     try {
       final certificate = await Apis.getTokenForRTC(
@@ -2070,17 +2084,25 @@ mixin OpenIMLive {
     final isVideo = signaling.invitation!.mediaType == 'video';
     final invitation = signaling.invitation!;
     for (final userID in invitation.inviteeUserIDList!) {
-      OpenIM.iMManager.messageManager.sendMessage(
-        message: message,
-        offlinePushInfo:
-            Config.offlineCallPushInfo(isVideo: isVideo, invitation: invitation),
-        userID: userID,
-        isOnlineOnly: false,
-      );
+      try {
+        await OpenIM.iMManager.messageManager.sendMessage(
+          message: message,
+          offlinePushInfo: Config.offlineCallPushInfo(
+              isVideo: isVideo, invitation: invitation),
+          userID: userID,
+          isOnlineOnly: false,
+        );
+      } catch (e, s) {
+        Logger.print('dial group invite IM failed user=$userID: $e $s');
+      }
     }
     final roomID = invitation.roomID;
     if (roomID != null && !_isRoomEnded(roomID)) {
-      unawaited(_triggerVoipPush(signaling, action: 'invite'));
+      try {
+        await _triggerVoipPush(signaling, action: 'invite');
+      } catch (e, s) {
+        Logger.print('dial group invite VoIP failed: $e $s');
+      }
     }
     final certificate = await Apis.getTokenForRTC(
       invitation.roomID!,
@@ -2196,14 +2218,18 @@ mixin OpenIMLive {
         offlinePushInfo: OfflinePushInfo(),
         userID: signaling.invitation!.inviterUserID,
         isOnlineOnly: false);
-    // VoIP push so caller cancels 30/60s ring timeout even if IM is slow.
+    // VoIP push so caller cancels ring timeout even if IM is slow.
     final inviter = signaling.invitation!.inviterUserID?.trim() ?? '';
     if (inviter.isNotEmpty) {
-      unawaited(_triggerVoipPush(
-        signaling,
-        action: 'accept',
-        toUserIDs: [inviter],
-      ));
+      try {
+        await _triggerVoipPush(
+          signaling,
+          action: 'accept',
+          toUserIDs: [inviter],
+        );
+      } catch (e, s) {
+        Logger.print('accept VoIP push failed: $e $s');
+      }
     }
     final certificate = await Apis.getTokenForRTC(
         signaling.invitation!.roomID!, OpenIM.iMManager.userID);
@@ -2253,22 +2279,30 @@ mixin OpenIMLive {
           offlinePushInfo: OfflinePushInfo(),
           userID: recvUserID,
           isOnlineOnly: false);
-      unawaited(_triggerVoipPush(
-        resolved,
-        action: 'reject',
-        toUserIDs: [recvUserID],
-      ));
+      try {
+        await _triggerVoipPush(
+          resolved,
+          action: 'reject',
+          toUserIDs: [recvUserID],
+        );
+      } catch (e, s) {
+        Logger.print('reject VoIP push failed: $e $s');
+      }
       unawaited(
           VoipCallkitController.toOrNull?.endCall(roomID) ?? Future.value());
       return result;
     } catch (e, s) {
       Logger.print('onTapReject send failed: $e $s');
       // Still try VoIP so caller can leave "请求中".
-      unawaited(_triggerVoipPush(
-        resolved,
-        action: 'reject',
-        toUserIDs: [recvUserID],
-      ));
+      try {
+        await _triggerVoipPush(
+          resolved,
+          action: 'reject',
+          toUserIDs: [recvUserID],
+        );
+      } catch (e2, s2) {
+        Logger.print('reject VoIP fallback failed: $e2 $s2');
+      }
       unawaited(
           VoipCallkitController.toOrNull?.endCall(roomID) ?? Future.value());
       return null;
@@ -2330,6 +2364,7 @@ mixin OpenIMLive {
   }
 
   onTimeoutCancelled(SignalingInfo signaling) async {
+    _markRoomEnded(signaling.invitation?.roomID);
     final data = {
       'customType': CustomMessageType.callingCancel,
       'data': signaling.invitation!.toJson()

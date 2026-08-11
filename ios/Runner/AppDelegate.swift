@@ -390,9 +390,10 @@ import flutter_callkit_incoming
         ])
         let plugin = SwiftFlutterCallkitIncomingPlugin.sharedInstance
         plugin?.endCall(endData)
-        // If roomID mismatched CallKit UUID, still clear zombie rings.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-            plugin?.endAllCalls()
+        // Retry same id only — endAllCalls would kill a brand-new invite
+        // that arrives within a few hundred ms of cancel.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+            plugin?.endCall(endData)
         }
     }
 
