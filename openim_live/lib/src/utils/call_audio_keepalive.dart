@@ -179,9 +179,9 @@ class CallAudioKeepAlive with WidgetsBindingObserver {
   Future<void> _activateCallSession({bool preferSpeaker = false}) async {
     try {
       final session = await AudioSession.instance;
+      // Do NOT mixWithOthers — it weakens AEC and causes speaker howling/echo.
       var options = AVAudioSessionCategoryOptions.allowBluetooth |
-          AVAudioSessionCategoryOptions.allowBluetoothA2dp |
-          AVAudioSessionCategoryOptions.mixWithOthers;
+          AVAudioSessionCategoryOptions.allowBluetoothA2dp;
       if (preferSpeaker) {
         options = options | AVAudioSessionCategoryOptions.defaultToSpeaker;
       }

@@ -61,4 +61,16 @@ class IosWebRtcAudio {
       CallAudioDebugLog.add('webrtc', 'bridgeCallKitSession failed: $e');
     }
   }
+
+  /// Earpiece ↔ speaker with voiceChat AEC (works under CallKit ownership).
+  static Future<void> setSpeakerRoute(bool speakerOn) async {
+    if (!Platform.isIOS) return;
+    try {
+      await _channel.invokeMethod('setSpeakerRoute', {'speakerOn': speakerOn});
+      CallAudioDebugLog.add('webrtc', 'setSpeakerRoute speaker=$speakerOn ok');
+    } catch (e, s) {
+      Logger.print('IosWebRtcAudio setSpeakerRoute failed: $e $s');
+      CallAudioDebugLog.add('webrtc', 'setSpeakerRoute failed: $e');
+    }
+  }
 }

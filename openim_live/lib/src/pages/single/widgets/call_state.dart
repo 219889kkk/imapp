@@ -74,7 +74,8 @@ abstract class SignalState<T extends SignalView> extends State<T>
   bool minimize = false;
   int duration = 0;
   bool enabledMicrophone = true;
-  bool enabledSpeaker = true;
+  /// Default earpiece; video overrides to speaker in [initState].
+  bool enabledSpeaker = false;
 
   ParticipantTrack? remoteParticipantTrack;
   ParticipantTrack? localParticipantTrack;
@@ -147,16 +148,26 @@ abstract class SignalState<T extends SignalView> extends State<T>
       widget.onStartCalling?.call();
       if (mounted) setState(() {});
     }
+    // Peer answered — unmute unless user explicitly muted.
+    if (OpenIMLiveClient().userMicPreference != false) {
+      enabledMicrophone = true;
+      OpenIMLiveClient().setUserMicPreference(true);
+    }
     unawaited(_restoreCallAudio());
   }
 
   Future<void> _restoreCallAudio() async {
     final client = OpenIMLiveClient();
     if (!client.isBusy || client.mediaRoom == null) return;
+    final unmute = client.userMicPreference != false &&
+        (enabledMicrophone ||
+            client.peerAcceptedForUi ||
+            callState == CallState.calling);
+    if (unmute) enabledMicrophone = true;
     // Single safe path — never force mic off/on (kickstart used to flicker).
     await client.onCallActive(
       speakerOn: enabledSpeaker,
-      unmuteMic: enabledMicrophone,
+      unmuteMic: unmute,
     );
   }
 

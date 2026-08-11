@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:collection/collection.dart';
 import 'package:flutter/material.dart';
@@ -250,19 +251,42 @@ class _ControlsViewState extends State<ControlsView> with WidgetsBindingObserver
 
   Future<void> _applySpeakerRoute(bool on) async {
     final gen = ++_speakerApplyGen;
+    final local = _participant;
+    final wasMic = local?.isMicrophoneEnabled() == true;
     try {
+      // Mute briefly across route change — avoids lock-screen speaker howl burst.
+      if (wasMic) {
+        try {
+          await local?.setMicrophoneEnabled(false);
+        } catch (_) {}
+      }
+      if (Platform.isIOS) {
+        await IosWebRtcAudio.setSpeakerRoute(on);
+      }
+      if (gen != _speakerApplyGen) return;
       await Hardware.instance.setSpeakerphoneOn(on);
       if (gen != _speakerApplyGen) return;
       await _room?.setSpeakerOn(on);
       if (gen != _speakerApplyGen) return;
       // iOS/CallKit sometimes snaps route back — reinforce once.
-      await Future<void>.delayed(const Duration(milliseconds: 120));
+      await Future<void>.delayed(const Duration(milliseconds: 150));
       if (gen != _speakerApplyGen || !mounted) return;
       if (_enabledSpeaker != on) return;
+      if (Platform.isIOS) {
+        await IosWebRtcAudio.setSpeakerRoute(on);
+      }
       await Hardware.instance.setSpeakerphoneOn(on);
       await _room?.setSpeakerOn(on);
+      if (wasMic && OpenIMLiveClient().userMicPreference != false) {
+        await local?.setMicrophoneEnabled(true);
+      }
     } catch (e, s) {
       Logger.print('apply speaker failed: $e $s');
+      if (wasMic && OpenIMLiveClient().userMicPreference != false) {
+        try {
+          await local?.setMicrophoneEnabled(true);
+        } catch (_) {}
+      }
     }
   }
 

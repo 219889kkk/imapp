@@ -159,6 +159,23 @@ class OpenIMLiveClient implements RTCBridge {
     _userMicPreference = enabled;
   }
 
+  /// null = no explicit user mute; false = user muted.
+  bool? get userMicPreference => _userMicPreference;
+
+  /// Publish camera after audio is up (faster video answer / less connect stall).
+  Future<void> enableCameraWhenReady() async {
+    final room = _mediaRoom;
+    final local = room?.localParticipant;
+    if (local == null || _mediaCallType != CallType.video) return;
+    try {
+      if (local.isCameraEnabled() == true) return;
+      await local.setCameraEnabled(true);
+      CallAudioDebugLog.add('livekit', 'camera enabled after audio-ready');
+    } catch (e, s) {
+      Logger.print('enableCameraWhenReady failed: $e $s');
+    }
+  }
+
   /// Mark peer answered (caller). Separate from UI promote so FG audio restore
   /// cannot accidentally start the call timer while still ringing.
   void markPeerAcceptedForUi() {
@@ -243,9 +260,9 @@ class OpenIMLiveClient implements RTCBridge {
         audioBitrate: AudioPreset.speech,
       ),
       defaultAudioOutputOptions: AudioOutputOptions(speakerOn: speakerOn),
-      // 540p + simulcast: less video queue contention with audio on weak links.
+      // 360p first publish — faster video connect on cellular; upgrade via adaptive.
       defaultCameraCaptureOptions: const CameraCaptureOptions(
-        params: VideoParametersPresets.h540_169,
+        params: VideoParametersPresets.h360_169,
       ),
       defaultVideoPublishOptions: const VideoPublishOptions(
         simulcast: true,
@@ -618,6 +635,9 @@ class OpenIMLiveClient implements RTCBridge {
     }
     try {
       await CallAudioKeepAlive.instance.prepareForRtc(speakerOn: on);
+      if (Platform.isIOS) {
+        await IosWebRtcAudio.setSpeakerRoute(on);
+      }
       await Hardware.instance.setSpeakerphoneOn(on);
       await room.setSpeakerOn(on);
       if (unmuteMic && _userMicPreference != false) {
@@ -648,10 +668,15 @@ class OpenIMLiveClient implements RTCBridge {
         (_mediaCallType == CallType.video);
     try {
       await CallAudioKeepAlive.instance.prepareForRtc(speakerOn: on);
+      if (Platform.isIOS) {
+        await IosWebRtcAudio.setSpeakerRoute(on);
+      }
       await Hardware.instance.setSpeakerphoneOn(on);
       await room.setSpeakerOn(on);
       final local = room.localParticipant;
-      if (local != null && local.isMicrophoneEnabled() != true) {
+      if (local != null &&
+          local.isMicrophoneEnabled() != true &&
+          _userMicPreference != false) {
         await local.setMicrophoneEnabled(true);
       }
       await _subscribeRemoteTracks();
@@ -908,6 +933,9 @@ class OpenIMLiveClient implements RTCBridge {
     final room = _mediaRoom;
     if (room == null) return;
     try {
+      if (Platform.isIOS) {
+        await IosWebRtcAudio.setSpeakerRoute(speakerOn);
+      }
       await Hardware.instance.setSpeakerphoneOn(speakerOn);
       await room.setSpeakerOn(speakerOn);
     } catch (e, s) {

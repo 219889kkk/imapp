@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:collection/collection.dart';
 import 'package:livekit_client/livekit_client.dart';
@@ -139,12 +140,16 @@ class _SingleRoomViewState extends SignalState<SingleRoomView> {
 
     // Ensure tracks still published after unlock / in-app join.
     // If peer already joined (or we already left waiting state), unmute now.
+    if (!_deferMicrophone &&
+        OpenIMLiveClient().userMicPreference != false) {
+      enabledMicrophone = true;
+    }
     await _publish();
     _syncMicStateFromRoom();
     if (!_deferMicrophone) {
       await OpenIMLiveClient().onCallActive(
         speakerOn: enabledSpeaker,
-        unmuteMic: enabledMicrophone,
+        unmuteMic: OpenIMLiveClient().userMicPreference != false,
       );
       _syncMicStateFromRoom();
     } else {
@@ -170,8 +175,13 @@ class _SingleRoomViewState extends SignalState<SingleRoomView> {
   Future<void> _refreshCallAudio() async {
     final client = OpenIMLiveClient();
     if (!client.isBusy || _room == null) return;
-    final unmute = enabledMicrophone && !_deferMicrophone;
-    await client.onCallActive(speakerOn: enabledSpeaker, unmuteMic: unmute);
+    final wantMic = !_deferMicrophone &&
+        (client.userMicPreference ??
+            (enabledMicrophone ||
+                client.peerAcceptedForUi ||
+                callState == CallState.calling));
+    if (wantMic) enabledMicrophone = true;
+    await client.onCallActive(speakerOn: enabledSpeaker, unmuteMic: wantMic);
     if (!mounted) return;
     _syncMicStateFromRoom();
     if (!mounted) return;
@@ -194,8 +204,16 @@ class _SingleRoomViewState extends SignalState<SingleRoomView> {
   }
 
   void _syncMicStateFromRoom() {
+    // Waiting dial keeps track muted — never copy that into the UI preference
+    // or peer-accept unmute will immediately remute via _publish/_refreshCallAudio.
+    if (_deferMicrophone) return;
     final mic = _room?.localParticipant?.isMicrophoneEnabled();
     if (mic == null) return;
+    final pref = OpenIMLiveClient().userMicPreference;
+    // After answer, prefer user intent over a stale published-off track.
+    if (mic == false && pref != false && callState == CallState.calling) {
+      return;
+    }
     enabledMicrophone = mic;
   }
 
@@ -211,6 +229,9 @@ class _SingleRoomViewState extends SignalState<SingleRoomView> {
   Future<void> _applySpeakerRoute() async {
     final speakerOn = enabledSpeaker;
     try {
+      if (Platform.isIOS) {
+        await IosWebRtcAudio.setSpeakerRoute(speakerOn);
+      }
       await Hardware.instance.setSpeakerphoneOn(speakerOn);
       await _room?.setSpeakerOn(speakerOn);
     } catch (error, stackTrace) {
@@ -227,8 +248,11 @@ class _SingleRoomViewState extends SignalState<SingleRoomView> {
       Logger.print('could not publish video: $error $stackTrace');
     }
     try {
-      final micOn = enabledMicrophone && !_deferMicrophone;
-      await _room?.localParticipant?.setMicrophoneEnabled(micOn);
+      // Prefer explicit user mute; otherwise keep mic on once call is active.
+      final wantMic = !_deferMicrophone &&
+          (OpenIMLiveClient().userMicPreference ?? enabledMicrophone);
+      enabledMicrophone = wantMic;
+      await _room?.localParticipant?.setMicrophoneEnabled(wantMic);
     } catch (error, stackTrace) {
       Logger.print('could not publish audio: $error $stackTrace');
     }
@@ -243,6 +267,9 @@ class _SingleRoomViewState extends SignalState<SingleRoomView> {
       PackageBridge.markOutboundPeerPresent?.call(roomID ?? widget.roomID);
     }
     if (_deferMicrophone) {
+      // Clear deferred mute before promote → publish / restore audio.
+      OpenIMLiveClient().setUserMicPreference(true);
+      enabledMicrophone = true;
       promoteInCallUi(reason: 'remote-joined-livekit');
     }
     super.onParticipantConnected();

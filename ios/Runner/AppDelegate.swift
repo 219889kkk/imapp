@@ -48,6 +48,10 @@ import flutter_callkit_incoming
                 result(RTCAudioSession.sharedInstance().isAudioEnabled)
             case "bridgeCallKitWebRtcAudio":
                 self.bridgeCallKitWebRtcAudio(result: result)
+            case "setSpeakerRoute":
+                let args = call.arguments as? [String: Any]
+                let speaker = args?["speakerOn"] as? Bool ?? false
+                self.setSpeakerRoute(preferSpeaker: speaker, result: result)
             case "markRoomEnded":
                 let args = call.arguments as? [String: Any]
                 let roomID = (args?["roomID"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -114,6 +118,25 @@ import flutter_callkit_incoming
     private func configureLowLatencyAudio(_ session: AVAudioSession) throws {
         try session.setPreferredSampleRate(48000)
         try session.setPreferredIOBufferDuration(0.005)
+    }
+
+    /// Switch earpiece ↔ speaker while keeping voiceChat (AEC). Used under CallKit too.
+    private func setSpeakerRoute(preferSpeaker: Bool, result: @escaping FlutterResult) {
+        let session = AVAudioSession.sharedInstance()
+        do {
+            var options: AVAudioSession.CategoryOptions = [.allowBluetooth, .allowBluetoothA2DP]
+            if preferSpeaker {
+                options.insert(.defaultToSpeaker)
+            }
+            try session.setCategory(.playAndRecord, mode: .voiceChat, options: options)
+            try configureLowLatencyAudio(session)
+            try session.overrideOutputAudioPort(preferSpeaker ? .speaker : .none)
+            emitAudioDebug("setSpeakerRoute speaker=\(preferSpeaker)")
+            result(true)
+        } catch {
+            emitAudioDebug("setSpeakerRoute failed \(error.localizedDescription)")
+            result(FlutterError(code: "audio", message: error.localizedDescription, details: nil))
+        }
     }
 
     func onDecline(_ call: Call, _ action: CXEndCallAction) {
@@ -190,6 +213,7 @@ import flutter_callkit_incoming
             try session.setCategory(.playAndRecord, mode: .voiceChat, options: options)
             try configureLowLatencyAudio(session)
             try session.setActive(true)
+            try session.overrideOutputAudioPort(preferSpeaker ? .speaker : .none)
             RTCAudioSession.sharedInstance().audioSessionDidActivate(session)
             RTCAudioSession.sharedInstance().isAudioEnabled = true
             emitAudioDebug("in-app audio enabled speaker=\(preferSpeaker)")

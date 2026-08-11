@@ -491,8 +491,7 @@ mixin OpenIMLive {
     PackageBridge.clearCallNotification?.call();
     if (roomID.isNotEmpty) {
       _markRoomAnswered(roomID);
-      // Do NOT suppress CallKit ended here — user End within 2s must hang up.
-      // Programmatic dismiss uses _dismissCallKitIncoming → _suppressCallKitEnded.
+      // Spurious Ended during banner→active is ignored via acceptSent+joining check.
       // Do NOT setConnected here — wait until LiveKit join succeeds (avoids audio flap).
     }
     CallAudioDebugLog.add('callkit', 'accept join roomID=$roomID');
@@ -1096,11 +1095,12 @@ mixin OpenIMLive {
     }
 
     var workingCert = cert;
+    // Audio-first: camera after LiveKit connect so video pickup isn't blocked on capture.
     Future<void> joinOnce() => OpenIMLiveClient().connectMedia(
           certificate: workingCert,
           callType: callType,
           speakerOn: isVideo,
-          enableCamera: isVideo && micGranted,
+          enableCamera: false,
           enableMicrophone: micGranted,
           enableKeepAlive: true,
           skipSessionActivation: isCallKitAccept,
@@ -1200,6 +1200,9 @@ mixin OpenIMLive {
       speakerOn: isVideo,
       unmuteMic: micGranted,
     );
+    if (isVideo && micGranted) {
+      unawaited(OpenIMLiveClient().enableCameraWhenReady());
+    }
     if (isCallKitAccept) {
       await Future<void>.delayed(const Duration(milliseconds: 200));
       await OpenIMLiveClient().kickstartIosCallKitMedia(
@@ -1480,24 +1483,38 @@ mixin OpenIMLive {
       return;
     }
 
-    _beCalledEvent = null;
-    _autoPickup = false;
-
     final client = OpenIMLiveClient();
     final roomKey = roomID?.trim() ?? '';
     final inCall = client.hasMediaFor(roomID) ||
         client.mediaRoom?.localParticipant != null;
-    // Accept already sent / join in flight — must hungup (not reject) so caller stops.
+    // Check BEFORE clearing _autoPickup — banner Answer often fires Ended during join.
     final acceptSent = roomKey.isNotEmpty &&
         (_pickupCertRoomID == roomKey ||
             _acceptJoinRoomID == roomKey ||
             _callKitAcceptHandledRoomID == roomKey ||
+            _answeredRoomUntilMs.containsKey(roomKey) ||
             _isAcceptInProgressForRoom(roomKey));
+    final joining = _isAcceptInProgressForRoom(roomKey) ||
+        client.isMediaConnecting ||
+        (_acceptJoinInFlight != null &&
+            (_acceptJoinRoomID == null || _acceptJoinRoomID == roomKey));
 
     CallAudioDebugLog.add(
       'callkit',
-      'ended roomID=$roomKey inCall=$inCall acceptSent=$acceptSent',
+      'ended roomID=$roomKey inCall=$inCall acceptSent=$acceptSent joining=$joining',
     );
+
+    // CallKit banner→active transition fires spurious Ended. Never reject/abort join.
+    if (acceptSent && (joining || !inCall)) {
+      Logger.print(
+          'CallKit ended ignored — accept/join in progress roomID=$roomKey');
+      CallAudioDebugLog.add(
+          'callkit', 'ended ignored accept/join roomID=$roomKey');
+      return;
+    }
+
+    _beCalledEvent = null;
+    _autoPickup = false;
 
     // Invalidate in-flight join before hangup/reject.
     _acceptJoinInFlight = null;
@@ -1528,6 +1545,11 @@ mixin OpenIMLive {
       PackageBridge.clearCallNotification?.call();
       final signaling = _resolveIncomingSignaling(_beCalledEvent?.data) ??
           _activeCallSignaling;
+      final roomID = signaling?.invitation?.roomID?.trim() ?? '';
+      if (roomID.isNotEmpty) {
+        _callKitAcceptHandledRoomID = roomID;
+        _markRoomAnswered(roomID);
+      }
       _beCalledEvent = null;
       if (signaling != null) {
         unawaited(_acceptIncomingCall(signaling, requestPermissions: false));
@@ -1555,6 +1577,11 @@ mixin OpenIMLive {
         if (Platform.isIOS) _ensureIosCallKitAudioGate();
         final signaling = _resolveIncomingSignaling(_beCalledEvent?.data) ??
             _activeCallSignaling;
+        final roomID = signaling?.invitation?.roomID?.trim() ?? '';
+        if (roomID.isNotEmpty) {
+          _callKitAcceptHandledRoomID = roomID;
+          _markRoomAnswered(roomID);
+        }
         if (signaling != null) {
           unawaited(_acceptIncomingCall(signaling, requestPermissions: false));
         }
