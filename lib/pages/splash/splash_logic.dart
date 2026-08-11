@@ -16,9 +16,6 @@ class SplashLogic extends GetxController {
   final pushLogic = Get.find<PushController>();
   final appLogic = Get.find<AppController>();
 
-  /// Remaining seconds shown on the splash (3 → 1 → 0).
-  final countdown = 3.obs;
-
   String? get userID => DataSp.userID;
 
   String? get token => DataSp.imToken;
@@ -27,7 +24,6 @@ class SplashLogic extends GetxController {
   Timer? _startupTimeout;
   final Completer<bool> _sdkReady = Completer<bool>();
 
-  static const _minSplashSeconds = 3;
   static const _sdkWaitSeconds = 12;
 
   @override
@@ -39,7 +35,7 @@ class SplashLogic extends GetxController {
       }
     });
     _startupTimeout = Timer(Duration(seconds: _sdkWaitSeconds), () {
-      Logger.print('splash startup timeout, continue after countdown');
+      Logger.print('splash startup timeout, continue to login/main');
       if (!_sdkReady.isCompleted) {
         _sdkReady.complete(false);
       }
@@ -56,14 +52,7 @@ class SplashLogic extends GetxController {
       appLogic.clearBadgeForLoggedOut();
     }
 
-    // Hold the full splash for 3 seconds with countdown.
-    for (var i = _minSplashSeconds; i >= 1; i--) {
-      countdown.value = i;
-      await Future.delayed(const Duration(seconds: 1));
-      if (isClosed) return;
-    }
-    countdown.value = 0;
-
+    // No artificial countdown — leave as soon as SDK init finishes (or times out).
     final sdkOk = await _sdkReady.future;
     if (isClosed) return;
 
