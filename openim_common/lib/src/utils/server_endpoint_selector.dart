@@ -69,12 +69,27 @@ class ServerEndpointSelector {
     return host;
   }
 
+  static Future<bool>? _failoverInFlight;
+
   /// Switch to the other host when the current one fails. Returns true if switched.
-  static Future<bool> failoverFrom(String currentHost) async {
+  /// Concurrent callers share one in-flight failover.
+  static Future<bool> failoverFrom(String currentHost) {
+    _failoverInFlight ??= _failoverFromImpl(currentHost).whenComplete(() {
+      _failoverInFlight = null;
+    });
+    return _failoverInFlight!;
+  }
+
+  static Future<bool> _failoverFromImpl(String currentHost) async {
     final next = alternateHost(currentHost);
     if (next == null) return false;
     final probe = await _probeHost(next);
-    if (probe == null) return false;
+    if (probe == null) {
+      Logger.print(
+        'ServerEndpointSelector: failover aborted — backup $next unreachable',
+      );
+      return false;
+    }
     await applyHost(next);
     _lastSelectedHost = next;
     _lastProbeAt = DateTime.now();
@@ -82,6 +97,43 @@ class ServerEndpointSelector {
       'ServerEndpointSelector: failover $currentHost -> $next (${probe.latencyMs}ms)',
     );
     return true;
+  }
+
+  /// After a slow-but-successful request: switch only if backup probes faster.
+  static Future<bool> switchIfAlternateFaster(String currentHost) async {
+    final next = alternateHost(currentHost);
+    if (next == null) return false;
+    final results = await Future.wait([_probeHost(currentHost), _probeHost(next)]);
+    final currentProbe = results[0];
+    final nextProbe = results[1];
+    if (nextProbe == null) return false;
+    if (currentProbe != null &&
+        nextProbe.latencyMs + 50 >= currentProbe.latencyMs) {
+      Logger.print(
+        'ServerEndpointSelector: keep $currentHost '
+        '(${currentProbe.latencyMs}ms) — backup ${nextProbe.latencyMs}ms not faster',
+      );
+      return false;
+    }
+    await applyHost(next);
+    _lastSelectedHost = next;
+    _lastProbeAt = DateTime.now();
+    Logger.print(
+      'ServerEndpointSelector: slow-line switch $currentHost -> $next '
+      '(${nextProbe.latencyMs}ms)',
+    );
+    return true;
+  }
+
+  /// Remap absolute URL on a known IM host to the currently selected host.
+  static String remapUrlToSelectedHost(String pathOrUrl) {
+    final uri = Uri.tryParse(pathOrUrl);
+    if (uri == null || !uri.hasScheme || uri.host.isEmpty) return pathOrUrl;
+    final known = allHosts.map((e) => e.toLowerCase()).toSet();
+    if (!known.contains(uri.host.toLowerCase())) return pathOrUrl;
+    final target = selectedHost;
+    if (uri.host.toLowerCase() == target.toLowerCase()) return pathOrUrl;
+    return uri.replace(host: target).toString();
   }
 
   static String? alternateHost(String currentHost) {

@@ -50,6 +50,9 @@ class PackageBridge {
 
   /// Caller: remote joined LiveKit while waiting — cancel ring timeout / start in-call UI.
   static void Function(String? roomID)? markOutboundPeerPresent;
+
+  /// HTTP/WS endpoint switched (primary ↔ backup). App should reinit IM SDK.
+  static Future<void> Function()? onEndpointSwitched;
 }
 
 abstract class ScanBridge {

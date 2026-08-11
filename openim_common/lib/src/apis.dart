@@ -1100,6 +1100,12 @@ class Apis {
 
       Logger.print('e:$errCode s:$errMsg');
     } else {
+      // HttpUtil already toasted after both endpoints failed — avoid double toast.
+      final msg = e.toString();
+      if (msg.contains(StrRes.networkError) || msg.contains('接口：')) {
+        Logger.print('_catchErrorHelper (surfaced): $e');
+        return;
+      }
       // Transient Dio/timeout — toast only. Never wipe session (was false logout).
       _catchError(e, s, forceBack: false);
     }

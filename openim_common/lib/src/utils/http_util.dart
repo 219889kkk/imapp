@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:ui';
 
@@ -49,12 +50,140 @@ class HttpUtil {
   static String get operationID =>
       DateTime.now().millisecondsSinceEpoch.toString();
 
+  static int _lastNetworkToastMs = 0;
+
+  /// Successful-but-slow responses trigger a background line switch.
+  static const _slowSuccessThreshold = Duration(seconds: 8);
+
   static String _resolveErrorMessage(ApiResp resp) {
     final key = '${resp.errCode}';
     final localized = key.tr;
     if (localized != key) return localized;
     if (resp.errMsg.isNotEmpty) return resp.errMsg;
     return resp.errDlt;
+  }
+
+  static bool _isTransportFailure(Object error) {
+    if (error is! DioException) return false;
+    switch (error.type) {
+      case DioExceptionType.connectionTimeout:
+      case DioExceptionType.sendTimeout:
+      case DioExceptionType.receiveTimeout:
+      case DioExceptionType.connectionError:
+        return true;
+      case DioExceptionType.unknown:
+        // Often DNS / socket reset wrapped as unknown.
+        return error.error is SocketException ||
+            (error.message?.toLowerCase().contains('socket') ?? false);
+      default:
+        return false;
+    }
+  }
+
+  static void _toastNetworkOnce() {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (now - _lastNetworkToastMs < 3000) return;
+    _lastNetworkToastMs = now;
+    IMViews.showToast(StrRes.networkError);
+  }
+
+  static Future<bool> _failoverAndRefresh() async {
+    final current = Config.serverIp;
+    final switched = await ServerEndpointSelector.failoverFrom(current);
+    if (!switched) return false;
+    updateBaseUrl();
+    final hook = PackageBridge.onEndpointSwitched;
+    if (hook != null) {
+      unawaited(hook().catchError((e, s) {
+        Logger.print('onEndpointSwitched failed: $e $s');
+      }));
+    }
+    return true;
+  }
+
+  static void _maybeSwitchAfterSlowSuccess(Duration elapsed) {
+    if (elapsed < _slowSuccessThreshold) return;
+    unawaited(() async {
+      try {
+        final current = Config.serverIp;
+        Logger.print(
+          'HttpUtil: slow success ${elapsed.inMilliseconds}ms on $current — probe backup',
+        );
+        final switched =
+            await ServerEndpointSelector.switchIfAlternateFaster(current);
+        if (!switched) return;
+        updateBaseUrl();
+        final hook = PackageBridge.onEndpointSwitched;
+        if (hook != null) await hook();
+      } catch (e, s) {
+        Logger.print('HttpUtil slow-success failover failed: $e $s');
+      }
+    }());
+  }
+
+  static Future<dynamic> _parseApiResponse(
+    Response<Map<String, dynamic>> result, {
+    required bool showErrorToast,
+  }) {
+    final resp = ApiResp.fromJson(result.data!);
+    if (resp.errCode == 0) return Future.value(resp.data);
+    Logger.print(
+        'API error: errCode=${resp.errCode}, errMsg=${resp.errMsg}, errDlt=${resp.errDlt}');
+    if (showErrorToast) {
+      IMViews.showToast(_resolveErrorMessage(resp));
+    }
+    return Future.error((resp.errCode, resp.errMsg));
+  }
+
+  /// Run [send]; on timeout/connection error switch host and retry once.
+  /// Toast only when both lines fail (or backup unreachable).
+  static Future<dynamic> _withEndpointFailover(
+    String path, {
+    required bool showErrorToast,
+    required Future<Response<Map<String, dynamic>>> Function(String url) send,
+  }) async {
+    Future<dynamic> attempt(String url) async {
+      final sw = Stopwatch()..start();
+      final result = await send(url);
+      sw.stop();
+      _maybeSwitchAfterSlowSuccess(sw.elapsed);
+      return _parseApiResponse(result, showErrorToast: showErrorToast);
+    }
+
+    try {
+      return await attempt(path);
+    } catch (error) {
+      // Business (errCode, errMsg) — do not failover.
+      if (error is (int, String?)) rethrow;
+      if (!_isTransportFailure(error)) {
+        final errorMsg = '接口：$path  信息：${error is DioException ? error.message : error}';
+        if (showErrorToast) _toastNetworkOnce();
+        return Future.error(errorMsg);
+      }
+
+      Logger.print(
+        'HttpUtil transport fail on ${Config.serverIp} path=$path — failover: $error',
+      );
+      final switched = await _failoverAndRefresh();
+      if (!switched) {
+        if (showErrorToast) _toastNetworkOnce();
+        return Future.error(
+          '接口：$path  信息：${error is DioException ? error.message : error}',
+        );
+      }
+
+      final retryUrl = ServerEndpointSelector.remapUrlToSelectedHost(path);
+      try {
+        Logger.print('HttpUtil retry on ${Config.serverIp} url=$retryUrl');
+        return await attempt(retryUrl);
+      } catch (retryError) {
+        if (retryError is (int, String?)) rethrow;
+        if (showErrorToast) _toastNetworkOnce();
+        return Future.error(
+          '接口：$retryUrl  信息：${retryError is DioException ? retryError.message : retryError}',
+        );
+      }
+    }
   }
 
   static Future post(
@@ -67,43 +196,26 @@ class HttpUtil {
     ProgressCallback? onSendProgress,
     ProgressCallback? onReceiveProgress,
   }) async {
-    try {
-      data ??= {};
-      options ??= Options();
-      options.headers ??= {};
-      options.headers!['operationID'] = operationID;
+    data ??= {};
+    options ??= Options();
+    options.headers ??= {};
+    options.headers!['operationID'] = operationID;
+    final frozenOptions = options;
+    final frozenData = data;
 
-      var result = await dio.post<Map<String, dynamic>>(
-        path,
-        data: data,
+    return _withEndpointFailover(
+      path,
+      showErrorToast: showErrorToast,
+      send: (url) => dio.post<Map<String, dynamic>>(
+        url,
+        data: frozenData,
         queryParameters: queryParameters,
-        options: options,
+        options: frozenOptions,
         cancelToken: cancelToken,
         onSendProgress: onSendProgress,
         onReceiveProgress: onReceiveProgress,
-      );
-      var resp = ApiResp.fromJson(result.data!);
-      if (resp.errCode == 0) {
-        return resp.data;
-      } else {
-        Logger.print(
-            'API error: errCode=${resp.errCode}, errMsg=${resp.errMsg}, errDlt=${resp.errDlt}');
-        if (showErrorToast) {
-          IMViews.showToast(_resolveErrorMessage(resp));
-        }
-
-        return Future.error((resp.errCode, resp.errMsg));
-      }
-    } catch (error) {
-      if (error is DioException) {
-        final errorMsg = '接口：$path  信息：${error.message}';
-        if (showErrorToast) IMViews.showToast(errorMsg);
-        return Future.error(errorMsg);
-      }
-      final errorMsg = '接口：$path  信息：${error.toString()}';
-      if (showErrorToast) IMViews.showToast(errorMsg);
-      return Future.error(error);
-    }
+      ),
+    );
   }
 
   static Future get(
@@ -114,40 +226,22 @@ class HttpUtil {
     CancelToken? cancelToken,
     ProgressCallback? onReceiveProgress,
   }) async {
-    try {
-      options ??= Options();
-      options.headers ??= {};
-      options.headers!['operationID'] = operationID;
+    options ??= Options();
+    options.headers ??= {};
+    options.headers!['operationID'] = operationID;
+    final frozenOptions = options;
 
-      var result = await dio.get<Map<String, dynamic>>(
-        path,
+    return _withEndpointFailover(
+      path,
+      showErrorToast: showErrorToast,
+      send: (url) => dio.get<Map<String, dynamic>>(
+        url,
         queryParameters: queryParameters,
-        options: options,
+        options: frozenOptions,
         cancelToken: cancelToken,
         onReceiveProgress: onReceiveProgress,
-      );
-      var resp = ApiResp.fromJson(result.data!);
-      if (resp.errCode == 0) {
-        return resp.data;
-      } else {
-        Logger.print(
-            'API error: errCode=${resp.errCode}, errMsg=${resp.errMsg}, errDlt=${resp.errDlt}');
-        if (showErrorToast) {
-          IMViews.showToast(_resolveErrorMessage(resp));
-        }
-
-        return Future.error((resp.errCode, resp.errMsg));
-      }
-    } catch (error) {
-      if (error is DioException) {
-        final errorMsg = '接口：$path  信息：${error.message}';
-        if (showErrorToast) IMViews.showToast(errorMsg);
-        return Future.error(errorMsg);
-      }
-      final errorMsg = '接口：$path  信息：${error.toString()}';
-      if (showErrorToast) IMViews.showToast(errorMsg);
-      return Future.error(error);
-    }
+      ),
+    );
   }
 
   static Future delete(
@@ -158,40 +252,22 @@ class HttpUtil {
     Options? options,
     CancelToken? cancelToken,
   }) async {
-    try {
-      options ??= Options();
-      options.headers ??= {};
-      options.headers!['operationID'] = operationID;
+    options ??= Options();
+    options.headers ??= {};
+    options.headers!['operationID'] = operationID;
+    final frozenOptions = options;
 
-      var result = await dio.delete<Map<String, dynamic>>(
-        path,
+    return _withEndpointFailover(
+      path,
+      showErrorToast: showErrorToast,
+      send: (url) => dio.delete<Map<String, dynamic>>(
+        url,
         data: data,
         queryParameters: queryParameters,
-        options: options,
+        options: frozenOptions,
         cancelToken: cancelToken,
-      );
-      var resp = ApiResp.fromJson(result.data!);
-      if (resp.errCode == 0) {
-        return resp.data;
-      } else {
-        Logger.print(
-            'API error: errCode=${resp.errCode}, errMsg=${resp.errMsg}, errDlt=${resp.errDlt}');
-        if (showErrorToast) {
-          IMViews.showToast(_resolveErrorMessage(resp));
-        }
-
-        return Future.error((resp.errCode, resp.errMsg));
-      }
-    } catch (error) {
-      if (error is DioException) {
-        final errorMsg = '接口：$path  信息：${error.message}';
-        if (showErrorToast) IMViews.showToast(errorMsg);
-        return Future.error(errorMsg);
-      }
-      final errorMsg = '接口：$path  信息：${error.toString()}';
-      if (showErrorToast) IMViews.showToast(errorMsg);
-      return Future.error(error);
-    }
+      ),
+    );
   }
 
   static Future put(
@@ -204,43 +280,26 @@ class HttpUtil {
     ProgressCallback? onSendProgress,
     ProgressCallback? onReceiveProgress,
   }) async {
-    try {
-      data ??= {};
-      options ??= Options();
-      options.headers ??= {};
-      options.headers!['operationID'] = operationID;
+    data ??= {};
+    options ??= Options();
+    options.headers ??= {};
+    options.headers!['operationID'] = operationID;
+    final frozenOptions = options;
+    final frozenData = data;
 
-      var result = await dio.put<Map<String, dynamic>>(
-        path,
-        data: data,
+    return _withEndpointFailover(
+      path,
+      showErrorToast: showErrorToast,
+      send: (url) => dio.put<Map<String, dynamic>>(
+        url,
+        data: frozenData,
         queryParameters: queryParameters,
-        options: options,
+        options: frozenOptions,
         cancelToken: cancelToken,
         onSendProgress: onSendProgress,
         onReceiveProgress: onReceiveProgress,
-      );
-      var resp = ApiResp.fromJson(result.data!);
-      if (resp.errCode == 0) {
-        return resp.data;
-      } else {
-        Logger.print(
-            'API error: errCode=${resp.errCode}, errMsg=${resp.errMsg}, errDlt=${resp.errDlt}');
-        if (showErrorToast) {
-          IMViews.showToast(_resolveErrorMessage(resp));
-        }
-
-        return Future.error((resp.errCode, resp.errMsg));
-      }
-    } catch (error) {
-      if (error is DioException) {
-        final errorMsg = '接口：$path  信息：${error.message}';
-        if (showErrorToast) IMViews.showToast(errorMsg);
-        return Future.error(errorMsg);
-      }
-      final errorMsg = '接口：$path  信息：${error.toString()}';
-      if (showErrorToast) IMViews.showToast(errorMsg);
-      return Future.error(error);
-    }
+      ),
+    );
   }
 
   static Future<String> uploadImageForMinio({

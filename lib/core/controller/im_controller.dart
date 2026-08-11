@@ -35,6 +35,9 @@ class IMController extends GetxController with IMCallback, OpenIMLive {
 
   @override
   void onClose() {
+    if (identical(PackageBridge.onEndpointSwitched, _onHttpEndpointSwitched)) {
+      PackageBridge.onEndpointSwitched = null;
+    }
     _kickedOfflineSub?.cancel();
     _httpKickoffSub?.cancel();
     close();
@@ -47,6 +50,7 @@ class IMController extends GetxController with IMCallback, OpenIMLive {
     userInfo = UserFullInfo(userID: DataSp.userID ?? '').obs;
     super.onInit();
     onInitLive();
+    PackageBridge.onEndpointSwitched = _onHttpEndpointSwitched;
     _bindKickoffListener();
     WidgetsBinding.instance.addPostFrameCallback((_) => initOpenIM());
   }
@@ -227,6 +231,37 @@ class IMController extends GetxController with IMCallback, OpenIMLive {
       Logger.print('unInitSDK: $e $s');
     }
     await initOpenIM();
+  }
+
+  /// HTTP layer already switched host — rebind IM SDK/WS to the new line.
+  Future<void> _onHttpEndpointSwitched() async {
+    if (_isActiveCallInProgress()) {
+      Logger.print('defer IM rebind after HTTP failover: active call');
+      return;
+    }
+    final now = DateTime.now();
+    if (_lastFailoverAt != null &&
+        now.difference(_lastFailoverAt!) < const Duration(seconds: 8)) {
+      return;
+    }
+    if (_failoverInFlight) return;
+    _failoverInFlight = true;
+    try {
+      _lastFailoverAt = now;
+      HttpUtil.updateBaseUrl();
+      await reinitOpenIM();
+      final cert = DataSp.getLoginCertificate();
+      if (cert != null &&
+          cert.userID.isNotEmpty &&
+          cert.imToken.isNotEmpty) {
+        await login(cert.userID, cert.imToken);
+      }
+      Logger.print('IM rebound after HTTP endpoint switch → ${Config.serverIp}');
+    } catch (e, s) {
+      Logger.print('HTTP endpoint switch rebind failed: $e $s');
+    } finally {
+      _failoverInFlight = false;
+    }
   }
 
   Future<void> _tryFailoverOnConnectFailed() async {
