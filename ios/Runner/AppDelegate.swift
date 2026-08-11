@@ -129,20 +129,20 @@ import flutter_callkit_incoming
     }
 
     func didActivateAudioSession(_ audioSession: AVAudioSession) {
-        let rtc = RTCAudioSession.sharedInstance()
-        rtc.lockForConfiguration()
+        // Configure the system session CallKit just activated (do not use String rawValues
+        // on RTCAudioSession — current WebRTC Swift API expects Category/Mode types).
         do {
-            try rtc.setCategory(
-                AVAudioSession.Category.playAndRecord.rawValue,
-                withOptions: [.allowBluetooth, .allowBluetoothA2DP]
+            try audioSession.setCategory(
+                .playAndRecord,
+                mode: .voiceChat,
+                options: [.allowBluetooth, .allowBluetoothA2DP]
             )
-            try rtc.setMode(AVAudioSession.Mode.voiceChat.rawValue)
         } catch {
-            emitAudioDebug("CallKit didActivate RTC config failed \(error.localizedDescription)")
+            emitAudioDebug("CallKit didActivate category failed \(error.localizedDescription)")
         }
+        let rtc = RTCAudioSession.sharedInstance()
         rtc.audioSessionDidActivate(audioSession)
         rtc.isAudioEnabled = true
-        rtc.unlockForConfiguration()
         emitAudioDebug("CallKit audio session activated isAudioEnabled=true")
         DispatchQueue.main.async {
             self.voipChannel?.invokeMethod("onCallKitAudioActivated", arguments: nil)
@@ -151,10 +151,8 @@ import flutter_callkit_incoming
 
     func didDeactivateAudioSession(_ audioSession: AVAudioSession) {
         let rtc = RTCAudioSession.sharedInstance()
-        rtc.lockForConfiguration()
         rtc.audioSessionDidDeactivate(audioSession)
         rtc.isAudioEnabled = false
-        rtc.unlockForConfiguration()
         emitAudioDebug("CallKit audio session deactivated isAudioEnabled=false")
         DispatchQueue.main.async {
             self.voipChannel?.invokeMethod("onCallKitAudioDeactivated", arguments: nil)
@@ -190,23 +188,21 @@ import flutter_callkit_incoming
         result(true)
     }
 
-    /// CallKit already activated AVAudioSession — bridge WebRTC without reconfiguring.
+    /// CallKit already activated AVAudioSession — bridge WebRTC without setActive.
     private func bridgeCallKitWebRtcAudio(result: @escaping FlutterResult) {
         let session = AVAudioSession.sharedInstance()
-        let rtc = RTCAudioSession.sharedInstance()
-        rtc.lockForConfiguration()
         do {
-            try rtc.setCategory(
-                AVAudioSession.Category.playAndRecord.rawValue,
-                withOptions: [.allowBluetooth, .allowBluetoothA2DP]
+            try session.setCategory(
+                .playAndRecord,
+                mode: .voiceChat,
+                options: [.allowBluetooth, .allowBluetoothA2DP]
             )
-            try rtc.setMode(AVAudioSession.Mode.voiceChat.rawValue)
         } catch {
-            emitAudioDebug("CallKit bridge RTC config failed \(error.localizedDescription)")
+            emitAudioDebug("CallKit bridge category failed \(error.localizedDescription)")
         }
+        let rtc = RTCAudioSession.sharedInstance()
         rtc.audioSessionDidActivate(session)
         rtc.isAudioEnabled = true
-        rtc.unlockForConfiguration()
         emitAudioDebug("CallKit bridge (no setActive) isAudioEnabled=true")
         result(true)
     }
