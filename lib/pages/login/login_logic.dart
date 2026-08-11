@@ -5,6 +5,7 @@ import 'package:get/get.dart';
 import 'package:openim_common/openim_common.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
+import '../../core/controller/app_controller.dart';
 import '../../core/controller/im_controller.dart';
 import '../../routes/app_navigator.dart';
 import '../conversation/conversation_logic.dart';
@@ -176,6 +177,10 @@ class LoginLogic extends GetxController {
         'loginType': LoginType.account.rawValue,
       });
       await imLogic.login(data.userID, data.imToken);
+      SessionGuard.markLoggedIn();
+      if (Get.isRegistered<AppController>()) {
+        await Get.find<AppController>().syncNativeLoginHint(true);
+      }
       PushController.login(
         data.userID,
         onTokenRefresh: (token) {

@@ -5,6 +5,7 @@ import 'package:audio_session/audio_session.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:app_badge_plus/app_badge_plus.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_openim_sdk/flutter_openim_sdk.dart' as im;
@@ -112,11 +113,17 @@ class AppController extends GetxController
     });
   }
 
+  static const _voipChannel = MethodChannel('top.hangxun.app/voip');
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     // FocusDetector alone misses some OEM background transitions; mirror lifecycle.
     if (state == AppLifecycleState.resumed) {
       runningBackground(false);
+      // After "Allow Notifications", push SDKs may stamp a stale badge — wipe if logged out.
+      if (!_hasLoginSession) {
+        clearBadgeForLoggedOut();
+      }
     } else if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.inactive ||
         state == AppLifecycleState.hidden) {
@@ -142,11 +149,20 @@ class AppController extends GetxController
       onDidReceiveNotificationResponse: _onNotificationResponse,
     );
     await _ensureAndroidNotificationChannels();
-    _requestNotificationPermissions();
     _listenConnectivity();
     PackageBridge.clearCallNotification = cancelCallNotification;
 
     // Reinstall / cold start on login screen must not keep a stale icon badge.
+    if (!_hasLoginSession) {
+      SessionGuard.markLoggedOut();
+      await syncNativeLoginHint(false);
+      clearBadgeForLoggedOut();
+    } else {
+      await syncNativeLoginHint(true);
+    }
+
+    // Request permission AFTER badge wipe; clear again once the dialog returns.
+    await _requestNotificationPermissions();
     if (!_hasLoginSession) {
       clearBadgeForLoggedOut();
     }
@@ -158,7 +174,19 @@ class AppController extends GetxController
   bool get _hasLoginSession {
     final id = DataSp.userID?.trim() ?? '';
     final token = DataSp.imToken?.trim() ?? '';
-    return id.isNotEmpty && token.isNotEmpty && !SessionGuard.suppressNotifications;
+    return id.isNotEmpty &&
+        token.isNotEmpty &&
+        !SessionGuard.suppressNotifications;
+  }
+
+  /// Lets AppDelegate know whether a SpringBoard badge wipe is safe on resume.
+  Future<void> syncNativeLoginHint(bool active) async {
+    if (!Platform.isIOS) return;
+    try {
+      await _voipChannel.invokeMethod('setLoginSessionHint', {'active': active});
+    } catch (e, s) {
+      Logger.print('syncNativeLoginHint failed: $e $s');
+    }
   }
 
   /// Create channels up-front so Android 8+ actually delivers banners/sound.
@@ -588,14 +616,23 @@ class AppController extends GetxController
 
   /// Stop sounds, banners, and badge as soon as logout begins.
   Future<void> onSessionLogout() async {
+    await syncNativeLoginHint(false);
     await _stopMessageSound();
     await _cancelAllNotifications();
     clearBadgeForLoggedOut();
   }
 
+  bool get _imLoggedIn {
+    try {
+      return OpenIM.iMManager.isLogined;
+    } catch (_) {
+      return false;
+    }
+  }
+
   void showBadge(count) {
     // Never paint unread on the icon while logged out / on login page.
-    if (!_hasLoginSession) {
+    if (!_hasLoginSession || !_imLoggedIn) {
       clearBadgeForLoggedOut();
       return;
     }
@@ -604,25 +641,41 @@ class AppController extends GetxController
       removeBadge();
       return;
     }
-    try {
-      OpenIM.iMManager.messageManager.setAppBadge(n);
-    } catch (_) {}
+    unawaited(
+      OpenIM.iMManager.messageManager.setAppBadge(n).catchError((_) {}),
+    );
     AppBadgePlus.isSupported().then((value) {
       if (value) {
         AppBadgePlus.updateBadge(n);
       }
-    });
+    }).catchError((_) {});
   }
 
   void removeBadge() {
-    AppBadgePlus.isSupported().then((value) {
-      if (value) {
-        AppBadgePlus.updateBadge(0);
-      }
-    });
+    unawaited(_clearLocalIconBadge());
+    // OpenIM SetAppBadge crashes / asserts when not logged in — never call then.
+    if (OpenIM.iMManager.isLogined) {
+      unawaited(
+        OpenIM.iMManager.messageManager.setAppBadge(0).catchError((_) {}),
+      );
+    }
+  }
+
+  Future<void> _clearLocalIconBadge() async {
     try {
-      OpenIM.iMManager.messageManager.setAppBadge(0);
-    } catch (_) {}
+      if (Platform.isIOS) {
+        await _voipChannel.invokeMethod('clearIconBadge');
+      }
+    } catch (e, s) {
+      Logger.print('clearIconBadge native failed: $e $s');
+    }
+    try {
+      if (await AppBadgePlus.isSupported()) {
+        await AppBadgePlus.updateBadge(0);
+      }
+    } catch (e, s) {
+      Logger.print('AppBadgePlus updateBadge(0) failed: $e $s');
+    }
   }
 
   /// Force-clear desktop badge + local call/chat banners (logout / no session).

@@ -49,7 +49,11 @@ class SplashLogic extends GetxController {
     final hasSession = (userID?.trim().isNotEmpty ?? false) &&
         (token?.trim().isNotEmpty ?? false);
     if (!hasSession) {
+      SessionGuard.markLoggedOut();
+      await appLogic.syncNativeLoginHint(false);
       appLogic.clearBadgeForLoggedOut();
+    } else {
+      await appLogic.syncNativeLoginHint(true);
     }
 
     // No artificial countdown — leave as soon as SDK init finishes (or times out).
@@ -65,6 +69,8 @@ class SplashLogic extends GetxController {
       }
       await _login();
     } else {
+      SessionGuard.markLoggedOut();
+      await appLogic.syncNativeLoginHint(false);
       appLogic.clearBadgeForLoggedOut();
       AppNavigator.startLogin();
     }
@@ -73,6 +79,8 @@ class SplashLogic extends GetxController {
   Future<void> _login() async {
     try {
       await imLogic.login(userID!, token!).timeout(const Duration(seconds: 15));
+      SessionGuard.markLoggedIn();
+      await appLogic.syncNativeLoginHint(true);
       PushController.login(
         userID!,
         onTokenRefresh: (token) {
@@ -96,6 +104,8 @@ class SplashLogic extends GetxController {
       Logger.print('splash auto login failed: $e $s');
       IMViews.showToast('$e');
       await DataSp.removeLoginCertificate();
+      SessionGuard.markLoggedOut();
+      await appLogic.syncNativeLoginHint(false);
       appLogic.clearBadgeForLoggedOut();
       AppNavigator.startLogin();
     }

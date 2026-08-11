@@ -4,6 +4,7 @@ import FirebaseCore
 import PushKit
 import AVFAudio
 import CallKit
+import UserNotifications
 import WebRTC
 import flutter_callkit_incoming
 
@@ -60,6 +61,17 @@ import flutter_callkit_incoming
                     NSLog("HangXun VoIP: markRoomEnded %@", roomID)
                 }
                 result(true)
+            case "clearIconBadge":
+                self.clearIconBadge()
+                result(true)
+            case "setLoginSessionHint":
+                let args = call.arguments as? [String: Any]
+                let active = args?["active"] as? Bool ?? false
+                UserDefaults.standard.set(active, forKey: "hangxun.hasLoginSession")
+                if !active {
+                    self.clearIconBadge()
+                }
+                result(true)
             default:
                 result(FlutterMethodNotImplemented)
             }
@@ -82,9 +94,35 @@ import flutter_callkit_incoming
 
         // Clear stale home-screen badge before Flutter boots (logged-out / reinstall).
         // Logged-in unread is restored by Dart after IM sync.
-        UIApplication.shared.applicationIconBadgeNumber = 0
+        self.clearIconBadge()
 
         return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+    }
+
+    /// Wipe SpringBoard badge without touching OpenIM (safe before login).
+    private func clearIconBadge() {
+        UIApplication.shared.applicationIconBadgeNumber = 0
+        if #available(iOS 16.0, *) {
+            UNUserNotificationCenter.current().setBadgeCount(0) { error in
+                if let error = error {
+                    NSLog("HangXun clearIconBadge setBadgeCount failed: %@", error.localizedDescription)
+                }
+            }
+        }
+    }
+
+    override func applicationDidBecomeActive(_ application: UIApplication) {
+        super.applicationDidBecomeActive(application)
+        // Permission dialog / push wake can restore a stale badge before login.
+        // Dart will re-apply the real unread count after IM login.
+        if !self.hasActiveLoginHint() {
+            clearIconBadge()
+        }
+    }
+
+    /// Best-effort: UserDefaults flag written by Flutter when a session exists.
+    private func hasActiveLoginHint() -> Bool {
+        UserDefaults.standard.bool(forKey: "hangxun.hasLoginSession")
     }
 
     /// Required empty hook so Getui can receive remote notifications when the app is backgrounded.
