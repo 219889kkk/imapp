@@ -558,24 +558,26 @@ mixin OpenIMLive {
     final client = OpenIMLiveClient();
     if (!client.isBusy) return;
     final isVideo = _activeCallSignaling?.invitation?.mediaType == 'video';
-    // Mid-ICE: never setActive(true) — iOS rejects it while CallKit still owns the call
-    // and it tears down the PeerConnection. Bridge only; let connect/retry finish.
-    if (client.isMediaConnecting) {
+    final foreground =
+        WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
+    // Mid-ICE on lock screen: setActive often fails — bridge only.
+    // If user already unlocked (fg), CallKit released the session — must setActive.
+    if (client.isMediaConnecting && !foreground) {
       CallAudioDebugLog.add(
         'callkit',
-        'didDeactivate during connect — bridge only (no setActive)',
+        'didDeactivate during connect (locked) — bridge only',
       );
       unawaited(IosWebRtcAudio.bridgeCallKitSession());
       return;
     }
     CallAudioDebugLog.add(
       'callkit',
-      'didDeactivate while busy — switch to in-app WebRTC enable',
+      'didDeactivate while busy — switch to in-app WebRTC enable fg=$foreground connecting=${client.isMediaConnecting}',
     );
     CallAudioKeepAlive.instance.releaseCallKitSession();
     unawaited(() async {
       await IosWebRtcAudio.enable(speakerOn: isVideo);
-      if (client.mediaRoom != null) {
+      if (!client.isMediaConnecting && client.mediaRoom != null) {
         await client.kickstartIosCallKitMedia(
           speakerOn: isVideo,
           unmuteMic: true,
@@ -802,12 +804,21 @@ mixin OpenIMLive {
         _pendingHeadlessMicPermission = false;
       }
     }
-    // Unlock during CallKit call: never release/reconfigure session (fights CallKit).
-    // Only republish mic + subscribe remotes.
+    // Unlock: if CallKit already didDeactivate, ownership flag is stale — take over.
+    final owns = CallAudioKeepAlive.instance.callKitOwnsSession;
     CallAudioDebugLog.add(
       'fg',
-      'mic restore kickstart only owns=${CallAudioKeepAlive.instance.callKitOwnsSession} nativeDidActivate=$_iosCallKitDidActivateNative',
+      'mic restore owns=$owns nativeDidActivate=$_iosCallKitDidActivateNative connecting=${client.isMediaConnecting}',
     );
+    if (owns && !_iosCallKitDidActivateNative) {
+      CallAudioKeepAlive.instance.releaseCallKitSession();
+      await IosWebRtcAudio.enable(speakerOn: isVideo);
+      CallAudioDebugLog.add('fg', 'took over audio after CallKit deactivate');
+    }
+    if (client.isMediaConnecting) {
+      CallAudioDebugLog.add('fg', 'skip kickstart — connect in flight');
+      return;
+    }
     await client.kickstartIosCallKitMedia(speakerOn: isVideo);
     client.promoteCallingUi();
   }
@@ -820,14 +831,21 @@ mixin OpenIMLive {
     if (roomID.isEmpty || !client.hasMediaFor(roomID)) return;
     final isVideo = signaling?.invitation?.mediaType == 'video';
     Logger.print('restore live call audio roomID=$roomID');
+    final owns = CallAudioKeepAlive.instance.callKitOwnsSession;
     CallAudioDebugLog.add(
       'fg',
-      'restore kickstart only owns=${CallAudioKeepAlive.instance.callKitOwnsSession} nativeDidActivate=$_iosCallKitDidActivateNative',
+      'restore owns=$owns nativeDidActivate=$_iosCallKitDidActivateNative connecting=${client.isMediaConnecting}',
     );
-    // Keep CallKit session ownership while call is live — only kickstart media.
-    if (!CallAudioKeepAlive.instance.callKitOwnsSession &&
-        !_iosCallKitDidActivateNative) {
+    if (owns && !_iosCallKitDidActivateNative) {
+      CallAudioKeepAlive.instance.releaseCallKitSession();
+      await IosWebRtcAudio.enable(speakerOn: isVideo);
+      CallAudioDebugLog.add('fg', 'took over audio after CallKit deactivate');
+    } else if (!owns && !_iosCallKitDidActivateNative) {
       await CallAudioKeepAlive.instance.prepareForRtc(speakerOn: isVideo);
+    }
+    if (client.isMediaConnecting) {
+      CallAudioDebugLog.add('fg', 'skip kickstart — connect in flight');
+      return;
     }
     await client.kickstartIosCallKitMedia(speakerOn: isVideo);
     client.promoteCallingUi();
@@ -953,12 +971,18 @@ mixin OpenIMLive {
     try {
       await joinOnce();
     } catch (e) {
+      final msg = e.toString();
+      // Peer already left the LiveKit room — retrying ICE cannot revive the call.
+      if (msg.contains('peer left during connect')) {
+        CallAudioDebugLog.add('accept', 'peer left during connect — no retry');
+        rethrow;
+      }
       final retryable = e is TimeoutException ||
           e is MediaConnectException ||
           e is ConnectException ||
-          e.toString().contains('MediaConnectException') ||
-          e.toString().contains('PeerConnection') ||
-          e.toString().contains('disconnect during connect');
+          msg.contains('MediaConnectException') ||
+          msg.contains('PeerConnection') ||
+          msg.contains('disconnect during connect');
       if (!retryable || gen != _callSessionGen || _isRoomEnded(roomID)) {
         rethrow;
       }

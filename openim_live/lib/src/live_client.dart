@@ -439,6 +439,10 @@ class OpenIMLiveClient implements RTCBridge {
               videoCodec: 'VP8',
             ),
           ),
+          // CallKit: publish mic during join so ADM/ICE start under an active session.
+          fastConnectOptions: FastConnectOptions(
+            microphone: TrackOption(enabled: enableMicrophone),
+          ),
         )
             .timeout(const Duration(seconds: 30)),
         abortFuture,
@@ -645,10 +649,17 @@ class OpenIMLiveClient implements RTCBridge {
     if (room.remoteParticipants.isNotEmpty) return;
     final roomID = currentRoomID;
     if (roomID == null || roomID.isEmpty) return;
-    // Joining ICE — peer churn must not kill accept mid-connect (causes false ICE timeout).
+    // Peer already left while we are still joining — abort (do NOT ICE-retry an empty room).
     if (_mediaConnectInFlight != null) {
       CallAudioDebugLog.add(
-          'livekit', 'remote left during connect — defer end roomID=$roomID');
+        'livekit',
+        'remote left during connect — peer gone, abort join roomID=$roomID',
+      );
+      final abort = _connectAbort;
+      if (abort != null && !abort.isCompleted) {
+        abort.completeError(StateError('peer left during connect'));
+      }
+      PackageBridge.onPeerLeftCall?.call(roomID);
       return;
     }
     Logger.print('LiveKit remote participant left roomID=$roomID');
@@ -770,6 +781,10 @@ class OpenIMLiveClient implements RTCBridge {
     bool unmuteMic = true,
   }) async {
     if (!Platform.isIOS) return;
+    if (_mediaConnectInFlight != null) {
+      CallAudioDebugLog.add('kickstart', 'skip — connect in flight');
+      return;
+    }
     final room = _mediaRoom;
     if (room == null) {
       CallAudioDebugLog.add('kickstart', 'skip — no media room');
