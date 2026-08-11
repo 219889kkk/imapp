@@ -571,6 +571,7 @@ class MessageManager {
     Message? startMsg,
     GetHistoryViewType viewType = GetHistoryViewType.history,
     int? count,
+    int? lastMinSeq,
     String? operationID,
   }) =>
       _channel
@@ -581,6 +582,7 @@ class MessageManager {
                 'startClientMsgID': startMsg?.clientMsgID ?? '',
                 'count': count ?? 40,
                 'viewType': viewType.rawValue,
+                'lastMinSeq': lastMinSeq ?? 0,
                 'operationID': Utils.checkOperationID(operationID),
               }))
           .then((value) => Utils.toObj(value, (map) => AdvancedMessage.fromJson(map)));

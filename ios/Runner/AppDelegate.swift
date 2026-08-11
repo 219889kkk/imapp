@@ -470,7 +470,7 @@ import flutter_callkit_incoming
         info["appName"] = "航讯"
         info["handle"] = handle
         info["type"] = isVideo ? 1 : 0
-        var timeoutSec = 30
+        var timeoutSec = 60
         if let t = dict["timeout"] as? Int {
             timeoutSec = t
         } else if let t = dict["timeout"] as? String, let v = Int(t) {
@@ -478,7 +478,8 @@ import flutter_callkit_incoming
         } else if let t = dict["timeout"] as? Double {
             timeoutSec = Int(t)
         }
-        if timeoutSec <= 0 { timeoutSec = 30 }
+        // Tiny/zero timeout makes CallKit fire Timeout immediately → false miss/reject.
+        if timeoutSec < 30 { timeoutSec = 60 }
         info["duration"] = timeoutSec * 1000
         info["extra"] = dict
 

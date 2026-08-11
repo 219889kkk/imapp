@@ -1090,6 +1090,8 @@ class Apis {
     return AgentPageResp(total: 0, agents: []);
   }
 
+  static int _lastNetworkToastMs = 0;
+
   static void _catchErrorHelper(Object e, StackTrace s) {
     if (e is (int, String?)) {
       final errCode = e.$1;
@@ -1098,17 +1100,29 @@ class Apis {
 
       Logger.print('e:$errCode s:$errMsg');
     } else {
-      _catchError(e, s);
+      // Transient Dio/timeout — toast only. Never wipe session (was false logout).
+      _catchError(e, s, forceBack: false);
     }
   }
 
-  static void _catchError(Object e, StackTrace s, {bool forceBack = true}) {
+  static void _catchError(
+    Object e,
+    StackTrace s, {
+    bool forceBack = false,
+    bool showToast = true,
+  }) {
     Logger.print('_catchError: $e $s');
     final route = Get.currentRoute;
     if (route == '/login' || route == '/splash') {
       return;
     }
-    IMViews.showToast(StrRes.networkError);
+    if (showToast) {
+      final now = DateTime.now().millisecondsSinceEpoch;
+      if (now - _lastNetworkToastMs > 3000) {
+        _lastNetworkToastMs = now;
+        IMViews.showToast(StrRes.networkError);
+      }
+    }
 
     if (forceBack) {
       DataSp.removeLoginCertificate();

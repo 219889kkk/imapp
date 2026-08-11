@@ -307,26 +307,26 @@ class _ChatListViewState extends State<ChatListView> {
 
   void _onScrollToBottomLoadMore() {
     if (_bottomLoadInFlight || !_scrollToBottomLoadMore) return;
-    _bottomLoadInFlight = true;
+    setState(() => _bottomLoadInFlight = true);
     widget.onScrollToBottom?.call();
     final future = widget.onScrollToBottomLoad?.call();
     if (future == null) {
-      _bottomLoadInFlight = false;
+      if (mounted) setState(() => _bottomLoadInFlight = false);
       return;
     }
     future.then((hasMore) {
       if (!mounted) return;
       setState(() {
         _scrollToBottomLoadMore = hasMore;
+        _bottomLoadInFlight = false;
       });
     }).catchError((Object e, StackTrace s) {
       Logger.print('ChatListView bottom load failed: $e $s');
       if (!mounted) return;
       setState(() {
         _scrollToBottomLoadMore = false;
+        _bottomLoadInFlight = false;
       });
-    }).whenComplete(() {
-      _bottomLoadInFlight = false;
     });
   }
 
@@ -334,25 +334,25 @@ class _ChatListViewState extends State<ChatListView> {
     if (_topLoadInFlight || !_scrollToTopLoadMore) return;
     widget.onScrollToTop?.call();
     if (!widget.enabledScrollTopLoad) return;
-    _topLoadInFlight = true;
+    setState(() => _topLoadInFlight = true);
     final future = widget.onScrollToTopLoad?.call();
     if (future == null) {
-      _topLoadInFlight = false;
+      if (mounted) setState(() => _topLoadInFlight = false);
       return;
     }
     future.then((hasMore) {
       if (!mounted) return;
       setState(() {
         _scrollToTopLoadMore = hasMore;
+        _topLoadInFlight = false;
       });
     }).catchError((Object e, StackTrace s) {
       Logger.print('ChatListView top load failed: $e $s');
       if (!mounted) return;
       setState(() {
         _scrollToTopLoadMore = false;
+        _topLoadInFlight = false;
       });
-    }).whenComplete(() {
-      _topLoadInFlight = false;
     });
   }
 
@@ -382,13 +382,14 @@ class _ChatListViewState extends State<ChatListView> {
 
   Widget _wrapLoadMoreItem(int index) {
     final child = widget.itemBuilder(context, index);
+    // Spinner only while a request is in flight — not whenever hasMore is true.
     if (index == widget.itemCount! - 1) {
-      return _scrollToBottomLoadMore
+      return _bottomLoadInFlight
           ? Column(children: [loadMoreView, child])
           : child;
     }
     if (index == 0 && widget.enabledScrollTopLoad) {
-      return _scrollToTopLoadMore
+      return _topLoadInFlight
           ? Column(children: [child, loadMoreView])
           : child;
     }

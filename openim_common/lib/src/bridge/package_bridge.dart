@@ -23,8 +23,12 @@ class PackageBridge {
   /// CallKit Decline with reconstructed [SignalingInfo] (iOS VoIP path).
   static void Function(SignalingInfo signaling)? onCallKitDecline;
 
-  /// CallKit / system End during active call or timeout (lock-screen hangup).
+  /// CallKit / system End during active call (lock-screen hangup).
+  /// Ringing timeout is [onCallKitTimeout] — do not treat as reject.
   static void Function(SignalingInfo? signaling)? onCallKitEnded;
+
+  /// CallKit ring timed out (missed) — local cleanup only, never send reject.
+  static void Function(SignalingInfo? signaling)? onCallKitTimeout;
 
   /// PushKit remote cancel/hungup (native endCall before Dart WS).
   static void Function(String? roomID, String action)? onVoipRemoteEnd;

@@ -1939,11 +1939,12 @@ class ChatLogic extends SuperController {
         ? null
         : (_historyCursor ?? messageList.firstOrNull);
     Logger.print(
-        '_fetchHistoryMessages: is first load: $_isFirstLoad, last client id: ${start?.clientMsgID}');
+        '_fetchHistoryMessages: is first load: $_isFirstLoad, last client id: ${start?.clientMsgID} lastMinSeq=$lastMinSeq');
     return OpenIM.iMManager.messageManager.getAdvancedHistoryMessageList(
       conversationID: conversationInfo.conversationID,
       count: _pageSize,
       startMsg: start,
+      lastMinSeq: _isFirstLoad ? null : lastMinSeq,
     );
   }
 
@@ -1999,36 +2000,43 @@ class ChatLogic extends SuperController {
     if (_historyLoadInFlight) return hasMoreHistory;
     _historyLoadInFlight = true;
     try {
-      final result = await _fetchHistoryMessages();
-      hasMoreHistory = result.isEnd != true;
-      final raw = result.messageList ?? const <Message>[];
-      if (raw.isEmpty) {
+      // Batch-skip signaling-only pages (one gesture used to chain many pulls).
+      var visible = <Message>[];
+      for (var hop = 0; hop < 5; hop++) {
+        final result = await _fetchHistoryMessages();
+        hasMoreHistory = result.isEnd != true;
+        if (result.lastMinSeq != null) {
+          lastMinSeq = result.lastMinSeq;
+        }
+        final raw = result.messageList ?? const <Message>[];
+        if (raw.isEmpty) {
+          _isFirstLoad = false;
+          if (visible.isEmpty) {
+            _deferGroupPostMessageWork(const []);
+            return false;
+          }
+          break;
+        }
+        _historyCursor = raw.first;
+        final page = raw.where((e) => !e.isCallingSignalingType).toList();
+        for (final m in page) {
+          _normalizeCallRecordMessage(m);
+        }
+        // Newer hops are older messages — keep ascending time toward list end.
+        visible = [...page, ...visible];
         _isFirstLoad = false;
-        _deferGroupPostMessageWork(const []);
-        return false;
+        if (visible.isNotEmpty || !hasMoreHistory) break;
       }
-      // Advance cursor with raw page so signaling-only pages don't loop forever.
-      _historyCursor = raw.first;
-      final list =
-          raw.where((e) => !e.isCallingSignalingType).toList();
-      for (final m in list) {
-        _normalizeCallRecordMessage(m);
+      if (visible.isEmpty) {
+        return hasMoreHistory;
       }
-      if (list.isEmpty) {
-        _isFirstLoad = false;
-        // Signaling-only page — pull next page so UI does not stick on spinner/empty.
-        if (!hasMoreHistory) return false;
-        _historyLoadInFlight = false;
-        return onScrollToBottomLoad();
-      }
-      if (_isFirstLoad) {
-        _isFirstLoad = false;
-        messageList.assignAll(_mergeHistoryWithLocal(list));
+      if (messageList.isEmpty) {
+        messageList.assignAll(_mergeHistoryWithLocal(visible));
         scrollBottom();
         _deferGroupPostMessageWork(messageList);
       } else {
-        messageList.insertAll(0, list);
-        _ensureGroupReadInfoForList(list);
+        messageList.insertAll(0, visible);
+        _ensureGroupReadInfoForList(visible);
       }
       return hasMoreHistory;
     } catch (e, s) {
@@ -2042,21 +2050,37 @@ class ChatLogic extends SuperController {
   }
 
   Future<void> _loadHistoryForSyncEnd() async {
-    final result =
-        await OpenIM.iMManager.messageManager.getAdvancedHistoryMessageList(
-      conversationID: conversationInfo.conversationID,
-      count: messageList.length < _pageSize ? _pageSize : messageList.length,
-      startMsg: null,
-    );
-    if (result.messageList == null || result.messageList!.isEmpty) return;
-    final list = result.messageList!
-        .where((e) => !e.isCallingSignalingType)
-        .toList();
+    if (_historyLoadInFlight) return;
+    _historyLoadInFlight = true;
+    try {
+      final result =
+          await OpenIM.iMManager.messageManager.getAdvancedHistoryMessageList(
+        conversationID: conversationInfo.conversationID,
+        count: messageList.length < _pageSize ? _pageSize : messageList.length,
+        startMsg: null,
+      );
+      if (result.messageList == null || result.messageList!.isEmpty) return;
+      if (result.lastMinSeq != null) {
+        lastMinSeq = result.lastMinSeq;
+      }
+      final list = result.messageList!
+          .where((e) => !e.isCallingSignalingType)
+          .toList();
+      // Keep cursor for older-page loads after sync refresh.
+      final raw = result.messageList!;
+      if (raw.isNotEmpty) {
+        _historyCursor = raw.first;
+      }
 
-    final offset = scrollController.offset;
-    messageList.assignAll(_mergeHistoryWithLocal(list));
-    _ensureGroupReadInfoForList(messageList);
-    scrollController.jumpTo(offset);
+      final offset = scrollController.offset;
+      messageList.assignAll(_mergeHistoryWithLocal(list));
+      _ensureGroupReadInfoForList(messageList);
+      scrollController.jumpTo(offset);
+    } catch (e, s) {
+      Logger.print('_loadHistoryForSyncEnd failed: $e $s');
+    } finally {
+      _historyLoadInFlight = false;
+    }
   }
 
   void _ensureGroupReadInfoForList(Iterable<Message> list) {
@@ -2071,6 +2095,10 @@ class ChatLogic extends SuperController {
     if (value is! List<Message>) return;
 
     hasMoreHistory = !isEnd;
+    // Cursor from raw page (including signaling) so next older page is correct.
+    if (value.isNotEmpty) {
+      _historyCursor = value.first;
+    }
     final visible = value.where((e) => !e.isCallingSignalingType).toList();
     for (final m in visible) {
       _normalizeCallRecordMessage(m);

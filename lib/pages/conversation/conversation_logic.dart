@@ -120,7 +120,15 @@ class ConversationLogic extends GetxController {
       onChangeConversations.addAll(incoming);
     }
     for (var newValue in incoming) {
-      ChatMessagePrefetchCache.invalidate(newValue);
+      // Only drop prefetch when the latest message actually changed — sync storms
+      // used to invalidate every update and force cold history pulls.
+      final existing = list.firstWhereOrNull(
+          (e) => e.conversationID == newValue.conversationID);
+      final oldLatest = existing?.latestMsg?.clientMsgID;
+      final newLatest = newValue.latestMsg?.clientMsgID;
+      if (oldLatest != newLatest) {
+        ChatMessagePrefetchCache.invalidate(newValue);
+      }
       _contentPreviewCache.remove(newValue.conversationID);
       _contentPreviewCache.removeWhere(
           (k, _) => k.startsWith('_k_${newValue.conversationID}|'));

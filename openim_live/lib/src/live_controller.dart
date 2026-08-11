@@ -403,6 +403,9 @@ mixin OpenIMLive {
     if (identical(PackageBridge.onCallKitEnded, _onCallKitEnded)) {
       PackageBridge.onCallKitEnded = null;
     }
+    if (identical(PackageBridge.onCallKitTimeout, _onCallKitTimeout)) {
+      PackageBridge.onCallKitTimeout = null;
+    }
     if (identical(PackageBridge.onVoipRemoteEnd, _onVoipRemoteEnd)) {
       PackageBridge.onVoipRemoteEnd = null;
     }
@@ -439,6 +442,7 @@ mixin OpenIMLive {
     PackageBridge.onCallKitAccept = _onCallKitAccept;
     PackageBridge.onCallKitDecline = _onCallKitDecline;
     PackageBridge.onCallKitEnded = _onCallKitEnded;
+    PackageBridge.onCallKitTimeout = _onCallKitTimeout;
     PackageBridge.onVoipRemoteEnd = _onVoipRemoteEnd;
     PackageBridge.suppressCallKitEnded = _suppressCallKitEnded;
     PackageBridge.isCallRoomEnded = _isRoomEnded;
@@ -1495,12 +1499,39 @@ mixin OpenIMLive {
     onTapReject(resolved..userID = OpenIM.iMManager.userID);
   }
 
-  /// Lock-screen / system UI End — must tear down LiveKit + notify peer.
+  /// CallKit ring timed out — missed call. Local cleanup only (never reject).
+  void _onCallKitTimeout(SignalingInfo? signaling) {
+    _stopSound();
+    PackageBridge.clearCallNotification?.call();
+    final info = _resolveIncomingSignaling(signaling) ??
+        signaling ??
+        _activeCallSignaling;
+    final roomID = info?.invitation?.roomID?.trim() ??
+        OpenIMLiveClient().currentRoomID?.trim() ??
+        '';
+    Logger.print('CallKit timeout — local miss only roomID=$roomID');
+    CallAudioDebugLog.add('callkit', 'timeout local miss roomID=$roomID');
+    // Same as Dart ring timeout for callee: do not send callingReject.
+    if (roomID.isNotEmpty &&
+        (_answeredRoomUntilMs.containsKey(roomID) ||
+            _isAcceptInProgressForRoom(roomID) ||
+            OpenIMLiveClient().hasMediaFor(roomID))) {
+      // Timeout after answer is treated as hangup path via Ended normally.
+      return;
+    }
+    _terminateCallUi(roomID.isEmpty ? null : roomID);
+  }
+
+  /// Lock-screen / system UI End — tear down LiveKit + notify peer when in-call.
+  /// While still ringing, do NOT auto-reject (duplicate CallKit / programmatic
+  /// end while callee is in WeChat would leave caller stuck on 请求中).
   void _onCallKitEnded(SignalingInfo? signaling) {
     _stopSound();
     PackageBridge.clearCallNotification?.call();
 
-    final info = signaling ?? _activeCallSignaling;
+    final info = _resolveIncomingSignaling(signaling) ??
+        signaling ??
+        _activeCallSignaling;
     final roomID =
         info?.invitation?.roomID ?? OpenIMLiveClient().currentRoomID;
 
@@ -1567,9 +1598,14 @@ mixin OpenIMLive {
       return;
     }
 
+    // Still ringing: programmatic/duplicate CallKit end — local dismiss only.
+    // Real user reject goes through Decline → onTapReject.
     if (info != null && !inCall) {
-      Logger.print('CallKit ended before connect roomID=$roomID');
-      unawaited(onTapReject(info..userID = OpenIM.iMManager.userID));
+      Logger.print(
+          'CallKit ended before connect — local dismiss only roomID=$roomID');
+      CallAudioDebugLog.add(
+          'callkit', 'ended before connect local only roomID=$roomKey');
+      _terminateCallUi(roomID);
       return;
     }
 
@@ -1716,6 +1752,9 @@ mixin OpenIMLive {
                   if (OpenIMLiveClient().hasOverlay) {
                     OpenIMLiveClient().closeOverlayOnly();
                   }
+                  // PushKit may already own CallKit — never re-show same UUID.
+                  _suppressCallKitEnded(
+                      roomID, duration: const Duration(seconds: 45));
                   if (!voip.ownsIncomingUi) {
                     await voip.showIncoming(event.data);
                   }
@@ -2130,41 +2169,67 @@ mixin OpenIMLive {
   }
 
   onTapReject(SignalingInfo signaling) async {
-    final roomID = signaling.invitation?.roomID;
-    if (OpenIMLiveClient().hasMediaFor(roomID)) {
-      _terminateCallUi(roomID);
-    } else {
-      _markRoomEnded(roomID);
-      _clearPickupCache();
+    final resolved = _resolveIncomingSignaling(signaling) ?? signaling;
+    final roomID = resolved.invitation?.roomID;
+    // Resolve peer BEFORE terminate (which clears _activeCallSignaling).
+    var inviter = resolved.invitation?.inviterUserID?.trim() ?? '';
+    if (inviter.isEmpty) {
+      inviter = _activeCallSignaling?.invitation?.inviterUserID?.trim() ?? '';
     }
+    final self = OpenIM.iMManager.userID;
+    final fallbackInvitee =
+        _activeCallSignaling?.invitation?.inviteeUserIDList?.firstOrNull;
+    final recvUserID = inviter == self
+        ? (resolved.invitation?.inviteeUserIDList?.firstOrNull ??
+            fallbackInvitee)
+        : (inviter.isNotEmpty
+            ? inviter
+            : resolved.invitation?.inviterUserID);
+    // Always tear down local UI — mark-ended-only left zombie overlays.
+    _terminateCallUi(roomID);
     _stopSound();
-    insertSignalingMessageSubject.add(CallEvent(CallState.reject, signaling));
+    insertSignalingMessageSubject.add(CallEvent(CallState.reject, resolved));
 
-    final data = {
-      'customType': CustomMessageType.callingReject,
-      'data': signaling.invitation!.toJson()
-    };
-    final message = await OpenIM.iMManager.messageManager.createCustomMessage(
-        data: jsonEncode(data), extension: '', description: '');
-    final recvUserID =
-        signaling.invitation!.inviterUserID == OpenIM.iMManager.userID
-            ? signaling.invitation!.inviteeUserIDList!.first
-            : signaling.invitation!.inviterUserID;
-    final result = await OpenIM.iMManager.messageManager.sendMessage(
-        message: message,
-        offlinePushInfo: OfflinePushInfo(),
-        userID: recvUserID,
-        isOnlineOnly: false);
-    if (recvUserID != null && recvUserID.isNotEmpty) {
+    if (recvUserID == null || recvUserID.isEmpty) {
+      Logger.print('onTapReject: missing inviter — skip signal roomID=$roomID');
+      CallAudioDebugLog.add('reject', 'missing inviter roomID=$roomID');
+      unawaited(
+          VoipCallkitController.toOrNull?.endCall(roomID) ?? Future.value());
+      return null;
+    }
+
+    try {
+      final data = {
+        'customType': CustomMessageType.callingReject,
+        'data': (resolved.invitation ?? signaling.invitation)!.toJson()
+      };
+      final message = await OpenIM.iMManager.messageManager.createCustomMessage(
+          data: jsonEncode(data), extension: '', description: '');
+      final result = await OpenIM.iMManager.messageManager.sendMessage(
+          message: message,
+          offlinePushInfo: OfflinePushInfo(),
+          userID: recvUserID,
+          isOnlineOnly: false);
       unawaited(_triggerVoipPush(
-        signaling,
+        resolved,
         action: 'reject',
         toUserIDs: [recvUserID],
       ));
+      unawaited(
+          VoipCallkitController.toOrNull?.endCall(roomID) ?? Future.value());
+      return result;
+    } catch (e, s) {
+      Logger.print('onTapReject send failed: $e $s');
+      // Still try VoIP so caller can leave "请求中".
+      unawaited(_triggerVoipPush(
+        resolved,
+        action: 'reject',
+        toUserIDs: [recvUserID],
+      ));
+      unawaited(
+          VoipCallkitController.toOrNull?.endCall(roomID) ?? Future.value());
+      return null;
     }
-    unawaited(
-        VoipCallkitController.toOrNull?.endCall(roomID) ?? Future.value());
-    return result;
   }
   onTapCancel(SignalingInfo signaling) async {
     final roomID = signaling.invitation?.roomID;

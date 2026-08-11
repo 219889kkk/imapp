@@ -375,13 +375,19 @@ class VoipCallkitController extends GetxService {
       switch (event.event) {
         case Event.actionCallIncoming:
           callKitActive.value = true;
+          final incoming = signalingFromCallKitBody(event.body);
+          final incomingRoom = incoming?.invitation?.roomID?.trim() ?? '';
+          if (incomingRoom.isNotEmpty) {
+            _incomingRoomID = incomingRoom;
+          }
           // WS invite may have already opened in-app UI — drop duplicate banner.
+          // Suppress Ended so programmatic dismiss does NOT auto-reject the caller.
           if (PackageBridge.rtcBridge?.hasCallOverlay == true) {
-            final signaling = signalingFromCallKitBody(event.body);
-            final roomID = signaling?.invitation?.roomID;
+            final roomID = incoming?.invitation?.roomID;
             PackageBridge.suppressCallKitEnded?.call(roomID);
             unawaited(endCall(roomID));
             callKitActive.value = false;
+            _incomingRoomID = null;
           }
           break;
         case Event.actionCallAccept:
@@ -391,11 +397,19 @@ class VoipCallkitController extends GetxService {
           break;
         case Event.actionCallDecline:
           callKitActive.value = false;
+          _incomingRoomID = null;
           _onDecline(event.body);
           break;
-        case Event.actionCallEnded:
         case Event.actionCallTimeout:
+          // Missed ring — never map to reject (that stuck caller on "请求中"
+          // / showed 对方已拒绝 when callee was in WeChat/browser).
           callKitActive.value = false;
+          _incomingRoomID = null;
+          _onTimeout(event.body);
+          break;
+        case Event.actionCallEnded:
+          callKitActive.value = false;
+          _incomingRoomID = null;
           _onEnded(event.body);
           break;
         case Event.actionCallToggleAudioSession:
@@ -509,11 +523,20 @@ class VoipCallkitController extends GetxService {
     }
   }
 
+  void _onTimeout(dynamic body) {
+    PackageBridge.clearCallNotification?.call();
+    final signaling = signalingFromCallKitBody(body);
+    PackageBridge.onCallKitTimeout?.call(signaling);
+  }
+
   void _onEnded(dynamic body) {
     PackageBridge.clearCallNotification?.call();
     final signaling = signalingFromCallKitBody(body);
     PackageBridge.onCallKitEnded?.call(signaling);
   }
+
+  /// RoomID currently shown in CallKit / full-screen incoming UI.
+  String? _incomingRoomID;
 
   /// Show system-style incoming call (iOS CallKit / Android full-screen).
   Future<void> showIncoming(SignalingInfo info, {String? nameCaller}) async {
@@ -529,15 +552,45 @@ class VoipCallkitController extends GetxService {
     final invitation = info.invitation;
     if (invitation?.roomID == null) return;
 
+    final uuid = invitation!.roomID!;
+    // PushKit already reported CallKit — re-show same UUID ends the first call
+    // and fires Timeout/Ended → false reject while callee is in WeChat/browser.
+    if (callKitActive.value && _incomingRoomID == uuid) {
+      Logger.print('showIncoming skipped: already ringing roomID=$uuid');
+      PackageBridge.suppressCallKitEnded?.call(uuid);
+      return;
+    }
+    try {
+      final active = await FlutterCallkitIncoming.activeCalls();
+      if (active is List) {
+        for (final item in active) {
+          final id = item is Map ? item['id']?.toString() : null;
+          if (id == uuid) {
+            callKitActive.value = true;
+            _incomingRoomID = uuid;
+            PackageBridge.suppressCallKitEnded?.call(uuid);
+            Logger.print('showIncoming skipped: native active roomID=$uuid');
+            return;
+          }
+        }
+      }
+    } catch (e, s) {
+      Logger.print('showIncoming activeCalls check failed: $e $s');
+    }
+
     if (Platform.isAndroid) {
       await ensureAndroidCallPermissions();
     }
 
-    final isVideo = invitation!.mediaType == 'video';
-    final uuid = invitation.roomID!;
+    final isVideo = invitation.mediaType == 'video';
     final caller = nameCaller?.trim().isNotEmpty == true
         ? nameCaller!.trim()
         : (invitation.inviterUserID ?? '来电');
+    // Clamp: 0/tiny timeout makes CallKit fire Timeout immediately → false reject.
+    final timeoutSec = (() {
+      final t = invitation.timeout ?? 60;
+      return t < 30 ? 60 : t;
+    })();
 
     final extra = <String, dynamic>{
       'type': 'callingInvite',
@@ -547,7 +600,7 @@ class VoipCallkitController extends GetxService {
       'mediaType': invitation.mediaType ?? (isVideo ? 'video' : 'audio'),
       'sessionType': invitation.sessionType,
       'groupID': invitation.groupID,
-      'timeout': invitation.timeout ?? 30,
+      'timeout': timeoutSec,
       'nickname': caller,
     };
 
@@ -557,7 +610,7 @@ class VoipCallkitController extends GetxService {
       appName: '航讯',
       handle: invitation.inviterUserID ?? '',
       type: isVideo ? 1 : 0,
-      duration: (invitation.timeout ?? 30) * 1000,
+      duration: timeoutSec * 1000,
       textAccept: StrRes.pickUp,
       textDecline: StrRes.reject,
       extra: extra,
@@ -597,6 +650,8 @@ class VoipCallkitController extends GetxService {
     );
 
     callKitActive.value = true;
+    _incomingRoomID = uuid;
+    PackageBridge.suppressCallKitEnded?.call(uuid);
     Logger.print(
         'showIncoming platform=${Platform.operatingSystem} roomID=$uuid caller=$caller video=$isVideo');
     await FlutterCallkitIncoming.showCallkitIncoming(params);

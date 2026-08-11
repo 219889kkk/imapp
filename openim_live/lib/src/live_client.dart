@@ -133,7 +133,16 @@ class OpenIMLiveClient implements RTCBridge {
   }
 
   closeByRoomID(String roomID) {
-    if (currentRoomID == roomID) {
+    final id = roomID.trim();
+    final current = currentRoomID?.trim() ?? '';
+    if (current == id || current.isEmpty) {
+      close();
+      return;
+    }
+    // Reject/cancel roomID mismatch used to leave caller stuck on 请求中.
+    if (isBusy && hasOverlay) {
+      Logger.print(
+          'closeByRoomID mismatch current=$current event=$id — force close overlay');
       close();
     }
   }
