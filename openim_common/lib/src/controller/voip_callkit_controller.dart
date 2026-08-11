@@ -601,11 +601,22 @@ class VoipCallkitController extends GetxService {
     await FlutterCallkitIncoming.showCallkitIncoming(params);
   }
 
+  /// roomID → last setConnected millis (dedupe CallKit audio activate storms).
+  final Map<String, int> _setConnectedAtMs = {};
+
   /// Mark an answered CallKit call as connected (keeps system call audio session).
+  /// Once per room until hangup — repeated calls flap AVAudioSession → mic flicker.
   Future<void> setConnected([String? roomID]) async {
     if (!Platform.isIOS && !Platform.isAndroid) return;
     final id = roomID?.trim() ?? '';
     if (id.isEmpty) return;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final last = _setConnectedAtMs[id];
+    if (last != null && now - last < 15000) {
+      CallAudioDebugLog.add('callkit', 'setCallConnected debounced roomID=$id');
+      return;
+    }
+    _setConnectedAtMs[id] = now;
     try {
       await FlutterCallkitIncoming.setCallConnected(id);
       callKitActive.value = true;
@@ -614,6 +625,19 @@ class VoipCallkitController extends GetxService {
     } catch (e, s) {
       Logger.print('setConnected failed: $e $s');
       CallAudioDebugLog.add('callkit', 'setCallConnected failed: $e');
+    }
+  }
+
+  /// Tell native PushKit to ignore late invites for this room (zombie CallKit).
+  Future<void> markRoomEndedNative(String? roomID) async {
+    final id = roomID?.trim() ?? '';
+    if (id.isEmpty) return;
+    _setConnectedAtMs.remove(id);
+    if (!Platform.isIOS) return;
+    try {
+      await _nativeChannel.invokeMethod('markRoomEnded', {'roomID': id});
+    } catch (e) {
+      CallAudioDebugLog.add('callkit', 'markRoomEnded native failed: $e');
     }
   }
 

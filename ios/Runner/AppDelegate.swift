@@ -15,6 +15,9 @@ import flutter_callkit_incoming
     var observeTimer: Timer?
     var hasEmittedFirstSample = false
     private var voipRegistry: PKPushRegistry?
+    /// roomID → endedAt (ignore late PushKit invites that re-show CallKit).
+    private var endedVoipRooms: [String: Date] = [:]
+    private let endedVoipRoomTTL: TimeInterval = 120
 
     override func application(
         _ application: UIApplication,
@@ -45,6 +48,14 @@ import flutter_callkit_incoming
                 result(RTCAudioSession.sharedInstance().isAudioEnabled)
             case "bridgeCallKitWebRtcAudio":
                 self.bridgeCallKitWebRtcAudio(result: result)
+            case "markRoomEnded":
+                let args = call.arguments as? [String: Any]
+                let roomID = (args?["roomID"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                if !roomID.isEmpty {
+                    self.markVoipRoomEnded(roomID)
+                    NSLog("HangXun VoIP: markRoomEnded %@", roomID)
+                }
+                result(true)
             default:
                 result(FlutterMethodNotImplemented)
             }
@@ -270,6 +281,26 @@ import flutter_callkit_incoming
         return merged
     }
 
+
+    private func markVoipRoomEnded(_ roomID: String) {
+        let id = roomID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !id.isEmpty else { return }
+        pruneEndedVoipRooms()
+        endedVoipRooms[id] = Date()
+    }
+
+    private func isVoipRoomEnded(_ roomID: String) -> Bool {
+        pruneEndedVoipRooms()
+        let id = roomID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !id.isEmpty else { return false }
+        return endedVoipRooms[id] != nil
+    }
+
+    private func pruneEndedVoipRooms() {
+        let cutoff = Date().addingTimeInterval(-endedVoipRoomTTL)
+        endedVoipRooms = endedVoipRooms.filter { $0.value >= cutoff }
+    }
+
     private func endCallKitCalls(roomID: String) {
         let endData = flutter_callkit_incoming.Data(args: [
             "id": roomID,
@@ -315,6 +346,7 @@ import flutter_callkit_incoming
 
         if action == "cancel" || action == "end" || action == "hungup" || action == "reject" {
             NSLog("HangXun VoIP remote end action=%@ room=%@", action, roomID)
+            markVoipRoomEnded(roomID)
             endCallKitCalls(roomID: roomID)
             notifyDartVoipRemoteEnd(roomID: roomID, action: action)
             DispatchQueue.main.async { completion() }
@@ -325,6 +357,13 @@ import flutter_callkit_incoming
         if action == "accept" || action == "answered" {
             NSLog("HangXun VoIP peer accept room=%@", roomID)
             notifyDartVoipRemoteEnd(roomID: roomID, action: "accept")
+            DispatchQueue.main.async { completion() }
+            return
+        }
+
+        if isVoipRoomEnded(roomID) {
+            NSLog("HangXun VoIP: skip CallKit (room ended, room=%@)", roomID)
+            endCallKitCalls(roomID: roomID)
             DispatchQueue.main.async { completion() }
             return
         }

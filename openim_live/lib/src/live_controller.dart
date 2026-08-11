@@ -40,6 +40,16 @@ mixin OpenIMLive {
       Logger.print('ignore invite: room already ended $roomID');
       return;
     }
+    // Already answered this room — never re-open invite sheet after hangup.
+    if (roomID.isNotEmpty && _answeredRoomUntilMs.containsKey(roomID)) {
+      Logger.print('ignore invite: room already answered $roomID');
+      return;
+    }
+    if (_isAcceptInProgressForRoom(roomID) ||
+        _callKitAcceptHandledRoomID == roomID) {
+      Logger.print('ignore invite: accept in progress $roomID');
+      return;
+    }
     // Already in a call: never re-open invite UI (fixes looping invite sheets).
     if (isBusy) {
       final current = OpenIMLiveClient().currentRoomID;
@@ -48,7 +58,7 @@ mixin OpenIMLive {
           Logger.print('ignore invite: room ended $roomID');
           return;
         }
-        // Same room — attach UI if lock-screen join has no overlay yet.
+        // Same room — attach in-call UI only (never beCalled).
         if (!OpenIMLiveClient().hasOverlay) {
           _presentCallUi(info, fromHeadless: true);
         } else if (OpenIMLiveClient().hasMediaFor(roomID)) {
@@ -77,11 +87,22 @@ mixin OpenIMLive {
     final id = roomID?.trim() ?? '';
     if (id.isEmpty) return;
     _endedRoomUntilMs[id] = DateTime.now().millisecondsSinceEpoch + _endedRoomTtlMs;
+    _answeredRoomUntilMs.remove(id);
+    unawaited(
+        VoipCallkitController.toOrNull?.markRoomEndedNative(id) ?? Future.value());
+  }
+
+  void _markRoomAnswered(String? roomID) {
+    final id = roomID?.trim() ?? '';
+    if (id.isEmpty) return;
+    _answeredRoomUntilMs[id] =
+        DateTime.now().millisecondsSinceEpoch + _endedRoomTtlMs;
   }
 
   void _pruneEndedRooms() {
     final now = DateTime.now().millisecondsSinceEpoch;
     _endedRoomUntilMs.removeWhere((_, until) => until <= now);
+    _answeredRoomUntilMs.removeWhere((_, until) => until <= now);
   }
 
   bool _isRoomEnded(String? roomID) {
@@ -248,6 +269,8 @@ mixin OpenIMLive {
 
   /// Recently ended roomIDs — ignore late/synced invites (WeChat-like).
   final Map<String, int> _endedRoomUntilMs = {};
+  /// Answered roomIDs — ignore re-delivered invites that would flash accept UI.
+  final Map<String, int> _answeredRoomUntilMs = {};
   static const _endedRoomTtlMs = 120 * 1000;
   final _ring = 'assets/audio/live_ring.wav';
   final _audioPlayer = AudioPlayer(
@@ -439,11 +462,10 @@ mixin OpenIMLive {
     );
     PackageBridge.clearCallNotification?.call();
     if (roomID.isNotEmpty) {
-      // Short suppress only for setConnected echo — user End must still hang up.
+      _markRoomAnswered(roomID);
+      // Short suppress only for programmatic dismiss echo — user End must still hang up.
       _suppressCallKitEnded(roomID, duration: const Duration(seconds: 2));
-      // Mark connected immediately so CallKit keeps the audio session while LiveKit joins.
-      unawaited(VoipCallkitController.toOrNull?.setConnected(roomID) ??
-          Future.value());
+      // Do NOT setConnected here — wait until LiveKit join succeeds (avoids audio flap).
     }
     CallAudioDebugLog.add('callkit', 'accept join roomID=$roomID');
     unawaited(_callKitAcceptAndJoin(resolved));
@@ -563,13 +585,6 @@ mixin OpenIMLive {
     );
     // Keep CallKit as session owner — do not hand off to in-app enable.
     CallAudioKeepAlive.instance.markCallKitOwnsSession();
-    final roomID = _activeCallSignaling?.invitation?.roomID?.trim() ??
-        OpenIMLiveClient().currentRoomID?.trim() ??
-        '';
-    if (roomID.isNotEmpty) {
-      unawaited(VoipCallkitController.toOrNull?.setConnected(roomID) ??
-          Future.value());
-    }
     final client = OpenIMLiveClient();
     if (!client.isBusy || client.mediaRoom == null) {
       CallAudioDebugLog.add(
@@ -579,7 +594,8 @@ mixin OpenIMLive {
     final isVideo = _activeCallSignaling?.invitation?.mediaType == 'video';
     Logger.print('CallKit audio activated (native) — enable LiveKit audio');
     CallAudioDebugLog.add(
-        'callkit', 'didActivate — kickstart media (keep CallKit session)');
+        'callkit', 'didActivate — re-arm media (no setConnected storm)');
+    // Subscribe remotes / unmute only if off — never setConnected here.
     unawaited(client.kickstartIosCallKitMedia(speakerOn: isVideo));
   }
 
@@ -609,11 +625,9 @@ mixin OpenIMLive {
     CallAudioKeepAlive.instance.releaseCallKitSession();
     unawaited(() async {
       await IosWebRtcAudio.enable(speakerOn: isVideo);
+      // Session handoff only — do not force mic cycle (was causing mute flicker).
       if (!client.isMediaConnecting && client.mediaRoom != null) {
-        await client.kickstartIosCallKitMedia(
-          speakerOn: isVideo,
-          unmuteMic: true,
-        );
+        await client.onCallActive(speakerOn: isVideo, unmuteMic: false);
       }
     }());
   }
@@ -625,10 +639,16 @@ mixin OpenIMLive {
     if (signaling == null) return;
     final roomID = signaling.invitation?.roomID?.trim() ?? '';
     if (roomID.isEmpty || _isRoomEnded(roomID)) return;
+    // Already answered / joining — never re-arm incoming CallKit.
+    if (_answeredRoomUntilMs.containsKey(roomID) ||
+        _isAcceptInProgressForRoom(roomID) ||
+        _callKitAcceptHandledRoomID == roomID) {
+      return;
+    }
     if (!_iosShouldUseCallKitForRing(roomID)) return;
 
     final client = OpenIMLiveClient();
-    if (client.hasMediaFor(roomID)) return;
+    if (client.hasMediaFor(roomID) || client.isBusy) return;
 
     final voip = VoipCallkitController.toOrNull;
     if (voip == null) return;
@@ -679,7 +699,11 @@ mixin OpenIMLive {
       final pending = _beCalledEvent!;
       final pendingRoom = pending.data.invitation?.roomID?.trim() ?? '';
       _beCalledEvent = null;
-      if (_isRoomEnded(pendingRoom)) return;
+      if (_isRoomEnded(pendingRoom) ||
+          _answeredRoomUntilMs.containsKey(pendingRoom)) {
+        await _dismissCallKitIncoming(pendingRoom);
+        return;
+      }
 
       if (_isAcceptInProgressForRoom(pendingRoom)) {
         Logger.print('iOS fg: accept in flight roomID=$pendingRoom');
@@ -706,35 +730,36 @@ mixin OpenIMLive {
       return;
     }
 
-    // After lock-screen hangup: do not reopen a call page from leftover signaling.
-    // Never clear _activeCallSignaling / never hang up here — unlock must not
-    // tear down a live or reconnecting call (media path above already handled).
-    if (active != null &&
-        activeRoom.isNotEmpty &&
-        !_isRoomEnded(activeRoom) &&
-        !client.hasOverlay) {
-      if (client.hasMediaFor(activeRoom) ||
-          client.isBusy ||
-          _isAcceptInProgressForRoom(activeRoom)) {
+    // Stale signaling after hangup / media gone — clear, never re-show invite page.
+    if (active != null && activeRoom.isNotEmpty && !client.hasOverlay) {
+      if (_isRoomEnded(activeRoom) ||
+          (_answeredRoomUntilMs.containsKey(activeRoom) &&
+              !client.hasMediaFor(activeRoom) &&
+              !_isAcceptInProgressForRoom(activeRoom) &&
+              !client.isBusy)) {
+        Logger.print('iOS fg: clear stale call signaling roomID=$activeRoom');
+        CallAudioDebugLog.add('fg', 'clear stale signaling roomID=$activeRoom');
+        await _dismissCallKitIncoming(activeRoom);
+        _activeCallSignaling = null;
+        _beCalledEvent = null;
+        return;
+      }
+      if (!_isRoomEnded(activeRoom) &&
+          (client.hasMediaFor(activeRoom) ||
+              client.isBusy ||
+              _isAcceptInProgressForRoom(activeRoom))) {
         Logger.print('iOS fg: attach mid-call UI roomID=$activeRoom');
         _presentCallUi(active, fromHeadless: true);
         await _restoreLiveCallAudio(active);
         return;
       }
-      final callKitAlive =
-          VoipCallkitController.toOrNull?.callKitActive.value == true;
-      if (callKitAlive) {
-        await _dismissCallKitIncoming(activeRoom);
-        final ctx = Get.overlayContext;
-        if (ctx != null) {
-          _presentCallUi(active);
-        }
-      } else {
-        Logger.print(
-            'iOS fg: skip present (no media/CallKit) keep signaling roomID=$activeRoom');
-        CallAudioDebugLog.add(
-            'fg', 'skip present stale UI roomID=$activeRoom');
-      }
+      // Unanswered leftover with CallKit still up — dismiss only, no Flutter invite.
+      await _dismissCallKitIncoming(activeRoom);
+      Logger.print(
+          'iOS fg: skip present stale UI roomID=$activeRoom');
+      CallAudioDebugLog.add('fg', 'skip present stale UI roomID=$activeRoom');
+      _activeCallSignaling = null;
+      _beCalledEvent = null;
     }
   }
 
@@ -831,7 +856,9 @@ mixin OpenIMLive {
       final cert = await future;
       if (gen == _callSessionGen && !_isRoomEnded(roomID)) {
         _autoPickup = false;
+        _markRoomAnswered(roomID);
         signalingSubject.add(CallEvent(CallState.calling, signaling));
+        // Single setConnected after successful join.
         unawaited(
             VoipCallkitController.toOrNull?.setConnected(roomID) ??
                 Future.value());
@@ -884,10 +911,10 @@ mixin OpenIMLive {
       CallAudioDebugLog.add('fg', 'took over audio after CallKit deactivate');
     }
     if (client.isMediaConnecting) {
-      CallAudioDebugLog.add('fg', 'skip kickstart — connect in flight');
+      CallAudioDebugLog.add('fg', 'skip audio restore — connect in flight');
       return;
     }
-    await client.kickstartIosCallKitMedia(speakerOn: isVideo);
+    await client.onCallActive(speakerOn: isVideo, unmuteMic: true);
     client.promoteCallingUi();
   }
 
@@ -912,10 +939,10 @@ mixin OpenIMLive {
       await CallAudioKeepAlive.instance.prepareForRtc(speakerOn: isVideo);
     }
     if (client.isMediaConnecting) {
-      CallAudioDebugLog.add('fg', 'skip kickstart — connect in flight');
+      CallAudioDebugLog.add('fg', 'skip audio restore — connect in flight');
       return;
     }
-    await client.kickstartIosCallKitMedia(speakerOn: isVideo);
+    await client.onCallActive(speakerOn: isVideo, unmuteMic: true);
     client.promoteCallingUi();
   }
 
@@ -1110,17 +1137,17 @@ mixin OpenIMLive {
       throw StateError('accept aborted after connect');
     }
 
+    _markRoomAnswered(roomID);
+    // One unmute/subscribe path after join — no second kickstart (mic flicker).
     await OpenIMLiveClient().onCallActive(
       speakerOn: isVideo,
       unmuteMic: micGranted,
     );
     if (isCallKitAccept) {
-      // Mic/playout may need a beat after CallKit → WebRTC bridge.
-      await Future<void>.delayed(const Duration(milliseconds: 250));
-      CallAudioDebugLog.add('accept', 'post-connect kickstart unmuteMic=$micGranted');
+      await Future<void>.delayed(const Duration(milliseconds: 200));
       await OpenIMLiveClient().kickstartIosCallKitMedia(
         speakerOn: isVideo,
-        unmuteMic: micGranted,
+        unmuteMic: false, // already handled by onCallActive
       );
     }
     Logger.print('accept joined roomID=${cert.roomID} type=$callType');
@@ -1145,7 +1172,7 @@ mixin OpenIMLive {
     _activeCallSignaling = signaling;
     final client = OpenIMLiveClient();
     if (client.hasOverlay) {
-      if (client.hasMediaFor(roomID)) {
+      if (client.hasMediaFor(roomID) || fromHeadless) {
         _promoteOverlayToInCall(signaling);
       }
       return;
@@ -1158,18 +1185,22 @@ mixin OpenIMLive {
         ? CallObj.single
         : CallObj.group;
     final overlayContext = Get.overlayContext;
+    final mediaReady = client.hasMediaFor(roomID);
+    final answered = roomID != null &&
+        (_answeredRoomUntilMs.containsKey(roomID.trim()) ||
+            _isAcceptInProgressForRoom(roomID) ||
+            fromHeadless);
+    // Answered / headless attach must never open as invite (accept) page.
+    final initAsCalling = mediaReady || answered;
     if (overlayContext == null) {
       // Keep pending so foreground restores UI without interrupting media.
       _beCalledEvent = CallEvent(
-        fromHeadless || client.hasMediaFor(roomID)
-            ? CallState.calling
-            : CallState.beCalled,
+        initAsCalling ? CallState.calling : CallState.beCalled,
         signaling,
       );
       return;
     }
 
-    final mediaReady = client.hasMediaFor(roomID);
     OpenIMLiveClient().start(
       overlayContext,
       callEventSubject: signalingSubject,
@@ -1179,11 +1210,11 @@ mixin OpenIMLive {
       groupID: signaling.invitation!.groupID,
       callType: callType,
       callObj: callObj,
-      initState: mediaReady ? CallState.calling : CallState.beCalled,
+      initState: initAsCalling ? CallState.calling : CallState.beCalled,
       onSyncUserInfo: onSyncUserInfo,
       onSyncGroupInfo: onSyncGroupInfo,
       onSyncGroupMemberInfo: onSyncGroupMemberInfo,
-      autoPickup: mediaReady ? false : _autoPickup,
+      autoPickup: initAsCalling ? false : _autoPickup,
       onTapPickup: () async {
         final cert = await acceptIncomingCall(
           signaling..userID = OpenIM.iMManager.userID,
@@ -1191,6 +1222,7 @@ mixin OpenIMLive {
           presentUiAfter: false,
         );
         final roomID = signaling.invitation?.roomID;
+        _markRoomAnswered(roomID);
         unawaited(
             VoipCallkitController.toOrNull?.setConnected(roomID) ??
                 Future.value());

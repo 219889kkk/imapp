@@ -145,14 +145,7 @@ abstract class SignalState<T extends SignalView> extends State<T>
   Future<void> _restoreCallAudio() async {
     final client = OpenIMLiveClient();
     if (!client.isBusy || client.mediaRoom == null) return;
-    // Never steal CallKit's AVAudioSession — only re-arm mic/remote tracks.
-    if (CallAudioKeepAlive.instance.callKitOwnsSession) {
-      await client.kickstartIosCallKitMedia(
-        speakerOn: enabledSpeaker,
-        unmuteMic: enabledMicrophone,
-      );
-      return;
-    }
+    // Single safe path — never force mic off/on (kickstart used to flicker).
     await client.onCallActive(
       speakerOn: enabledSpeaker,
       unmuteMic: enabledMicrophone,
@@ -195,9 +188,15 @@ abstract class SignalState<T extends SignalView> extends State<T>
       return;
     }
 
+    // Never regress in-call UI back to invite/connecting (hangup→re-invite flash).
     if (event.state == CallState.call ||
         event.state == CallState.beCalled ||
         event.state == CallState.connecting) {
+      if (callState == CallState.calling) {
+        Logger.print(
+            'ignore ${event.state} — already in-call roomID=$_callRoomID');
+        return;
+      }
       callState = event.state;
       callStateSubject.add(event.state);
     }

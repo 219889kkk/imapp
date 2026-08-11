@@ -804,7 +804,10 @@ class OpenIMLiveClient implements RTCBridge {
     await onCallActive(speakerOn: speakerOn, unmuteMic: true);
   }
 
-  /// Lock-screen CallKit: republish mic + start remote playout after WebRTC bridge.
+  DateTime? _lastKickstartAt;
+
+  /// Lock-screen CallKit: ensure mic/remote playout after WebRTC bridge.
+  /// Never force mic off→on — that caused visible/audible rapid mute flicker.
   Future<void> kickstartIosCallKitMedia({
     bool speakerOn = false,
     bool unmuteMic = true,
@@ -819,21 +822,21 @@ class OpenIMLiveClient implements RTCBridge {
       CallAudioDebugLog.add('kickstart', 'skip — no media room');
       return;
     }
+    final now = DateTime.now();
+    if (_lastKickstartAt != null &&
+        now.difference(_lastKickstartAt!) < const Duration(milliseconds: 800)) {
+      CallAudioDebugLog.add('kickstart', 'skip — debounced');
+      return;
+    }
+    _lastKickstartAt = now;
     try {
+      final micOn = room.localParticipant?.isMicrophoneEnabled() == true;
       CallAudioDebugLog.add(
         'kickstart',
-        'start unmuteMic=$unmuteMic speaker=$speakerOn remotes=${room.remoteParticipants.length}',
+        'start unmuteMic=$unmuteMic micAlready=$micOn speaker=$speakerOn remotes=${room.remoteParticipants.length}',
       );
-      await onCallActive(speakerOn: speakerOn, unmuteMic: unmuteMic);
-      if (unmuteMic) {
-        final local = room.localParticipant;
-        if (local != null) {
-          if (local.isMicrophoneEnabled() == true) {
-            await local.setMicrophoneEnabled(false);
-          }
-          await local.setMicrophoneEnabled(true);
-        }
-      }
+      // Same safe path as onCallActive: only enable mic if currently off.
+      await onCallActive(speakerOn: speakerOn, unmuteMic: unmuteMic && !micOn);
       await _subscribeRemoteTracks();
       Logger.print(
           'kickstartIosCallKitMedia remotes=${room.remoteParticipants.length}');
