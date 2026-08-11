@@ -102,11 +102,18 @@ import flutter_callkit_incoming
                 mode: .voiceChat,
                 options: [.allowBluetooth, .allowBluetoothA2DP]
             )
+            try configureLowLatencyAudio(session)
             emitAudioDebug("CallKit onAccept category configured room=\(call.data.uuid)")
         } catch {
             emitAudioDebug("CallKit onAccept category failed \(error.localizedDescription)")
         }
         action.fulfill()
+    }
+
+    /// Prefer 48 kHz / 5 ms buffers — closer to Opus framing, less mouth-to-ear delay.
+    private func configureLowLatencyAudio(_ session: AVAudioSession) throws {
+        try session.setPreferredSampleRate(48000)
+        try session.setPreferredIOBufferDuration(0.005)
     }
 
     func onDecline(_ call: Call, _ action: CXEndCallAction) {
@@ -148,6 +155,7 @@ import flutter_callkit_incoming
                 mode: .voiceChat,
                 options: [.allowBluetooth, .allowBluetoothA2DP]
             )
+            try configureLowLatencyAudio(audioSession)
         } catch {
             emitAudioDebug("CallKit didActivate category failed \(error.localizedDescription)")
         }
@@ -180,6 +188,7 @@ import flutter_callkit_incoming
                 options.insert(.defaultToSpeaker)
             }
             try session.setCategory(.playAndRecord, mode: .voiceChat, options: options)
+            try configureLowLatencyAudio(session)
             try session.setActive(true)
             RTCAudioSession.sharedInstance().audioSessionDidActivate(session)
             RTCAudioSession.sharedInstance().isAudioEnabled = true
@@ -208,6 +217,7 @@ import flutter_callkit_incoming
                 mode: .voiceChat,
                 options: [.allowBluetooth, .allowBluetoothA2DP]
             )
+            try configureLowLatencyAudio(session)
         } catch {
             emitAudioDebug("CallKit bridge category failed \(error.localizedDescription)")
         }

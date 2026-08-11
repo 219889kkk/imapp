@@ -589,7 +589,8 @@ class VoipCallkitController extends GetxService {
         // Must be false — plugin session config fights WebRTC/LiveKit (see flutter_callkit_incoming #402).
         configureAudioSession: false,
         audioSessionActive: false,
-        audioSessionPreferredSampleRate: 44100.0,
+        // Match Opus/WebRTC 48 kHz; 5 ms IO buffer keeps capture/playout shallow.
+        audioSessionPreferredSampleRate: 48000.0,
         audioSessionPreferredIOBufferDuration: 0.005,
         ringtonePath: 'system_ringtone_default',
       ),

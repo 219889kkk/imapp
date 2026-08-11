@@ -223,6 +223,37 @@ class OpenIMLiveClient implements RTCBridge {
 
   void _noopRoomListener() {}
 
+  /// Low-latency VoIP RoomOptions: speech bitrate + RED, lighter video under cellular.
+  RoomOptions _roomOptionsForCall({required bool speakerOn}) {
+    return RoomOptions(
+      dynacast: true,
+      adaptiveStream: true,
+      defaultAudioCaptureOptions: const AudioCaptureOptions(
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+        highPassFilter: true,
+      ),
+      // Speech bitrate keeps congestion — and jitter-buffer growth — in check.
+      // livekit_client 2.5.0 maps `red` → protobuf `disableRed` without inverting
+      // (unlike JS/Swift SDKs). Pass false so server actually enables Opus RED.
+      defaultAudioPublishOptions: const AudioPublishOptions(
+        dtx: true,
+        red: false,
+        audioBitrate: AudioPreset.speech,
+      ),
+      defaultAudioOutputOptions: AudioOutputOptions(speakerOn: speakerOn),
+      // 540p + simulcast: less video queue contention with audio on weak links.
+      defaultCameraCaptureOptions: const CameraCaptureOptions(
+        params: VideoParametersPresets.h540_169,
+      ),
+      defaultVideoPublishOptions: const VideoPublishOptions(
+        simulcast: true,
+        videoCodec: 'VP8',
+      ),
+    );
+  }
+
   /// Connect LiveKit + publish mic without requiring call UI (lock-screen answer).
   Future<void> connectMedia({
     required SignalingCertificate certificate,
@@ -419,14 +450,20 @@ class OpenIMLiveClient implements RTCBridge {
       'livekit',
       'room.connect begin roomID=$roomID url=$liveURL tokenLen=${token.length} skipSession=$skipSessionActivation',
     );
-    // CallKit path: re-bridge + settle so PeerConnection starts on a live session.
+    // CallKit path: re-bridge + brief settle so PeerConnection starts on a live session.
     if (skipSessionActivation && Platform.isIOS) {
       await IosWebRtcAudio.bridgeCallKitSession();
-      await Future<void>.delayed(const Duration(milliseconds: 400));
+      await Future<void>.delayed(const Duration(milliseconds: 120));
       CallAudioDebugLog.add(
         'livekit',
         'pre-connect audio enabled=${await IosWebRtcAudio.isEnabled()}',
       );
+    }
+    // Warm DNS/TLS/ICE while we still can — cuts first-media delay after answer.
+    try {
+      await room.prepareConnection(liveURL, token);
+    } catch (e) {
+      CallAudioDebugLog.add('livekit', 'prepareConnection skip err=$e');
     }
     _connectAbort = Completer<void>();
     final abortFuture = _connectAbort!.future;
@@ -448,24 +485,7 @@ class OpenIMLiveClient implements RTCBridge {
               iceRestart: Duration(seconds: 15),
             ),
           ),
-          roomOptions: RoomOptions(
-            dynacast: true,
-            adaptiveStream: true,
-            defaultAudioCaptureOptions: const AudioCaptureOptions(
-              echoCancellation: true,
-              noiseSuppression: true,
-              autoGainControl: true,
-              highPassFilter: true,
-            ),
-            defaultAudioOutputOptions: AudioOutputOptions(speakerOn: speakerOn),
-            defaultCameraCaptureOptions: const CameraCaptureOptions(
-              params: VideoParametersPresets.h720_169,
-            ),
-            defaultVideoPublishOptions: const VideoPublishOptions(
-              simulcast: true,
-              videoCodec: 'VP8',
-            ),
-          ),
+          roomOptions: _roomOptionsForCall(speakerOn: speakerOn),
         )
             .timeout(const Duration(seconds: 35)),
         abortFuture,
@@ -765,19 +785,9 @@ class OpenIMLiveClient implements RTCBridge {
           await room.connect(
             liveURL,
             token,
-            roomOptions: RoomOptions(
-              dynacast: true,
-              adaptiveStream: true,
-              defaultAudioCaptureOptions: const AudioCaptureOptions(
-                echoCancellation: true,
-                noiseSuppression: true,
-                autoGainControl: true,
-                highPassFilter: true,
-              ),
-              defaultAudioOutputOptions: AudioOutputOptions(
-                speakerOn: _userSpeakerPreference ??
-                    (_mediaCallType == CallType.video),
-              ),
+            roomOptions: _roomOptionsForCall(
+              speakerOn: _userSpeakerPreference ??
+                  (_mediaCallType == CallType.video),
             ),
           );
           final micOn = (_userMicPreference ?? true) &&
