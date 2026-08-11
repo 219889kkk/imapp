@@ -558,6 +558,16 @@ mixin OpenIMLive {
     final client = OpenIMLiveClient();
     if (!client.isBusy) return;
     final isVideo = _activeCallSignaling?.invitation?.mediaType == 'video';
+    // Mid-ICE: never setActive(true) — iOS rejects it while CallKit still owns the call
+    // and it tears down the PeerConnection. Bridge only; let connect/retry finish.
+    if (client.isMediaConnecting) {
+      CallAudioDebugLog.add(
+        'callkit',
+        'didDeactivate during connect — bridge only (no setActive)',
+      );
+      unawaited(IosWebRtcAudio.bridgeCallKitSession());
+      return;
+    }
     CallAudioDebugLog.add(
       'callkit',
       'didDeactivate while busy — switch to in-app WebRTC enable',
@@ -906,8 +916,9 @@ mixin OpenIMLive {
       );
     }
 
+    var workingCert = cert;
     Future<void> joinOnce() => OpenIMLiveClient().connectMedia(
-          certificate: cert,
+          certificate: workingCert,
           callType: callType,
           speakerOn: isVideo,
           enableCamera: isVideo && micGranted,
@@ -946,15 +957,33 @@ mixin OpenIMLive {
           e is MediaConnectException ||
           e is ConnectException ||
           e.toString().contains('MediaConnectException') ||
-          e.toString().contains('PeerConnection');
+          e.toString().contains('PeerConnection') ||
+          e.toString().contains('disconnect during connect');
       if (!retryable || gen != _callSessionGen || _isRoomEnded(roomID)) {
         rethrow;
       }
       CallAudioDebugLog.add('accept', 'connect failed — retry once err=$e');
-      // One retry after CallKit audio is up (common on lock-screen first join).
-      await Future<void>.delayed(const Duration(milliseconds: 500));
+      await Future<void>.delayed(const Duration(milliseconds: 400));
       if (gen != _callSessionGen || _isRoomEnded(roomID)) {
         throw StateError('accept aborted after connect retry');
+      }
+      // Fresh JWT + re-bridge CallKit audio before second PeerConnection.
+      if (roomID != null && roomID.isNotEmpty) {
+        try {
+          workingCert = await Apis.getTokenForRTC(
+            roomID,
+            OpenIM.iMManager.userID,
+          );
+          CallAudioDebugLog.add(
+            'accept',
+            'retry fresh token len=${workingCert.token?.length ?? 0}',
+          );
+        } catch (tokenErr) {
+          CallAudioDebugLog.add('accept', 'retry token refresh failed: $tokenErr');
+        }
+      }
+      if (isCallKitAccept) {
+        await IosWebRtcAudio.bridgeCallKitSession();
       }
       await joinOnce();
     }

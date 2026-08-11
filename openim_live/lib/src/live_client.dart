@@ -82,7 +82,11 @@ class OpenIMLiveClient implements RTCBridge {
   CallType? _mediaCallType;
   Future<void>? _mediaConnectInFlight;
   String? _mediaConnectRoomID;
+  Completer<void>? _connectAbort;
   VoidCallback? _onMediaDisconnected;
+
+  /// True while [connectMedia] / LiveKit join is still in flight.
+  bool get isMediaConnecting => _mediaConnectInFlight != null;
   /// Last speaker choice from the in-call button (wins over delayed reinforce).
   bool? _userSpeakerPreference;
   String? _uiBoundRoomID;
@@ -393,46 +397,52 @@ class OpenIMLiveClient implements RTCBridge {
       'livekit',
       'room.connect begin roomID=$roomID url=$liveURL tokenLen=${token.length} skipSession=$skipSessionActivation',
     );
+    // CallKit path: re-bridge + brief settle so PeerConnection starts on a live session.
+    if (skipSessionActivation && Platform.isIOS) {
+      await IosWebRtcAudio.bridgeCallKitSession();
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+    }
+    _connectAbort = Completer<void>();
+    final abortFuture = _connectAbort!.future;
     try {
-      await room
-          .connect(
-        liveURL,
-        token,
-        connectOptions: const ConnectOptions(
-          autoSubscribe: true,
-          // Default peerConnection is 10s — lock-screen ICE often needs longer.
-          timeouts: Timeouts(
-            connection: Duration(seconds: 25),
-            debounce: Duration(milliseconds: 100),
-            publish: Duration(seconds: 10),
-            peerConnection: Duration(seconds: 25),
-            iceRestart: Duration(seconds: 10),
-          ),
-        ),
-        roomOptions: RoomOptions(
-          dynacast: true,
-          adaptiveStream: true,
-          defaultAudioCaptureOptions: const AudioCaptureOptions(
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true,
-            highPassFilter: true,
-          ),
-          defaultAudioOutputOptions: AudioOutputOptions(speakerOn: speakerOn),
-          defaultCameraCaptureOptions: const CameraCaptureOptions(
-            params: VideoParametersPresets.h720_169,
-          ),
-          defaultVideoPublishOptions: VideoPublishOptions(
-            simulcast: true,
-            videoCodec: 'VP9',
-            videoEncoding: const VideoEncoding(
-              maxBitrate: 5 * 1000 * 1000,
-              maxFramerate: 15,
+      await Future.any<void>([
+        room
+            .connect(
+          liveURL,
+          token,
+          connectOptions: const ConnectOptions(
+            autoSubscribe: true,
+            // Default peerConnection is 10s — lock-screen ICE often needs longer.
+            timeouts: Timeouts(
+              connection: Duration(seconds: 25),
+              debounce: Duration(milliseconds: 100),
+              publish: Duration(seconds: 10),
+              peerConnection: Duration(seconds: 25),
+              iceRestart: Duration(seconds: 10),
             ),
           ),
-        ),
-      )
-          .timeout(const Duration(seconds: 30));
+          roomOptions: RoomOptions(
+            dynacast: true,
+            adaptiveStream: true,
+            defaultAudioCaptureOptions: const AudioCaptureOptions(
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true,
+              highPassFilter: true,
+            ),
+            defaultAudioOutputOptions: AudioOutputOptions(speakerOn: speakerOn),
+            defaultCameraCaptureOptions: const CameraCaptureOptions(
+              params: VideoParametersPresets.h720_169,
+            ),
+            defaultVideoPublishOptions: const VideoPublishOptions(
+              simulcast: true,
+              videoCodec: 'VP8',
+            ),
+          ),
+        )
+            .timeout(const Duration(seconds: 30)),
+        abortFuture,
+      ]);
       CallAudioDebugLog.add(
         'livekit',
         'room.connect ok roomID=$roomID remotes=${room.remoteParticipants.length}',
@@ -449,6 +459,12 @@ class OpenIMLiveClient implements RTCBridge {
       isBusy = false;
       currentRoomID = null;
       rethrow;
+    } finally {
+      final abort = _connectAbort;
+      _connectAbort = null;
+      if (abort != null && !abort.isCompleted) {
+        abort.complete();
+      }
     }
 
     room.addListener(_noopRoomListener);
@@ -649,10 +665,21 @@ class OpenIMLiveClient implements RTCBridge {
       'disconnected reason=${event.reason} remotes=${room.remoteParticipants.length} roomID=$roomID',
     );
 
-    // Connect still running — let room.connect fail/complete; do not terminate here.
+    // Connect still running — fail-fast so accept can retry with a clean Room
+    // (do not sit on a dead PC until the full ICE timeout).
     if (_mediaConnectInFlight != null) {
       CallAudioDebugLog.add(
-          'livekit', 'disconnect during connect — ignore terminate');
+        'livekit',
+        'disconnect during connect — abort join reason=${event.reason}',
+      );
+      final abort = _connectAbort;
+      if (abort != null && !abort.isCompleted) {
+        abort.completeError(
+          MediaConnectException(
+            'disconnect during connect: ${event.reason}',
+          ),
+        );
+      }
       return;
     }
 
@@ -851,7 +878,11 @@ class OpenIMLiveClient implements RTCBridge {
         unawaited(_subscribeRemoteTracks());
       })
       ..on<LocalTrackUnpublishedEvent>((_) => _uiOnRoom?.call(room))
-      ..on<ParticipantConnectedEvent>((_) {
+      ..on<ParticipantConnectedEvent>((event) {
+        CallAudioDebugLog.add(
+          'livekit',
+          'remote joined identity=${event.participant.identity} remotes=${room.remoteParticipants.length}',
+        );
         _uiOnRemotePresent?.call();
         PackageBridge.markOutboundPeerPresent?.call(currentRoomID);
         unawaited(_subscribeRemoteTracks());

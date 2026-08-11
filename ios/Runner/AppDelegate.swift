@@ -129,8 +129,20 @@ import flutter_callkit_incoming
     }
 
     func didActivateAudioSession(_ audioSession: AVAudioSession) {
-        RTCAudioSession.sharedInstance().audioSessionDidActivate(audioSession)
-        RTCAudioSession.sharedInstance().isAudioEnabled = true
+        let rtc = RTCAudioSession.sharedInstance()
+        rtc.lockForConfiguration()
+        do {
+            try rtc.setCategory(
+                AVAudioSession.Category.playAndRecord.rawValue,
+                withOptions: [.allowBluetooth, .allowBluetoothA2DP]
+            )
+            try rtc.setMode(AVAudioSession.Mode.voiceChat.rawValue)
+        } catch {
+            emitAudioDebug("CallKit didActivate RTC config failed \(error.localizedDescription)")
+        }
+        rtc.audioSessionDidActivate(audioSession)
+        rtc.isAudioEnabled = true
+        rtc.unlockForConfiguration()
         emitAudioDebug("CallKit audio session activated isAudioEnabled=true")
         DispatchQueue.main.async {
             self.voipChannel?.invokeMethod("onCallKitAudioActivated", arguments: nil)
@@ -138,8 +150,11 @@ import flutter_callkit_incoming
     }
 
     func didDeactivateAudioSession(_ audioSession: AVAudioSession) {
-        RTCAudioSession.sharedInstance().audioSessionDidDeactivate(audioSession)
-        RTCAudioSession.sharedInstance().isAudioEnabled = false
+        let rtc = RTCAudioSession.sharedInstance()
+        rtc.lockForConfiguration()
+        rtc.audioSessionDidDeactivate(audioSession)
+        rtc.isAudioEnabled = false
+        rtc.unlockForConfiguration()
         emitAudioDebug("CallKit audio session deactivated isAudioEnabled=false")
         DispatchQueue.main.async {
             self.voipChannel?.invokeMethod("onCallKitAudioDeactivated", arguments: nil)
@@ -178,8 +193,20 @@ import flutter_callkit_incoming
     /// CallKit already activated AVAudioSession — bridge WebRTC without reconfiguring.
     private func bridgeCallKitWebRtcAudio(result: @escaping FlutterResult) {
         let session = AVAudioSession.sharedInstance()
-        RTCAudioSession.sharedInstance().audioSessionDidActivate(session)
-        RTCAudioSession.sharedInstance().isAudioEnabled = true
+        let rtc = RTCAudioSession.sharedInstance()
+        rtc.lockForConfiguration()
+        do {
+            try rtc.setCategory(
+                AVAudioSession.Category.playAndRecord.rawValue,
+                withOptions: [.allowBluetooth, .allowBluetoothA2DP]
+            )
+            try rtc.setMode(AVAudioSession.Mode.voiceChat.rawValue)
+        } catch {
+            emitAudioDebug("CallKit bridge RTC config failed \(error.localizedDescription)")
+        }
+        rtc.audioSessionDidActivate(session)
+        rtc.isAudioEnabled = true
+        rtc.unlockForConfiguration()
         emitAudioDebug("CallKit bridge (no setActive) isAudioEnabled=true")
         result(true)
     }
