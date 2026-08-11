@@ -601,14 +601,27 @@ class IMController extends GetxController with IMCallback, OpenIMLive {
           unawaited(_markPeerConversationRead(signaling));
           break;
         case CustomMessageType.callingReject:
+          PackageBridge.suppressCallKitEnded
+              ?.call(signaling.invitation?.roomID);
           inviteeRejected(signaling);
           _clearCallNotification();
+          unawaited(
+              VoipCallkitController.toOrNull?.markRoomEndedNative(
+                      signaling.invitation?.roomID) ??
+                  Future.value());
           unawaited(
               VoipCallkitController.toOrNull?.endCall(
                       signaling.invitation?.roomID) ??
                   Future.value());
           break;
         case CustomMessageType.callingCancel:
+          PackageBridge.suppressCallKitEnded
+              ?.call(signaling.invitation?.roomID);
+          // Block late VoIP invite re-show before ending CallKit.
+          unawaited(
+              VoipCallkitController.toOrNull?.markRoomEndedNative(
+                      signaling.invitation?.roomID) ??
+                  Future.value());
           invitationCancelled(signaling);
           _clearCallNotification();
           unawaited(
@@ -617,6 +630,12 @@ class IMController extends GetxController with IMCallback, OpenIMLive {
                   Future.value());
           break;
         case CustomMessageType.callingHungup:
+          PackageBridge.suppressCallKitEnded
+              ?.call(signaling.invitation?.roomID);
+          unawaited(
+              VoipCallkitController.toOrNull?.markRoomEndedNative(
+                      signaling.invitation?.roomID) ??
+                  Future.value());
           beHangup(signaling);
           _clearCallNotification();
           unawaited(

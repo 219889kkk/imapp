@@ -390,6 +390,10 @@ import flutter_callkit_incoming
         ])
         let plugin = SwiftFlutterCallkitIncomingPlugin.sharedInstance
         plugin?.endCall(endData)
+        // If roomID mismatched CallKit UUID, still clear zombie rings.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            plugin?.endAllCalls()
+        }
     }
 
     private func notifyDartVoipRemoteEnd(roomID: String, action: String) {
