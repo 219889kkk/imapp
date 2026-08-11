@@ -146,8 +146,19 @@ class AppController extends GetxController
     _listenConnectivity();
     PackageBridge.clearCallNotification = cancelCallNotification;
 
+    // Reinstall / cold start on login screen must not keep a stale icon badge.
+    if (!_hasLoginSession) {
+      clearBadgeForLoggedOut();
+    }
+
     autoCheckVersionUpgrade();
     super.onInit();
+  }
+
+  bool get _hasLoginSession {
+    final id = DataSp.userID?.trim() ?? '';
+    final token = DataSp.imToken?.trim() ?? '';
+    return id.isNotEmpty && token.isNotEmpty && !SessionGuard.suppressNotifications;
   }
 
   /// Create channels up-front so Android 8+ actually delivers banners/sound.
@@ -579,21 +590,28 @@ class AppController extends GetxController
   Future<void> onSessionLogout() async {
     await _stopMessageSound();
     await _cancelAllNotifications();
-    removeBadge();
+    clearBadgeForLoggedOut();
   }
 
   void showBadge(count) {
-    OpenIM.iMManager.messageManager.setAppBadge(count);
-
-    if (count == 0) {
-      removeBadge();
-    } else {
-      AppBadgePlus.isSupported().then((value) {
-        if (value) {
-          AppBadgePlus.updateBadge(count);
-        }
-      });
+    // Never paint unread on the icon while logged out / on login page.
+    if (!_hasLoginSession) {
+      clearBadgeForLoggedOut();
+      return;
     }
+    final n = count is int ? count : int.tryParse('$count') ?? 0;
+    if (n <= 0) {
+      removeBadge();
+      return;
+    }
+    try {
+      OpenIM.iMManager.messageManager.setAppBadge(n);
+    } catch (_) {}
+    AppBadgePlus.isSupported().then((value) {
+      if (value) {
+        AppBadgePlus.updateBadge(n);
+      }
+    });
   }
 
   void removeBadge() {
@@ -602,6 +620,15 @@ class AppController extends GetxController
         AppBadgePlus.updateBadge(0);
       }
     });
+    try {
+      OpenIM.iMManager.messageManager.setAppBadge(0);
+    } catch (_) {}
+  }
+
+  /// Force-clear desktop badge + local call/chat banners (logout / no session).
+  void clearBadgeForLoggedOut() {
+    removeBadge();
+    unawaited(_cancelAllNotifications());
   }
 
   @override

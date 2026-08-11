@@ -7,12 +7,14 @@ import 'package:get/get.dart';
 import 'package:openim/pages/conversation/conversation_logic.dart';
 import 'package:openim_common/openim_common.dart';
 
+import '../../core/controller/app_controller.dart';
 import '../../core/controller/im_controller.dart';
 import '../../routes/app_navigator.dart';
 
 class SplashLogic extends GetxController {
   final imLogic = Get.find<IMController>();
   final pushLogic = Get.find<PushController>();
+  final appLogic = Get.find<AppController>();
 
   /// Remaining seconds shown on the splash (3 → 1 → 0).
   final countdown = 3.obs;
@@ -47,6 +49,13 @@ class SplashLogic extends GetxController {
   }
 
   Future<void> _boot() async {
+    // No session → wipe stale icon badge immediately (reinstall / logged-out).
+    final hasSession = (userID?.trim().isNotEmpty ?? false) &&
+        (token?.trim().isNotEmpty ?? false);
+    if (!hasSession) {
+      appLogic.clearBadgeForLoggedOut();
+    }
+
     // Hold the full splash for 3 seconds with countdown.
     for (var i = _minSplashSeconds; i >= 1; i--) {
       countdown.value = i;
@@ -67,6 +76,7 @@ class SplashLogic extends GetxController {
       }
       await _login();
     } else {
+      appLogic.clearBadgeForLoggedOut();
       AppNavigator.startLogin();
     }
   }
@@ -97,6 +107,7 @@ class SplashLogic extends GetxController {
       Logger.print('splash auto login failed: $e $s');
       IMViews.showToast('$e');
       await DataSp.removeLoginCertificate();
+      appLogic.clearBadgeForLoggedOut();
       AppNavigator.startLogin();
     }
   }

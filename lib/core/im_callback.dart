@@ -306,6 +306,14 @@ mixin IMCallback {
   }
 
   void totalUnreadMsgCountChanged(int count) {
+    // Ignore SDK unread callbacks after logout / before login.
+    if (SessionGuard.suppressNotifications ||
+        DataSp.userID == null ||
+        DataSp.userID!.isEmpty) {
+      initLogic.clearBadgeForLoggedOut();
+      unreadMsgCountEventSubject.addSafely(0);
+      return;
+    }
     initLogic.showBadge(count);
     unreadMsgCountEventSubject.addSafely(count);
   }

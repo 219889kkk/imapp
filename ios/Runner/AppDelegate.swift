@@ -80,6 +80,10 @@ import flutter_callkit_incoming
         // PushKit must be registered early so VoIP wakes can report CallKit before completion.
         self.registerVoipPush()
 
+        // Clear stale home-screen badge before Flutter boots (logged-out / reinstall).
+        // Logged-in unread is restored by Dart after IM sync.
+        UIApplication.shared.applicationIconBadgeNumber = 0
+
         return super.application(application, didFinishLaunchingWithOptions: launchOptions)
     }
 
