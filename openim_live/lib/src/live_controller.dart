@@ -8,6 +8,8 @@ import 'package:flutter_openim_live_alert/flutter_openim_live_alert.dart';
 import 'package:flutter_openim_sdk/flutter_openim_sdk.dart';
 import 'package:get/get.dart';
 import 'package:just_audio/just_audio.dart';
+import 'package:livekit_client/livekit_client.dart'
+    show ConnectException, MediaConnectException;
 import 'package:openim_common/openim_common.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:rxdart/rxdart.dart';
@@ -904,55 +906,57 @@ mixin OpenIMLive {
       );
     }
 
-    try {
-      await OpenIMLiveClient().connectMedia(
-        certificate: cert,
-        callType: callType,
-        speakerOn: isVideo,
-        enableCamera: isVideo && micGranted,
-        enableMicrophone: micGranted,
-        enableKeepAlive: true,
-        skipSessionActivation: isCallKitAccept,
-        onDisconnected: () {
-          final id = signaling.invitation?.roomID;
-          if (_isRoomEnded(id)) return;
-          // Peer left / room dead — end immediately (no 8s zombie timer).
-          if (!OpenIMLiveClient().isConnectedMedia(id) ||
-              (OpenIMLiveClient().mediaRoom?.remoteParticipants.isEmpty ??
-                  true)) {
-            _terminateCallUi(id);
-            return;
-          }
-          unawaited(Future<void>.delayed(const Duration(seconds: 3), () {
+    Future<void> joinOnce() => OpenIMLiveClient().connectMedia(
+          certificate: cert,
+          callType: callType,
+          speakerOn: isVideo,
+          enableCamera: isVideo && micGranted,
+          enableMicrophone: micGranted,
+          enableKeepAlive: true,
+          skipSessionActivation: isCallKitAccept,
+          onDisconnected: () {
+            final id = signaling.invitation?.roomID;
             if (_isRoomEnded(id)) return;
-            if (OpenIMLiveClient().isConnectedMedia(id) &&
-                (OpenIMLiveClient()
-                        .mediaRoom
-                        ?.remoteParticipants
-                        .isNotEmpty ??
-                    false)) {
+            // Peer left / room dead — end immediately (no 8s zombie timer).
+            if (!OpenIMLiveClient().isConnectedMedia(id) ||
+                (OpenIMLiveClient().mediaRoom?.remoteParticipants.isEmpty ??
+                    true)) {
+              _terminateCallUi(id);
               return;
             }
-            _terminateCallUi(id);
-          }));
-        },
-      );
-    } on TimeoutException {
-      CallAudioDebugLog.add('accept', 'connect timeout — retry once');
-      // One retry after CallKit audio is up (common on lock-screen first join).
-      await Future<void>.delayed(const Duration(milliseconds: 400));
-      if (gen != _callSessionGen || _isRoomEnded(roomID)) {
-        throw StateError('accept aborted after connect timeout');
+            unawaited(Future<void>.delayed(const Duration(seconds: 3), () {
+              if (_isRoomEnded(id)) return;
+              if (OpenIMLiveClient().isConnectedMedia(id) &&
+                  (OpenIMLiveClient()
+                          .mediaRoom
+                          ?.remoteParticipants
+                          .isNotEmpty ??
+                      false)) {
+                return;
+              }
+              _terminateCallUi(id);
+            }));
+          },
+        );
+
+    try {
+      await joinOnce();
+    } catch (e) {
+      final retryable = e is TimeoutException ||
+          e is MediaConnectException ||
+          e is ConnectException ||
+          e.toString().contains('MediaConnectException') ||
+          e.toString().contains('PeerConnection');
+      if (!retryable || gen != _callSessionGen || _isRoomEnded(roomID)) {
+        rethrow;
       }
-      await OpenIMLiveClient().connectMedia(
-        certificate: cert,
-        callType: callType,
-        speakerOn: isVideo,
-        enableCamera: isVideo && micGranted,
-        enableMicrophone: micGranted,
-        enableKeepAlive: true,
-        skipSessionActivation: isCallKitAccept,
-      );
+      CallAudioDebugLog.add('accept', 'connect failed — retry once err=$e');
+      // One retry after CallKit audio is up (common on lock-screen first join).
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      if (gen != _callSessionGen || _isRoomEnded(roomID)) {
+        throw StateError('accept aborted after connect retry');
+      }
+      await joinOnce();
     }
 
     if (gen != _callSessionGen || _isRoomEnded(roomID)) {

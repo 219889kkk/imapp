@@ -391,13 +391,24 @@ class OpenIMLiveClient implements RTCBridge {
     }
     CallAudioDebugLog.add(
       'livekit',
-      'room.connect begin roomID=$roomID url=$liveURL tokenLen=${token.length}',
+      'room.connect begin roomID=$roomID url=$liveURL tokenLen=${token.length} skipSession=$skipSessionActivation',
     );
     try {
       await room
           .connect(
         liveURL,
         token,
+        connectOptions: const ConnectOptions(
+          autoSubscribe: true,
+          // Default peerConnection is 10s — lock-screen ICE often needs longer.
+          timeouts: Timeouts(
+            connection: Duration(seconds: 25),
+            debounce: Duration(milliseconds: 100),
+            publish: Duration(seconds: 10),
+            peerConnection: Duration(seconds: 25),
+            iceRestart: Duration(seconds: 10),
+          ),
+        ),
         roomOptions: RoomOptions(
           dynacast: true,
           adaptiveStream: true,
@@ -421,13 +432,22 @@ class OpenIMLiveClient implements RTCBridge {
           ),
         ),
       )
-          .timeout(const Duration(seconds: 20));
-      CallAudioDebugLog.add('livekit', 'room.connect ok roomID=$roomID');
+          .timeout(const Duration(seconds: 30));
+      CallAudioDebugLog.add(
+        'livekit',
+        'room.connect ok roomID=$roomID remotes=${room.remoteParticipants.length}',
+      );
     } on TimeoutException {
-      CallAudioDebugLog.add('livekit', 'room.connect TIMEOUT 20s roomID=$roomID');
+      CallAudioDebugLog.add('livekit', 'room.connect TIMEOUT 30s roomID=$roomID');
+      await _disposeMediaRoomOnly();
+      isBusy = false;
+      currentRoomID = null;
       rethrow;
     } catch (e) {
       CallAudioDebugLog.add('livekit', 'room.connect failed roomID=$roomID err=$e');
+      await _disposeMediaRoomOnly();
+      isBusy = false;
+      currentRoomID = null;
       rethrow;
     }
 
@@ -467,6 +487,11 @@ class OpenIMLiveClient implements RTCBridge {
       'livekit',
       'connected roomID=$roomID remotes=${room.remoteParticipants.length} keepAlive=$enableKeepAlive',
     );
+    // Peer may still be joining — do not end immediately on empty remotes.
+    if (room.remoteParticipants.isEmpty) {
+      CallAudioDebugLog.add(
+          'livekit', 'connected with 0 remotes — wait for peer');
+    }
   }
 
   /// Accumulated while another onCallActive is in flight (fixes caller mic stuck off).
@@ -604,6 +629,12 @@ class OpenIMLiveClient implements RTCBridge {
     if (room.remoteParticipants.isNotEmpty) return;
     final roomID = currentRoomID;
     if (roomID == null || roomID.isEmpty) return;
+    // Joining ICE — peer churn must not kill accept mid-connect (causes false ICE timeout).
+    if (_mediaConnectInFlight != null) {
+      CallAudioDebugLog.add(
+          'livekit', 'remote left during connect — defer end roomID=$roomID');
+      return;
+    }
     Logger.print('LiveKit remote participant left roomID=$roomID');
     CallAudioDebugLog.add('livekit', 'remote left — end call roomID=$roomID');
     PackageBridge.onPeerLeftCall?.call(roomID);
@@ -617,6 +648,13 @@ class OpenIMLiveClient implements RTCBridge {
       'livekit',
       'disconnected reason=${event.reason} remotes=${room.remoteParticipants.length} roomID=$roomID',
     );
+
+    // Connect still running — let room.connect fail/complete; do not terminate here.
+    if (_mediaConnectInFlight != null) {
+      CallAudioDebugLog.add(
+          'livekit', 'disconnect during connect — ignore terminate');
+      return;
+    }
 
     // Peer hangup / room already ended / alone in room — never revive a zombie call.
     final roomEnded =
