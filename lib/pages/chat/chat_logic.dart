@@ -97,6 +97,9 @@ class ChatLogic extends SuperController {
   bool _isFirstLoad = true;
   bool hasMoreHistory = true;
   bool shouldAutoLoadInitialMessages = true;
+  /// Pagination cursor even when a page is all filtered signaling msgs.
+  Message? _historyCursor;
+  bool _historyLoadInFlight = false;
   Timer? _typingTimer;
 
   final copyTextMap = <String?, String?>{};
@@ -1903,6 +1906,7 @@ class ChatLogic extends SuperController {
           _isReceivedMessageWhenSyncing = false;
           _isStartSyncing = false;
           _isFirstLoad = true;
+          _historyCursor = null;
           _loadHistoryForSyncEnd();
         }
       } else if (value.status == IMSdkStatus.syncFailed) {
@@ -1931,12 +1935,15 @@ class ChatLogic extends SuperController {
   }
 
   Future<AdvancedMessage> _fetchHistoryMessages() {
+    final start = _isFirstLoad
+        ? null
+        : (_historyCursor ?? messageList.firstOrNull);
     Logger.print(
-        '_fetchHistoryMessages: is first load: $_isFirstLoad, last client id: ${_isFirstLoad ? null : messageList.firstOrNull?.clientMsgID}');
+        '_fetchHistoryMessages: is first load: $_isFirstLoad, last client id: ${start?.clientMsgID}');
     return OpenIM.iMManager.messageManager.getAdvancedHistoryMessageList(
       conversationID: conversationInfo.conversationID,
       count: _pageSize,
-      startMsg: _isFirstLoad ? null : messageList.firstOrNull,
+      startMsg: start,
     );
   }
 
@@ -1989,33 +1996,49 @@ class ChatLogic extends SuperController {
   }
 
   Future<bool> onScrollToBottomLoad() async {
-    late List<Message> list;
-    final result = await _fetchHistoryMessages();
-    hasMoreHistory = result.isEnd != true;
-    if (result.messageList == null || result.messageList!.isEmpty) {
-      _deferGroupPostMessageWork(const []);
-
+    if (_historyLoadInFlight) return hasMoreHistory;
+    _historyLoadInFlight = true;
+    try {
+      final result = await _fetchHistoryMessages();
+      hasMoreHistory = result.isEnd != true;
+      final raw = result.messageList ?? const <Message>[];
+      if (raw.isEmpty) {
+        _isFirstLoad = false;
+        _deferGroupPostMessageWork(const []);
+        return false;
+      }
+      // Advance cursor with raw page so signaling-only pages don't loop forever.
+      _historyCursor = raw.first;
+      final list =
+          raw.where((e) => !e.isCallingSignalingType).toList();
+      for (final m in list) {
+        _normalizeCallRecordMessage(m);
+      }
+      if (list.isEmpty) {
+        _isFirstLoad = false;
+        // Signaling-only page — pull next page so UI does not stick on spinner/empty.
+        if (!hasMoreHistory) return false;
+        _historyLoadInFlight = false;
+        return onScrollToBottomLoad();
+      }
+      if (_isFirstLoad) {
+        _isFirstLoad = false;
+        messageList.assignAll(_mergeHistoryWithLocal(list));
+        scrollBottom();
+        _deferGroupPostMessageWork(messageList);
+      } else {
+        messageList.insertAll(0, list);
+        _ensureGroupReadInfoForList(list);
+      }
+      return hasMoreHistory;
+    } catch (e, s) {
+      Logger.print('onScrollToBottomLoad failed: $e $s');
+      // Stop spinner — never leave load-more hanging on SDK errors.
+      hasMoreHistory = false;
       return false;
+    } finally {
+      _historyLoadInFlight = false;
     }
-    list = result.messageList!
-        .where((e) => !e.isCallingSignalingType)
-        .toList();
-    for (final m in list) {
-      _normalizeCallRecordMessage(m);
-    }
-    if (_isFirstLoad) {
-      _isFirstLoad = false;
-      // remove the message that has been timed down
-      messageList.assignAll(_mergeHistoryWithLocal(list));
-      scrollBottom();
-
-      _deferGroupPostMessageWork(messageList);
-    } else {
-      messageList.insertAll(0, list);
-      _ensureGroupReadInfoForList(list);
-    }
-
-    return hasMoreHistory;
   }
 
   Future<void> _loadHistoryForSyncEnd() async {

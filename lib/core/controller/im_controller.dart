@@ -452,7 +452,10 @@ class IMController extends GetxController with IMCallback, OpenIMLive {
             return true;
           }
           // Own outbound invite echoed/synced must not open incoming UI.
-          if (msg.sendID == OpenIM.iMManager.userID) {
+          final selfID = OpenIM.iMManager.userID;
+          final inviter = signaling.invitation?.inviterUserID;
+          if (msg.sendID == selfID ||
+              (inviter != null && inviter == selfID)) {
             return true;
           }
           final inviteRoomID = signaling.invitation?.roomID;

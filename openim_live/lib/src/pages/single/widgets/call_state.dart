@@ -196,13 +196,21 @@ abstract class SignalState<T extends SignalView> extends State<T>
       return;
     }
 
-    // Never regress in-call UI back to invite/connecting (hangup→re-invite flash).
+    // Never regress in-call / outbound-waiting UI back to invite page.
     if (event.state == CallState.call ||
         event.state == CallState.beCalled ||
         event.state == CallState.connecting) {
       if (callState == CallState.calling) {
         Logger.print(
             'ignore ${event.state} — already in-call roomID=$_callRoomID');
+        return;
+      }
+      // Caller "等待接听" must not flash callee invite UI (own invite echo).
+      if (event.state == CallState.beCalled &&
+          (callState == CallState.call ||
+              widget.initState == CallState.call)) {
+        Logger.print(
+            'ignore beCalled — outbound dial roomID=$_callRoomID');
         return;
       }
       callState = event.state;

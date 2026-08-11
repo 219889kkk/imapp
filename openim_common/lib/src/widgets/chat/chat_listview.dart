@@ -271,6 +271,8 @@ class ChatListView extends StatefulWidget {
 class _ChatListViewState extends State<ChatListView> {
   bool _scrollToBottomLoadMore = true;
   bool _scrollToTopLoadMore = true;
+  bool _bottomLoadInFlight = false;
+  bool _topLoadInFlight = false;
 
   bool get _isBottom =>
       widget.controller!.offset >= widget.controller!.position.maxScrollExtent;
@@ -304,25 +306,54 @@ class _ChatListViewState extends State<ChatListView> {
   }
 
   void _onScrollToBottomLoadMore() {
+    if (_bottomLoadInFlight || !_scrollToBottomLoadMore) return;
+    _bottomLoadInFlight = true;
     widget.onScrollToBottom?.call();
-    widget.onScrollToBottomLoad?.call().then((hasMore) {
+    final future = widget.onScrollToBottomLoad?.call();
+    if (future == null) {
+      _bottomLoadInFlight = false;
+      return;
+    }
+    future.then((hasMore) {
       if (!mounted) return;
       setState(() {
         _scrollToBottomLoadMore = hasMore;
       });
+    }).catchError((Object e, StackTrace s) {
+      Logger.print('ChatListView bottom load failed: $e $s');
+      if (!mounted) return;
+      setState(() {
+        _scrollToBottomLoadMore = false;
+      });
+    }).whenComplete(() {
+      _bottomLoadInFlight = false;
     });
   }
 
   void _onScrollToTopLoadMore() {
+    if (_topLoadInFlight || !_scrollToTopLoadMore) return;
     widget.onScrollToTop?.call();
-    if (widget.enabledScrollTopLoad) {
-      widget.onScrollToTopLoad?.call().then((hasMore) {
-        if (!mounted) return;
-        setState(() {
-          _scrollToTopLoadMore = hasMore;
-        });
-      });
+    if (!widget.enabledScrollTopLoad) return;
+    _topLoadInFlight = true;
+    final future = widget.onScrollToTopLoad?.call();
+    if (future == null) {
+      _topLoadInFlight = false;
+      return;
     }
+    future.then((hasMore) {
+      if (!mounted) return;
+      setState(() {
+        _scrollToTopLoadMore = hasMore;
+      });
+    }).catchError((Object e, StackTrace s) {
+      Logger.print('ChatListView top load failed: $e $s');
+      if (!mounted) return;
+      setState(() {
+        _scrollToTopLoadMore = false;
+      });
+    }).whenComplete(() {
+      _topLoadInFlight = false;
+    });
   }
 
   Widget get loadMoreView => Container(

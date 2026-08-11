@@ -35,7 +35,14 @@ mixin OpenIMLive {
 
   void receiveNewInvitation(SignalingInfo info) {
     final roomID = info.invitation?.roomID?.trim() ?? '';
+    final inviter = info.invitation?.inviterUserID?.trim() ?? '';
+    final self = OpenIM.iMManager.userID.trim();
     _pruneEndedRooms();
+    // Own outbound invite (echo/sync) must never open incoming UI.
+    if (inviter.isNotEmpty && inviter == self) {
+      Logger.print('ignore invite: self is inviter roomID=$roomID');
+      return;
+    }
     if (roomID.isNotEmpty && _endedRoomUntilMs.containsKey(roomID)) {
       Logger.print('ignore invite: room already ended $roomID');
       return;
@@ -48,6 +55,11 @@ mixin OpenIMLive {
     if (_isAcceptInProgressForRoom(roomID) ||
         _callKitAcceptHandledRoomID == roomID) {
       Logger.print('ignore invite: accept in progress $roomID');
+      return;
+    }
+    // Outbound waiting in this room — keep "等待接听", never promote/invite.
+    if (_isOutboundWaitingRoom(roomID)) {
+      Logger.print('ignore invite: outbound waiting roomID=$roomID');
       return;
     }
     // Already in a call: never re-open invite UI (fixes looping invite sheets).
@@ -1363,6 +1375,8 @@ mixin OpenIMLive {
       Logger.print('caller peer accepted roomID=$roomID');
       CallAudioDebugLog.add('ring', 'peer accepted — cancel timeout roomID=$roomID');
       final client = OpenIMLiveClient();
+      // Waiting dial keeps mic off — clear preference so answer can unmute.
+      client.setUserMicPreference(true);
       unawaited(client.onCallActive(
         speakerOn: isVideo,
         unmuteMic: true,
