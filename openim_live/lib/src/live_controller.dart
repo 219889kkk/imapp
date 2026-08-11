@@ -334,10 +334,6 @@ mixin OpenIMLive {
   void markOutboundPeerPresent(String? roomID) {
     final id = roomID?.trim() ?? '';
     if (id.isEmpty || _isRoomEnded(id)) return;
-    // Only meaningful for outbound dial still waiting.
-    if (!_isOutboundWaitingRoom(id) && !_peerAcceptedRooms.contains(id)) {
-      // Already answered path may re-fire; still promote UI once.
-    }
     _peerAcceptedRooms.add(id);
     _cancelRingTimeout();
     _ringTimeoutExtendCount = 0;
@@ -1335,7 +1331,7 @@ mixin OpenIMLive {
     }
 
     signalingSubject.add(CallEvent(CallState.calling, merged));
-    OpenIMLiveClient().promoteCallingUi();
+    OpenIMLiveClient().promoteCallingUi(markAccepted: true);
   }
 
   /// Accept payload may omit fields — always merge with active outbound session.
@@ -1368,17 +1364,18 @@ mixin OpenIMLive {
     final self = OpenIM.iMManager.userID.trim();
     final activeInviter =
         _activeCallSignaling?.invitation?.inviterUserID?.trim() ?? '';
-    if (activeInviter == self) return true;
-
     final roomID = info.invitation?.roomID?.trim() ?? '';
-    if (roomID.isEmpty) return false;
+    final activeRoom =
+        _activeCallSignaling?.invitation?.roomID?.trim() ?? '';
+    // Must be the inviter — never treat callee busy-in-room as outbound dial
+    // (was falsely promoting caller timer / accept paths).
+    if (activeInviter == self) {
+      if (roomID.isEmpty || activeRoom.isEmpty || activeRoom == roomID) {
+        return true;
+      }
+    }
     final inviter = info.invitation?.inviterUserID?.trim() ?? '';
-    if (inviter == self) return true;
-    final client = OpenIMLiveClient();
-    if (!client.isBusy) return false;
-    final current = client.currentRoomID?.trim() ?? '';
-    final active = _activeCallSignaling?.invitation?.roomID?.trim() ?? '';
-    return current == roomID || active == roomID;
+    return inviter == self && roomID.isNotEmpty;
   }
 
   SignalingInfo? _resolveIncomingSignaling(SignalingInfo? primary) {
