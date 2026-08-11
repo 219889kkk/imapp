@@ -153,9 +153,16 @@ class OpenIMLiveClient implements RTCBridge {
     _promoteCallingUi = handler;
   }
 
-  /// Bypass signaling stream filter — push caller overlay to in-call immediately.
-  void promoteCallingUi() {
+  /// Mark peer answered (caller). Separate from UI promote so FG audio restore
+  /// cannot accidentally start the call timer while still ringing.
+  void markPeerAcceptedForUi() {
     _peerAcceptedForUi = true;
+  }
+
+  /// Push overlay to in-call UI. Pass [markAccepted] only when peer truly answered
+  /// (IM accept / VoIP accept / remote joined after answer) — never on FG resume.
+  void promoteCallingUi({bool markAccepted = false}) {
+    if (markAccepted) _peerAcceptedForUi = true;
     _promoteCallingUi?.call();
   }
 

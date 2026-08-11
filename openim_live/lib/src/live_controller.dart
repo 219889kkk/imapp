@@ -334,12 +334,32 @@ mixin OpenIMLive {
   void markOutboundPeerPresent(String? roomID) {
     final id = roomID?.trim() ?? '';
     if (id.isEmpty || _isRoomEnded(id)) return;
+    // Only meaningful for outbound dial still waiting.
+    if (!_isOutboundWaitingRoom(id) && !_peerAcceptedRooms.contains(id)) {
+      // Already answered path may re-fire; still promote UI once.
+    }
     _peerAcceptedRooms.add(id);
     _cancelRingTimeout();
     _ringTimeoutExtendCount = 0;
-    OpenIMLiveClient().promoteCallingUi();
+    OpenIMLiveClient().promoteCallingUi(markAccepted: true);
     Logger.print('outbound peer present (LiveKit) roomID=$id');
     CallAudioDebugLog.add('ring', 'LiveKit remote present — cancel timeout roomID=$id');
+  }
+
+  /// True while we are the inviter and peer has not accepted yet.
+  bool _isOutboundWaitingRoom(String? roomID) {
+    final id = roomID?.trim() ?? '';
+    if (id.isEmpty) return false;
+    if (_peerAcceptedRooms.contains(id)) return false;
+    if (OpenIMLiveClient().peerAcceptedForUi) return false;
+    final self = OpenIM.iMManager.userID.trim();
+    final inviter =
+        _activeCallSignaling?.invitation?.inviterUserID?.trim() ?? '';
+    final activeRoom =
+        _activeCallSignaling?.invitation?.roomID?.trim() ?? '';
+    if (inviter != self) return false;
+    if (activeRoom.isNotEmpty && activeRoom != id) return false;
+    return true;
   }
 
   void _cancelRingTimeout() {
@@ -886,6 +906,14 @@ mixin OpenIMLive {
       _pendingHeadlessMicPermission = false;
       return;
     }
+    final roomID = _activeCallSignaling?.invitation?.roomID?.trim() ??
+        client.currentRoomID?.trim() ??
+        '';
+    // Caller still ringing in LiveKit — never unmute / promote in-call UI.
+    if (_isOutboundWaitingRoom(roomID)) {
+      CallAudioDebugLog.add('fg', 'skip mic restore — outbound still ringing');
+      return;
+    }
     final isVideo =
         _activeCallSignaling?.invitation?.mediaType == 'video';
     if (_pendingHeadlessMicPermission) {
@@ -915,7 +943,7 @@ mixin OpenIMLive {
       return;
     }
     await client.onCallActive(speakerOn: isVideo, unmuteMic: true);
-    client.promoteCallingUi();
+    // Do NOT promoteCallingUi here — that was starting caller timer before answer.
   }
 
   Future<void> _restoreLiveCallAudio(SignalingInfo? signaling) async {
@@ -924,6 +952,12 @@ mixin OpenIMLive {
         client.currentRoomID?.trim() ??
         '';
     if (roomID.isEmpty || !client.hasMediaFor(roomID)) return;
+    // Outbound wait: caller already joined LiveKit for faster answer — stay on "等待接听".
+    if (_isOutboundWaitingRoom(roomID)) {
+      CallAudioDebugLog.add(
+          'fg', 'skip live audio restore — outbound still ringing roomID=$roomID');
+      return;
+    }
     final isVideo = signaling?.invitation?.mediaType == 'video';
     Logger.print('restore live call audio roomID=$roomID');
     final owns = CallAudioKeepAlive.instance.callKitOwnsSession;
@@ -943,7 +977,6 @@ mixin OpenIMLive {
       return;
     }
     await client.onCallActive(speakerOn: isVideo, unmuteMic: true);
-    client.promoteCallingUi();
   }
 
   Future<void> _acceptIncomingCall(

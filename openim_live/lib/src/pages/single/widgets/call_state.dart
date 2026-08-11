@@ -116,6 +116,14 @@ abstract class SignalState<T extends SignalView> extends State<T>
       unawaited(_restoreCallAudio());
       return;
     }
+    // Outbound still showing "等待接听" — do not start timer on unlock.
+    final outboundWaiting =
+        widget.initState == CallState.call && callState == CallState.call;
+    if (outboundWaiting &&
+        !client.peerAcceptedForUi &&
+        !_roomHasRemote(client)) {
+      return;
+    }
     if (client.peerAcceptedForUi || _roomHasRemote(client)) {
       promoteInCallUi(reason: 'app-resumed', force: true);
       unawaited(_restoreCallAudio());
