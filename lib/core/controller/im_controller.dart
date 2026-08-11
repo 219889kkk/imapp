@@ -562,6 +562,8 @@ class IMController extends GetxController with IMCallback, OpenIMLive {
             VoipCallkitController.toOrNull
                 ?.setConnected(signaling.invitation?.roomID);
           }
+          // Connected call: keep record, clear invite unread.
+          unawaited(_markPeerConversationRead(signaling));
           break;
         case CustomMessageType.callingReject:
           inviteeRejected(signaling);
@@ -586,12 +588,44 @@ class IMController extends GetxController with IMCallback, OpenIMLive {
               VoipCallkitController.toOrNull?.endCall(
                       signaling.invitation?.roomID) ??
                   Future.value());
+          // Connected then hung up — record stays, unread must not.
+          unawaited(_markPeerConversationRead(signaling));
           break;
       }
       return true;
     } catch (e, s) {
       Logger.print('dispatch calling message error: $e $s');
       return false;
+    }
+  }
+
+  Future<void> _markPeerConversationRead(SignalingInfo signaling) async {
+    try {
+      final self = OpenIM.iMManager.userID;
+      final inviter = signaling.invitation?.inviterUserID;
+      final invitees = signaling.invitation?.inviteeUserIDList ?? const <String>[];
+      String? peer;
+      if (inviter != null && inviter != self) {
+        peer = inviter;
+      } else {
+        for (final id in invitees) {
+          if (id != self && id.isNotEmpty) {
+            peer = id;
+            break;
+          }
+        }
+      }
+      if (peer == null || peer.isEmpty) return;
+      final conv = await OpenIM.iMManager.conversationManager.getOneConversation(
+        sourceID: peer,
+        sessionType: ConversationType.single,
+      );
+      final id = conv.conversationID;
+      if (id.isEmpty) return;
+      await OpenIM.iMManager.conversationManager
+          .markConversationMessageAsRead(conversationID: id);
+    } catch (e, s) {
+      Logger.print('markPeerConversationRead failed: $e $s');
     }
   }
 

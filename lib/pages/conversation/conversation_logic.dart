@@ -36,7 +36,45 @@ class ConversationLogic extends GetxController {
 
   final onChangeConversations = <ConversationInfo>[];
 
-  List<ConversationInfo> get filteredList => categoryLogic.filter(list);
+  List<ConversationInfo> get filteredList =>
+      categoryLogic.filter(_withoutSelfConversations(list));
+
+  /// Never show a 1:1 chat with myself (e.g. test0099 chatting test0099).
+  bool _isSelfConversation(ConversationInfo info) {
+    final self = OpenIM.iMManager.userID.trim();
+    if (self.isEmpty) return false;
+    if (info.userID?.trim() == self) return true;
+    return false;
+  }
+
+  List<ConversationInfo> _withoutSelfConversations(
+      Iterable<ConversationInfo> source) {
+    return source.where((e) => !_isSelfConversation(e)).toList();
+  }
+
+  /// Answered voice/video records keep history but must not show unread badges.
+  bool _isAnsweredCallLatest(ConversationInfo info) {
+    final msg = info.latestMsg;
+    if (msg == null || !msg.isCustomType) return false;
+    try {
+      final map = json.decode(msg.customElem!.data!);
+      final customType = map['customType'];
+      if (customType == CustomMessageType.callingAccept ||
+          customType == CustomMessageType.callingHungup) {
+        return true;
+      }
+      if (customType == CustomMessageType.call) {
+        final data = map['data'];
+        final state =
+            data is Map ? data['state']?.toString() ?? '' : '';
+        return state == 'hangup' ||
+            state == 'beHangup' ||
+            state == 'calling' ||
+            state == 'beAccepted';
+      }
+    } catch (_) {}
+    return false;
+  }
 
   @override
   void onInit() {
@@ -77,19 +115,27 @@ class ConversationLogic extends GetxController {
   }
 
   void onChanged(List<ConversationInfo> newList) {
+    final incoming = _withoutSelfConversations(newList);
     if (reInstall) {
-      onChangeConversations.addAll(newList);
+      onChangeConversations.addAll(incoming);
     }
-    for (var newValue in newList) {
+    for (var newValue in incoming) {
       ChatMessagePrefetchCache.invalidate(newValue);
       _contentPreviewCache.remove(newValue.conversationID);
       _contentPreviewCache.removeWhere(
           (k, _) => k.startsWith('_k_${newValue.conversationID}|'));
       list.removeWhere((e) => e.conversationID == newValue.conversationID);
+      // Connected call left invite unread — clear on list update.
+      if (_isAnsweredCallLatest(newValue) && newValue.unreadCount > 0) {
+        unawaited(_silentMarkConversationRead(newValue));
+        newValue.unreadCount = 0;
+      }
     }
+    // Drop any self rows that were already in the list.
+    list.removeWhere(_isSelfConversation);
 
-    if (newList.length > pageSize) {
-      final tempList = newList;
+    if (incoming.length > pageSize) {
+      final tempList = List<ConversationInfo>.from(incoming);
 
       while (true) {
         final temp = tempList.sublist(0, pageSize);
@@ -103,7 +149,7 @@ class ConversationLogic extends GetxController {
         tempList.removeRange(0, pageSize);
       }
     } else {
-      list.insertAll(0, newList);
+      list.insertAll(0, incoming);
       _sortConversationList();
     }
     _schedulePrefetchFirstPages();
@@ -197,6 +243,8 @@ class ConversationLogic extends GetxController {
   }
 
   int getUnreadCount(ConversationInfo info) {
+    // Missed calls may keep unread; answered voice/video only keep the record.
+    if (_isAnsweredCallLatest(info)) return 0;
     return info.unreadCount;
   }
 
@@ -308,13 +356,20 @@ class ConversationLogic extends GetxController {
 
   Future<void> markConversationAsRead(ConversationInfo info) async {
     await LoadingView.singleton.wrap(
-      asyncFunction: () =>
-          OpenIM.iMManager.conversationManager.markConversationMessageAsRead(
-        conversationID: info.conversationID,
-      ),
+      asyncFunction: () => _silentMarkConversationRead(info),
     );
-    info.unreadCount = 0;
     list.refresh();
+  }
+
+  Future<void> _silentMarkConversationRead(ConversationInfo info) async {
+    try {
+      await OpenIM.iMManager.conversationManager.markConversationMessageAsRead(
+        conversationID: info.conversationID,
+      );
+      info.unreadCount = 0;
+    } catch (e, s) {
+      Logger.print('silentMarkConversationRead failed: $e $s');
+    }
   }
 
   Future<void> clearAllUnread() async {
@@ -423,7 +478,7 @@ class ConversationLogic extends GetxController {
 
   Future<void> onRefresh() async {
     try {
-      final list = await _request();
+      final list = _withoutSelfConversations(await _request());
       this.list.assignAll(list);
       _schedulePrefetchFirstPages();
       refreshController.refreshCompleted();
@@ -435,18 +490,27 @@ class ConversationLogic extends GetxController {
   static Future<List<ConversationInfo>> getConversationFirstPage() async {
     final result = await OpenIM.iMManager.conversationManager
         .getConversationListSplit(offset: 0, count: 400);
-
-    return result;
+    final self = OpenIM.iMManager.userID.trim();
+    if (self.isEmpty) return result;
+    return result.where((e) => e.userID?.trim() != self).toList();
   }
 
   void getFirstPage() async {
     try {
-      final result = await getConversationFirstPage();
+      final result =
+          _withoutSelfConversations(await getConversationFirstPage());
       list.assignAll(result);
       homeLogic.conversationsAtFirstPage = List.of(result);
+      for (final info in result) {
+        if (_isAnsweredCallLatest(info) && info.unreadCount > 0) {
+          unawaited(_silentMarkConversationRead(info));
+          info.unreadCount = 0;
+        }
+      }
     } catch (e, s) {
       Logger.print('getFirstPage error: $e $s');
-      list.assignAll(homeLogic.conversationsAtFirstPage);
+      list.assignAll(
+          _withoutSelfConversations(homeLogic.conversationsAtFirstPage));
     }
     _sortConversationList();
     _schedulePrefetchFirstPages();

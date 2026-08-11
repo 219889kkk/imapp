@@ -219,8 +219,13 @@ mixin OpenIMLive {
       {Duration duration = const Duration(seconds: 4)}) {
     final id = roomID?.trim() ?? '';
     if (id.isEmpty) return;
-    _suppressCallKitEndedUntilMs[id] =
+    final until =
         DateTime.now().millisecondsSinceEpoch + duration.inMilliseconds;
+    // Never shorten an existing longer suppress (accept uses 45s; dismiss uses 4s).
+    final prev = _suppressCallKitEndedUntilMs[id] ?? 0;
+    if (until > prev) {
+      _suppressCallKitEndedUntilMs[id] = until;
+    }
   }
 
   bool _shouldIgnoreCallKitEnded(String? roomID) {
@@ -491,7 +496,8 @@ mixin OpenIMLive {
     PackageBridge.clearCallNotification?.call();
     if (roomID.isNotEmpty) {
       _markRoomAnswered(roomID);
-      // Spurious Ended during banner→active is ignored via acceptSent+joining check.
+      // Banner Accept → FG → dismiss CallKit fires spurious Ended; keep call alive.
+      _suppressCallKitEnded(roomID, duration: const Duration(seconds: 45));
       // Do NOT setConnected here — wait until LiveKit join succeeds (avoids audio flap).
     }
     CallAudioDebugLog.add('callkit', 'accept join roomID=$roomID');
@@ -742,23 +748,40 @@ mixin OpenIMLive {
       final pending = _beCalledEvent!;
       final pendingRoom = pending.data.invitation?.roomID?.trim() ?? '';
       _beCalledEvent = null;
-      if (_isRoomEnded(pendingRoom) ||
-          _answeredRoomUntilMs.containsKey(pendingRoom)) {
+      // Already answered from CallKit banner — keep media, attach UI, don't kill call.
+      if (_answeredRoomUntilMs.containsKey(pendingRoom) ||
+          _isAcceptInProgressForRoom(pendingRoom)) {
+        Logger.print(
+            'iOS fg: answered/joining from banner roomID=$pendingRoom');
+        CallAudioDebugLog.add(
+            'fg', 'answered banner — attach UI roomID=$pendingRoom');
+        _suppressCallKitEnded(pendingRoom, duration: const Duration(seconds: 45));
+        _activeCallSignaling = pending.data;
         await _dismissCallKitIncoming(pendingRoom);
-        return;
-      }
-
-      if (_isAcceptInProgressForRoom(pendingRoom)) {
-        Logger.print('iOS fg: accept in flight roomID=$pendingRoom');
         final inFlight = _acceptJoinInFlight;
         if (inFlight != null) {
           unawaited(inFlight.then((_) {
             if (_isRoomEnded(pendingRoom)) return;
-            if (client.hasMediaFor(pendingRoom) && !client.hasOverlay) {
+            if (!client.hasOverlay) {
               _presentCallUi(pending.data, fromHeadless: true);
+            } else {
+              _promoteOverlayToInCall(pending.data);
             }
+            unawaited(_restoreLiveCallAudio(pending.data));
           }));
+        } else if (client.hasMediaFor(pendingRoom) || client.isBusy) {
+          if (!client.hasOverlay) {
+            _presentCallUi(pending.data, fromHeadless: true);
+          } else {
+            _promoteOverlayToInCall(pending.data);
+          }
+          await _restoreLiveCallAudio(pending.data);
         }
+        return;
+      }
+
+      if (_isRoomEnded(pendingRoom)) {
+        await _dismissCallKitIncoming(pendingRoom);
         return;
       }
 
@@ -902,9 +925,12 @@ mixin OpenIMLive {
         _markRoomAnswered(roomID);
         signalingSubject.add(CallEvent(CallState.calling, signaling));
         // Single setConnected after successful join.
+        _suppressCallKitEnded(roomID, duration: const Duration(seconds: 45));
         unawaited(
             VoipCallkitController.toOrNull?.setConnected(roomID) ??
                 Future.value());
+        // Answered call: invite unread must not stick on conversation list.
+        unawaited(_markCallConversationRead(signaling));
         if (presentUiAfter) {
           final client = OpenIMLiveClient();
           if (!client.hasOverlay) {
@@ -1504,13 +1530,26 @@ mixin OpenIMLive {
       'ended roomID=$roomKey inCall=$inCall acceptSent=$acceptSent joining=$joining',
     );
 
-    // CallKit banner→active transition fires spurious Ended. Never reject/abort join.
+    // CallKit banner→active / FG dismiss fires spurious Ended. Never drop the call.
     if (acceptSent && (joining || !inCall)) {
       Logger.print(
           'CallKit ended ignored — accept/join in progress roomID=$roomKey');
       CallAudioDebugLog.add(
           'callkit', 'ended ignored accept/join roomID=$roomKey');
       return;
+    }
+    // Just connected from unlocked banner: End is almost always programmatic dismiss.
+    if (acceptSent && inCall) {
+      final until = _suppressCallKitEndedUntilMs[roomKey];
+      final suppressed = until != null &&
+          DateTime.now().millisecondsSinceEpoch < until;
+      if (suppressed) {
+        Logger.print(
+            'CallKit ended ignored — answered call still settling roomID=$roomKey');
+        CallAudioDebugLog.add(
+            'callkit', 'ended ignored answered settling roomID=$roomKey');
+        return;
+      }
     }
 
     _beCalledEvent = null;
@@ -1549,6 +1588,7 @@ mixin OpenIMLive {
       if (roomID.isNotEmpty) {
         _callKitAcceptHandledRoomID = roomID;
         _markRoomAnswered(roomID);
+        _suppressCallKitEnded(roomID, duration: const Duration(seconds: 45));
       }
       _beCalledEvent = null;
       if (signaling != null) {
@@ -1581,6 +1621,7 @@ mixin OpenIMLive {
         if (roomID.isNotEmpty) {
           _callKitAcceptHandledRoomID = roomID;
           _markRoomAnswered(roomID);
+          _suppressCallKitEnded(roomID, duration: const Duration(seconds: 45));
         }
         if (signaling != null) {
           unawaited(_acceptIncomingCall(signaling, requestPermissions: false));
@@ -2314,6 +2355,22 @@ mixin OpenIMLive {
     _cancelRingTimeout();
   }
 
+  /// Connected / hung-up calls keep a chat record but must not leave unread dots.
+  Future<void> _markCallConversationRead(SignalingInfo signaling) async {
+    try {
+      final peer = _recvUserIDList(signaling).firstOrNull;
+      if (peer == null || peer.isEmpty) return;
+      final conv = await OpenIM.iMManager.conversationManager
+          .getOneConversation(sourceID: peer, sessionType: ConversationType.single);
+      final id = conv.conversationID;
+      if (id.isEmpty) return;
+      await OpenIM.iMManager.conversationManager
+          .markConversationMessageAsRead(conversationID: id);
+    } catch (e, s) {
+      Logger.print('markCallConversationRead failed: $e $s');
+    }
+  }
+
   void _insertMessage({
     required CallState state,
     required SignalingInfo signalingInfo,
@@ -2352,6 +2409,15 @@ mixin OpenIMLive {
       // SDK may return status=sending for local-only inserts; never show spinner.
       msg.status = MessageStatus.succeeded;
       msg.isRead = true;
+
+      // Answered / hung-up records only — clear invite unread on the conversation.
+      final answered = state == CallState.hangup ||
+          state == CallState.beHangup ||
+          state == CallState.calling ||
+          state == CallState.beAccepted;
+      if (answered) {
+        unawaited(_markCallConversationRead(signalingInfo));
+      }
 
       onSignalingMessage?.call(SignalingMessageEvent(msg, 1, receiverID, null));
     })();
