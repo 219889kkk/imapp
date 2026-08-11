@@ -923,6 +923,7 @@ mixin OpenIMLive {
     SignalingInfo signaling, {
     bool requestPermissions = false,
   }) async {
+    final roomID = signaling.invitation?.roomID?.trim() ?? '';
     try {
       await acceptIncomingCall(
         signaling,
@@ -931,6 +932,14 @@ mixin OpenIMLive {
       );
     } catch (e, s) {
       Logger.print('acceptIncomingCall failed: $e $s');
+      CallAudioDebugLog.add('accept', 'failed — hangup+cleanup err=$e');
+      // Failed join must not leave CallKit/signaling/UI zombie after unlock.
+      if (roomID.isNotEmpty && !_isRoomEnded(roomID)) {
+        unawaited(
+          onTapHangup(signaling..userID = OpenIM.iMManager.userID, 0, true),
+        );
+      }
+      _terminateCallUi(roomID.isEmpty ? null : roomID);
     }
   }
 

@@ -93,9 +93,9 @@ class CallAudioKeepAlive with WidgetsBindingObserver {
     await _listenInterruptions();
     if (Platform.isAndroid) {
       await _enableAndroidCallForegroundService();
-    } else if (Platform.isIOS) {
-      await _promoteIosOngoingCall();
     }
+    // iOS: do NOT setCallConnected here — start() runs before LiveKit ICE.
+    // CallKit connected is set by LiveController after join succeeds.
     Logger.print(
         'CallAudioKeepAlive start roomID=$roomID video=$isVideo peer=$_peerName');
   }
