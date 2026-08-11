@@ -47,6 +47,25 @@ class CallAudioKeepAlive with WidgetsBindingObserver {
   }) async {
     if (skipSessionActivation) _callKitOwnsSession = true;
     if (_callKitOwnsSession || skipSessionActivation) {
+      // CallKit path: only skip setActive while session is actually live.
+      // After didDeactivate, owns flag can be stale — must take over or stay silent.
+      if (Platform.isIOS) {
+        final on = await IosWebRtcAudio.isEnabled();
+        if (on) {
+          CallAudioDebugLog.add(
+            'keepalive',
+            'prepareForRtc skip owns=$_callKitOwnsSession skip=$skipSessionActivation enabled=true',
+          );
+          return;
+        }
+        CallAudioDebugLog.add(
+          'keepalive',
+          'prepareForRtc CallKit flag but audio off — takeover enable',
+        );
+        _callKitOwnsSession = false;
+        await IosWebRtcAudio.ensureEnabled(speakerOn: speakerOn);
+        return;
+      }
       CallAudioDebugLog.add(
         'keepalive',
         'prepareForRtc skip owns=$_callKitOwnsSession skip=$skipSessionActivation',
@@ -56,7 +75,7 @@ class CallAudioKeepAlive with WidgetsBindingObserver {
     // iOS: IosWebRtcAudio.enable already setCategory+setActive — avoid double activate.
     if (Platform.isIOS) {
       CallAudioDebugLog.add('keepalive', 'prepareForRtc enable speaker=$speakerOn');
-      await IosWebRtcAudio.enable(speakerOn: speakerOn);
+      await IosWebRtcAudio.ensureEnabled(speakerOn: speakerOn);
       return;
     }
     await _activateCallSession(preferSpeaker: speakerOn);
@@ -120,13 +139,12 @@ class CallAudioKeepAlive with WidgetsBindingObserver {
         Logger.print('CallAudioKeepAlive disable FGS failed: $e $s');
       }
     } else if (Platform.isIOS) {
-      // CallKit will didDeactivate — avoid racing disable while system tears down.
-      if (!wasCallKit) {
-        await IosWebRtcAudio.disable();
-      } else {
-        CallAudioDebugLog.add(
-            'keepalive', 'stop skip disable (CallKit owned session)');
+      // Always reset manual-audio flag so the next call can enable cleanly.
+      // Brief delay when CallKit is tearing down avoids setActive races.
+      if (wasCallKit) {
+        await Future<void>.delayed(const Duration(milliseconds: 150));
       }
+      await IosWebRtcAudio.disable();
     }
     Logger.print('CallAudioKeepAlive stop');
     CallAudioDebugLog.add('keepalive', 'stop wasCallKit=$wasCallKit');
@@ -134,21 +152,30 @@ class CallAudioKeepAlive with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (!_active || _callKitOwnsSession) return;
+    if (!_active) return;
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.hidden) {
-      unawaited(_activateCallSession());
+      if (!_callKitOwnsSession) {
+        unawaited(_activateCallSession());
+      }
     } else if (state == AppLifecycleState.resumed) {
       unawaited(_recoverMic());
     }
   }
 
   Future<void> _recoverMic() async {
-    if (!_callKitOwnsSession) {
-      await _activateCallSession();
-      if (Platform.isIOS) {
-        await IosWebRtcAudio.enable();
+    if (Platform.isIOS) {
+      final on = await IosWebRtcAudio.isEnabled();
+      if (!on) {
+        // CallKit may have deactivated while owns flag was still true.
+        _callKitOwnsSession = false;
+        await IosWebRtcAudio.ensureEnabled();
+      } else if (!_callKitOwnsSession) {
+        await _activateCallSession();
+        await IosWebRtcAudio.ensureEnabled();
       }
+    } else if (!_callKitOwnsSession) {
+      await _activateCallSession();
     }
     if (onNeedRepublishMic == null) return;
     try {

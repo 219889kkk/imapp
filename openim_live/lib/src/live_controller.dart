@@ -680,7 +680,6 @@ mixin OpenIMLive {
     CallAudioDebugLog.add('callkit', 'didDeactivate');
     final client = OpenIMLiveClient();
     if (!client.isBusy) return;
-    final isVideo = _activeCallSignaling?.invitation?.mediaType == 'video';
     final foreground =
         WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
     // Mid-ICE on lock screen: setActive often fails — bridge only.
@@ -698,13 +697,21 @@ mixin OpenIMLive {
       'didDeactivate while busy — switch to in-app WebRTC enable fg=$foreground connecting=${client.isMediaConnecting}',
     );
     CallAudioKeepAlive.instance.releaseCallKitSession();
-    unawaited(() async {
-      await IosWebRtcAudio.enable(speakerOn: OpenIMLiveClient().userSpeakerPreference);
-      // Session handoff only — do not force mic cycle (was causing mute flicker).
-      if (!client.isMediaConnecting && client.mediaRoom != null) {
-        await client.onCallActive(speakerOn: OpenIMLiveClient().userSpeakerPreference, unmuteMic: false);
-      }
-    }());
+    unawaited(_takeOverAudioAfterCallKitDeactivate(client));
+  }
+
+  /// Unlock / open chat: CallKit releases session — force WebRTC setActive + mic.
+  Future<void> _takeOverAudioAfterCallKitDeactivate(OpenIMLiveClient client) async {
+    final speaker = OpenIMLiveClient().userSpeakerPreference ?? false;
+    await IosWebRtcAudio.ensureEnabled(speakerOn: speaker, force: true);
+    // Second pass after UI setSpeakerRoute may have raced the first enable.
+    await Future<void>.delayed(const Duration(milliseconds: 180));
+    await IosWebRtcAudio.ensureEnabled(speakerOn: speaker, force: true);
+    if (!client.isBusy) return;
+    if (!client.isMediaConnecting && client.mediaRoom != null) {
+      await client.onCallActive(speakerOn: speaker, unmuteMic: true);
+      await client.ensureMediaAudible(speakerOn: speaker);
+    }
   }
 
   /// Background / lock: ringing uses CallKit, not Flutter overlay.
@@ -1013,22 +1020,24 @@ mixin OpenIMLive {
         _pendingHeadlessMicPermission = false;
       }
     }
-    // Unlock: if CallKit already didDeactivate, ownership flag is stale — take over.
+    // Unlock / open chat: always ensure WebRTC audio is live (CallKit may have
+    // deactivated with a stale owns flag, or setSpeakerRoute left a dead session).
     final owns = CallAudioKeepAlive.instance.callKitOwnsSession;
+    final speaker = OpenIMLiveClient().userSpeakerPreference ?? false;
     CallAudioDebugLog.add(
       'fg',
       'mic restore owns=$owns nativeDidActivate=$_iosCallKitDidActivateNative connecting=${client.isMediaConnecting}',
     );
     if (owns && !_iosCallKitDidActivateNative) {
       CallAudioKeepAlive.instance.releaseCallKitSession();
-      await IosWebRtcAudio.enable(speakerOn: OpenIMLiveClient().userSpeakerPreference);
-      CallAudioDebugLog.add('fg', 'took over audio after CallKit deactivate');
     }
+    await IosWebRtcAudio.ensureEnabled(speakerOn: speaker, force: true);
     if (client.isMediaConnecting) {
       CallAudioDebugLog.add('fg', 'skip audio restore — connect in flight');
       return;
     }
-    await client.onCallActive(speakerOn: OpenIMLiveClient().userSpeakerPreference, unmuteMic: true);
+    await client.onCallActive(speakerOn: speaker, unmuteMic: true);
+    await client.ensureMediaAudible(speakerOn: speaker);
     // Do NOT promoteCallingUi here — that was starting caller timer before answer.
   }
 
@@ -1044,25 +1053,25 @@ mixin OpenIMLive {
           'fg', 'skip live audio restore — outbound still ringing roomID=$roomID');
       return;
     }
-    final isVideo = signaling?.invitation?.mediaType == 'video';
     Logger.print('restore live call audio roomID=$roomID');
     final owns = CallAudioKeepAlive.instance.callKitOwnsSession;
+    final speaker = OpenIMLiveClient().userSpeakerPreference ?? false;
     CallAudioDebugLog.add(
       'fg',
       'restore owns=$owns nativeDidActivate=$_iosCallKitDidActivateNative connecting=${client.isMediaConnecting}',
     );
     if (owns && !_iosCallKitDidActivateNative) {
       CallAudioKeepAlive.instance.releaseCallKitSession();
-      await IosWebRtcAudio.enable(speakerOn: OpenIMLiveClient().userSpeakerPreference);
-      CallAudioDebugLog.add('fg', 'took over audio after CallKit deactivate');
-    } else if (!owns && !_iosCallKitDidActivateNative) {
-      await CallAudioKeepAlive.instance.prepareForRtc(speakerOn: OpenIMLiveClient().userSpeakerPreference);
     }
+    // Always ensure — covers chat-page navigation after lock-screen answer.
+    await IosWebRtcAudio.ensureEnabled(speakerOn: speaker, force: true);
+    await CallAudioKeepAlive.instance.prepareForRtc(speakerOn: speaker);
     if (client.isMediaConnecting) {
       CallAudioDebugLog.add('fg', 'skip audio restore — connect in flight');
       return;
     }
-    await client.onCallActive(speakerOn: OpenIMLiveClient().userSpeakerPreference, unmuteMic: true);
+    await client.onCallActive(speakerOn: speaker, unmuteMic: true);
+    await client.ensureMediaAudible(speakerOn: speaker);
   }
 
   Future<void> _acceptIncomingCall(

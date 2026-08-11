@@ -416,6 +416,8 @@ abstract class SignalState<T extends SignalView> extends State<T>
     setState(() {
       minimize = true;
     });
+    // Opening chat while CallKit hands off can leave WebRTC silent — re-arm.
+    unawaited(_restoreCallAudio());
   }
 
   onTapMaximize() {

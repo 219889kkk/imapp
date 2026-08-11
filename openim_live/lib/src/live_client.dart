@@ -646,7 +646,11 @@ class OpenIMLiveClient implements RTCBridge {
     try {
       await CallAudioKeepAlive.instance.prepareForRtc(speakerOn: on);
       if (Platform.isIOS) {
+        // ensure before route flip — setSpeakerRoute alone used to mark enabled
+        // without setActive after CallKit handoff.
+        await IosWebRtcAudio.ensureEnabled(speakerOn: on);
         await IosWebRtcAudio.setSpeakerRoute(on);
+        await IosWebRtcAudio.ensureEnabled(speakerOn: on);
       }
       await Hardware.instance.setSpeakerphoneOn(on);
       await room.setSpeakerOn(on);
@@ -677,7 +681,9 @@ class OpenIMLiveClient implements RTCBridge {
     try {
       await CallAudioKeepAlive.instance.prepareForRtc(speakerOn: on);
       if (Platform.isIOS) {
+        await IosWebRtcAudio.ensureEnabled(speakerOn: on);
         await IosWebRtcAudio.setSpeakerRoute(on);
+        await IosWebRtcAudio.ensureEnabled(speakerOn: on);
       }
       await Hardware.instance.setSpeakerphoneOn(on);
       await room.setSpeakerOn(on);

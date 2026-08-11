@@ -46,7 +46,10 @@ import flutter_callkit_incoming
             case "disableWebRtcAudio":
                 self.disableWebRtcAudio(result: result)
             case "isWebRtcAudioEnabled":
-                result(RTCAudioSession.sharedInstance().isAudioEnabled)
+                // Both flags required — isAudioEnabled alone can be true after a
+                // dead setSpeakerRoute while the AVAudioSession is inactive.
+                let rtc = RTCAudioSession.sharedInstance()
+                result(rtc.isAudioEnabled && rtc.isActive)
             case "bridgeCallKitWebRtcAudio":
                 self.bridgeCallKitWebRtcAudio(result: result)
             case "setSpeakerRoute":
@@ -173,19 +176,21 @@ import flutter_callkit_incoming
     }
 
     /// Switch earpiece ↔ speaker while keeping voiceChat AEC. Sync RTCAudioSession.
+    /// After CallKit didDeactivate the session is dead — must setActive again or
+    /// isAudioEnabled=true with an inactive session leaves every call silent.
     private func setSpeakerRoute(preferSpeaker: Bool, result: @escaping FlutterResult) {
         let session = AVAudioSession.sharedInstance()
         let rtc = RTCAudioSession.sharedInstance()
         rtc.lockForConfiguration()
         defer { rtc.unlockForConfiguration() }
         do {
-            try applyVoipAudioSession(session, preferSpeaker: preferSpeaker, activate: false)
-            // Keep WebRTC's view of the session in sync after route flips.
-            if rtc.isActive {
-                rtc.audioSessionDidActivate(session)
-            }
+            // When WebRTC session is inactive (post-CallKit handoff), setActive.
+            // While CallKit still owns activation, rtc.isActive is already true.
+            let activate = !rtc.isActive
+            try applyVoipAudioSession(session, preferSpeaker: preferSpeaker, activate: activate)
+            rtc.audioSessionDidActivate(session)
             rtc.isAudioEnabled = true
-            emitAudioDebug("setSpeakerRoute speaker=\(preferSpeaker) mode=voiceChat aec=on")
+            emitAudioDebug("setSpeakerRoute speaker=\(preferSpeaker) activate=\(activate) mode=voiceChat aec=on")
             result(true)
         } catch {
             emitAudioDebug("setSpeakerRoute failed \(error.localizedDescription)")
@@ -243,9 +248,13 @@ import flutter_callkit_incoming
 
     func didDeactivateAudioSession(_ audioSession: AVAudioSession) {
         let rtc = RTCAudioSession.sharedInstance()
+        rtc.lockForConfiguration()
         rtc.audioSessionDidDeactivate(audioSession)
         rtc.isAudioEnabled = false
+        rtc.unlockForConfiguration()
         emitAudioDebug("CallKit audio session deactivated isAudioEnabled=false")
+        // Tell Flutter immediately so it can take over with setActive before UI
+        // setSpeakerRoute races and marks isAudioEnabled without a live session.
         DispatchQueue.main.async {
             self.voipChannel?.invokeMethod("onCallKitAudioDeactivated", arguments: nil)
         }
@@ -262,11 +271,27 @@ import flutter_callkit_incoming
             try applyVoipAudioSession(session, preferSpeaker: preferSpeaker, activate: true)
             rtc.audioSessionDidActivate(session)
             rtc.isAudioEnabled = true
-            emitAudioDebug("in-app audio enabled speaker=\(preferSpeaker)")
+            emitAudioDebug("in-app audio enabled speaker=\(preferSpeaker) isActive=\(rtc.isActive)")
             result(true)
         } catch {
-            emitAudioDebug("in-app enable failed \(error.localizedDescription)")
-            result(FlutterError(code: "audio", message: error.localizedDescription, details: nil))
+            // CallKit tear-down often races setActive — retry once after a beat.
+            emitAudioDebug("in-app enable failed \(error.localizedDescription) — retry")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                let session = AVAudioSession.sharedInstance()
+                let rtc = RTCAudioSession.sharedInstance()
+                rtc.lockForConfiguration()
+                defer { rtc.unlockForConfiguration() }
+                do {
+                    try self.applyVoipAudioSession(session, preferSpeaker: preferSpeaker, activate: true)
+                    rtc.audioSessionDidActivate(session)
+                    rtc.isAudioEnabled = true
+                    self.emitAudioDebug("in-app audio enabled on retry speaker=\(preferSpeaker)")
+                    result(true)
+                } catch {
+                    self.emitAudioDebug("in-app enable retry failed \(error.localizedDescription)")
+                    result(FlutterError(code: "audio", message: error.localizedDescription, details: nil))
+                }
+            }
         }
     }
 

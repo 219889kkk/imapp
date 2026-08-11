@@ -26,6 +26,34 @@ class IosWebRtcAudio {
     }
   }
 
+  /// Re-enable if WebRTC audio was left off (CallKit deactivate / failed handoff).
+  /// Retries briefly — CallKit tear-down often races the first setActive.
+  ///
+  /// When [force] is true, always run [enable] once even if the flag looks on
+  /// (covers inactive-session races after unlocking into chat).
+  static Future<bool> ensureEnabled({
+    bool speakerOn = false,
+    bool force = false,
+  }) async {
+    if (!Platform.isIOS) return true;
+    for (var i = 0; i < 3; i++) {
+      final on = await isEnabled();
+      if (on && !(force && i == 0)) {
+        CallAudioDebugLog.add('webrtc', 'ensureEnabled already on attempt=$i');
+        return true;
+      }
+      CallAudioDebugLog.add(
+        'webrtc',
+        'ensureEnabled enable speaker=$speakerOn force=$force attempt=$i wasOn=$on',
+      );
+      await enable(speakerOn: speakerOn);
+      if (await isEnabled()) return true;
+      await Future<void>.delayed(Duration(milliseconds: 120 + i * 80));
+    }
+    CallAudioDebugLog.add('webrtc', 'ensureEnabled still off after retries');
+    return false;
+  }
+
   static Future<void> disable() async {
     if (!Platform.isIOS) return;
     try {
