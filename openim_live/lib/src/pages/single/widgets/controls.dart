@@ -201,6 +201,7 @@ class _ControlsViewState extends State<ControlsView> with WidgetsBindingObserver
     final next = !_enabledMicrophone;
     setState(() => _enabledMicrophone = next);
     widget.onEnabledMicrophone?.call(next);
+    OpenIMLiveClient().setUserMicPreference(next);
     try {
       if (next) {
         await _enableAudio();

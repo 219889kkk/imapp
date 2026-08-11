@@ -146,11 +146,17 @@ class OpenIMLiveClient implements RTCBridge {
 
   void Function()? _promoteCallingUi;
   bool _peerAcceptedForUi = false;
+  /// User mic button intent — keepalive must not override mute.
+  bool? _userMicPreference;
 
   bool get peerAcceptedForUi => _peerAcceptedForUi;
 
   void setPromoteCallingUiHandler(void Function()? handler) {
     _promoteCallingUi = handler;
+  }
+
+  void setUserMicPreference(bool enabled) {
+    _userMicPreference = enabled;
   }
 
   /// Mark peer answered (caller). Separate from UI promote so FG audio restore
@@ -173,6 +179,7 @@ class OpenIMLiveClient implements RTCBridge {
     }
     _promoteCallingUi = null;
     _peerAcceptedForUi = false;
+    _userMicPreference = null;
     unawaited(_disposeMedia());
     isBusy = false;
     currentRoomID = null;
@@ -593,7 +600,7 @@ class OpenIMLiveClient implements RTCBridge {
       await CallAudioKeepAlive.instance.prepareForRtc(speakerOn: on);
       await Hardware.instance.setSpeakerphoneOn(on);
       await room.setSpeakerOn(on);
-      if (unmuteMic) {
+      if (unmuteMic && _userMicPreference != false) {
         final local = room.localParticipant;
         if (local != null && local.isMicrophoneEnabled() != true) {
           await local.setMicrophoneEnabled(true);
@@ -730,11 +737,13 @@ class OpenIMLiveClient implements RTCBridge {
       return;
     }
 
-    // Peer hangup / room already ended / alone in room — never revive a zombie call.
+    // Peer hangup / room already ended / alone after answer — never revive zombie.
+    // Outbound wait is alone until callee joins — do NOT end the call here.
     final roomEnded =
         roomID != null && PackageBridge.isCallRoomEnded?.call(roomID) == true;
-    final alone = room.remoteParticipants.isEmpty;
-    if (roomEnded || alone) {
+    final aloneAfterAnswer =
+        room.remoteParticipants.isEmpty && _peerAcceptedForUi;
+    if (roomEnded || aloneAfterAnswer) {
       if (roomID != null && roomID.isNotEmpty) {
         PackageBridge.onPeerLeftCall?.call(roomID);
       }
@@ -771,17 +780,20 @@ class OpenIMLiveClient implements RTCBridge {
               ),
             ),
           );
+          final micOn = (_userMicPreference ?? true) &&
+              (_peerAcceptedForUi || room.remoteParticipants.isNotEmpty);
           await _ensurePublished(
             callType: _mediaCallType ?? CallType.audio,
             speakerOn: _userSpeakerPreference ??
                 (_mediaCallType == CallType.video),
-            enableCamera: _mediaCallType == CallType.video,
-            enableMicrophone: true,
+            enableCamera: _mediaCallType == CallType.video && micOn,
+            enableMicrophone: micOn,
           );
           await _subscribeRemoteTracks();
           _liveKitReconnectAttempts = 0;
-          // Reconnected but peer gone — end call instead of empty forever-timer.
-          if (room.remoteParticipants.isEmpty) {
+          // Reconnected but peer gone — end only if call was already answered.
+          // Outbound wait is alone in the room by design until callee joins.
+          if (room.remoteParticipants.isEmpty && _peerAcceptedForUi) {
             PackageBridge.onPeerLeftCall?.call(roomID);
             _dispatchRoomDisconnected();
           }
@@ -915,6 +927,15 @@ class OpenIMLiveClient implements RTCBridge {
       try {
         final p = _mediaRoom?.localParticipant;
         if (p == null) return;
+        // Outbound still ringing / user muted — never force mic on.
+        if (!_peerAcceptedForUi &&
+            (_mediaRoom?.remoteParticipants.isEmpty ?? true)) {
+          return;
+        }
+        if (_userMicPreference == false) {
+          Logger.print('republish mic skipped: user muted');
+          return;
+        }
         if (p.isMicrophoneEnabled() == true) {
           Logger.print('republish mic skipped: already enabled');
           return;
@@ -1036,14 +1057,24 @@ class OpenIMLiveClient implements RTCBridge {
     }
 
     final mediaReady = hasMediaFor(roomID);
-    // Headless media already up: show calling UI, do not re-pickup/reconnect.
-    final effectiveInit =
-        mediaReady ? CallState.calling : initState;
-    final effectiveAutoPickup = mediaReady ? false : autoPickup;
+    // Outbound wait joins LiveKit early — mediaReady ≠ answered.
+    final CallState effectiveInit;
+    if (initState == CallState.call && !_peerAcceptedForUi) {
+      effectiveInit = CallState.call;
+    } else if (mediaReady) {
+      effectiveInit = CallState.calling;
+    } else {
+      effectiveInit = initState;
+    }
+    final effectiveAutoPickup =
+        effectiveInit == CallState.calling ? false : autoPickup;
 
     isBusy = true;
     currentRoomID = roomID ?? currentRoomID;
-    _peerAcceptedForUi = false;
+    // Keep peerAccepted across re-attach of an answered call.
+    if (effectiveInit != CallState.calling) {
+      _peerAcceptedForUi = false;
+    }
     this.onTapHangup = onTapHangup;
 
     FocusScope.of(ctx).requestFocus(FocusNode());

@@ -479,8 +479,8 @@ mixin OpenIMLive {
     PackageBridge.clearCallNotification?.call();
     if (roomID.isNotEmpty) {
       _markRoomAnswered(roomID);
-      // Short suppress only for programmatic dismiss echo — user End must still hang up.
-      _suppressCallKitEnded(roomID, duration: const Duration(seconds: 2));
+      // Do NOT suppress CallKit ended here — user End within 2s must hang up.
+      // Programmatic dismiss uses _dismissCallKitIncoming → _suppressCallKitEnded.
       // Do NOT setConnected here — wait until LiveKit join succeeds (avoids audio flap).
     }
     CallAudioDebugLog.add('callkit', 'accept join roomID=$roomID');
@@ -530,8 +530,14 @@ mixin OpenIMLive {
   void _onPeerLeftCall(String? roomID) {
     final id = roomID?.trim() ?? '';
     if (id.isEmpty || _isRoomEnded(id)) return;
-    Logger.print('peer left — terminate call roomID=$id');
-    _terminateCallUi(id);
+    Logger.print('peer left — hangup call roomID=$id');
+    final info = _activeCallSignaling;
+    if (info != null && info.invitation?.roomID?.trim() == id) {
+      // Notify peer so their timer stops (terminate-only left them in-call).
+      unawaited(onTapHangup(info..userID = OpenIM.iMManager.userID, 0, true));
+    } else {
+      _terminateCallUi(id);
+    }
   }
 
   Future<void> _waitForIosCallKitAudio({bool speakerOn = false}) async {
@@ -692,6 +698,16 @@ mixin OpenIMLive {
     final client = OpenIMLiveClient();
     final active = _activeCallSignaling;
     final activeRoom = active?.invitation?.roomID?.trim() ?? '';
+
+    // Outbound still ringing (already in LiveKit) — leave "等待接听" alone.
+    if (active != null &&
+        activeRoom.isNotEmpty &&
+        _isOutboundWaitingRoom(activeRoom)) {
+      _beCalledEvent = null;
+      CallAudioDebugLog.add(
+          'fg', 'outbound still ringing — keep waiting UI roomID=$activeRoom');
+      return;
+    }
 
     // Live / connecting call — attach UI only; never end media on unlock.
     if (active != null &&
@@ -1200,7 +1216,11 @@ mixin OpenIMLive {
     }
     _activeCallSignaling = signaling;
     final client = OpenIMLiveClient();
+    final roomKey = roomID?.trim() ?? '';
+    // Caller already in LiveKit but peer not answered — keep waiting UI.
+    final outboundWaiting = _isOutboundWaitingRoom(roomKey);
     if (client.hasOverlay) {
+      if (outboundWaiting) return;
       if (client.hasMediaFor(roomID) || fromHeadless) {
         _promoteOverlayToInCall(signaling);
       }
@@ -1215,18 +1235,23 @@ mixin OpenIMLive {
         : CallObj.group;
     final overlayContext = Get.overlayContext;
     final mediaReady = client.hasMediaFor(roomID);
-    final answered = roomID != null &&
-        (_answeredRoomUntilMs.containsKey(roomID.trim()) ||
-            _isAcceptInProgressForRoom(roomID) ||
-            fromHeadless);
-    // Answered / headless attach must never open as invite (accept) page.
-    final initAsCalling = mediaReady || answered;
+    final answered = !outboundWaiting &&
+        roomKey.isNotEmpty &&
+        (_answeredRoomUntilMs.containsKey(roomKey) ||
+            _peerAcceptedRooms.contains(roomKey) ||
+            client.peerAcceptedForUi ||
+            _isAcceptInProgressForRoom(roomKey) ||
+            (fromHeadless && mediaReady));
+    final CallState initState;
+    if (outboundWaiting) {
+      initState = CallState.call;
+    } else if (mediaReady || answered) {
+      initState = CallState.calling;
+    } else {
+      initState = CallState.beCalled;
+    }
     if (overlayContext == null) {
-      // Keep pending so foreground restores UI without interrupting media.
-      _beCalledEvent = CallEvent(
-        initAsCalling ? CallState.calling : CallState.beCalled,
-        signaling,
-      );
+      _beCalledEvent = CallEvent(initState, signaling);
       return;
     }
 
@@ -1239,27 +1264,32 @@ mixin OpenIMLive {
       groupID: signaling.invitation!.groupID,
       callType: callType,
       callObj: callObj,
-      initState: initAsCalling ? CallState.calling : CallState.beCalled,
+      initState: initState,
       onSyncUserInfo: onSyncUserInfo,
       onSyncGroupInfo: onSyncGroupInfo,
       onSyncGroupMemberInfo: onSyncGroupMemberInfo,
-      autoPickup: initAsCalling ? false : _autoPickup,
-      onTapPickup: () async {
-        final cert = await acceptIncomingCall(
-          signaling..userID = OpenIM.iMManager.userID,
-          requestPermissions: true,
-          presentUiAfter: false,
-        );
-        final roomID = signaling.invitation?.roomID;
-        _markRoomAnswered(roomID);
-        unawaited(
-            VoipCallkitController.toOrNull?.setConnected(roomID) ??
-                Future.value());
-        return cert;
-      },
-      onTapReject: () => onTapReject(
-        signaling..userID = OpenIM.iMManager.userID,
-      ),
+      autoPickup: initState == CallState.beCalled ? _autoPickup : false,
+      onTapCancel: outboundWaiting
+          ? () => onTapCancel(signaling)
+          : null,
+      onTapPickup: initState == CallState.beCalled
+          ? () async {
+              final cert = await acceptIncomingCall(
+                signaling..userID = OpenIM.iMManager.userID,
+                requestPermissions: true,
+                presentUiAfter: false,
+              );
+              final id = signaling.invitation?.roomID;
+              _markRoomAnswered(id);
+              unawaited(
+                  VoipCallkitController.toOrNull?.setConnected(id) ??
+                      Future.value());
+              return cert;
+            }
+          : null,
+      onTapReject: initState == CallState.beCalled
+          ? () => onTapReject(signaling..userID = OpenIM.iMManager.userID)
+          : null,
       onTapHangup: (duration, isPositive) => onTapHangup(
         signaling..userID = OpenIM.iMManager.userID,
         duration,
@@ -1276,10 +1306,19 @@ mixin OpenIMLive {
   void _promoteOverlayToInCall(SignalingInfo signaling) {
     final roomID = signaling.invitation?.roomID;
     if (_isRoomEnded(roomID)) return;
+    final roomKey = roomID?.trim() ?? '';
+    // Never kill ringback / start timer while caller is still waiting.
+    if (_isOutboundWaitingRoom(roomKey)) {
+      Logger.print('skip promote — outbound still ringing roomID=$roomKey');
+      CallAudioDebugLog.add(
+          'fg', 'skip promote outbound waiting roomID=$roomKey');
+      return;
+    }
     final client = OpenIMLiveClient();
     final alreadyInCall = client.hasMediaFor(roomID) && client.hasOverlay;
     if (!client.hasOverlay) {
       _presentCallUi(signaling, fromHeadless: true);
+      return;
     }
     Logger.print(
         'promote overlay to in-call roomID=$roomID media=${client.hasMediaFor(roomID)}');
@@ -1287,7 +1326,6 @@ mixin OpenIMLive {
     _cancelRingTimeout();
     PackageBridge.clearCallNotification?.call();
     if (client.hasMediaFor(roomID)) {
-      // Avoid setConnected/onCallActive storm from duplicate CallKit accepts.
       if (!alreadyInCall) {
         unawaited(
             VoipCallkitController.toOrNull?.setConnected(roomID) ??
@@ -1300,7 +1338,8 @@ mixin OpenIMLive {
         signalingSubject.add(CallEvent(CallState.calling, signaling));
       }
     } else {
-      signalingSubject.add(CallEvent(CallState.calling, signaling));
+      // Media still joining — show connecting, not timer.
+      signalingSubject.add(CallEvent(CallState.connecting, signaling));
     }
   }
 
@@ -1658,7 +1697,9 @@ mixin OpenIMLive {
               if (isCaller) {
                 unawaited(onTimeoutCancelled(data));
               } else {
-                unawaited(onTapReject(data..userID = OpenIM.iMManager.userID));
+                // Callee miss — local cleanup only. Reject would show "对方已拒绝".
+                CallAudioDebugLog.add(
+                    'ring', 'callee timeout — local end only roomID=$roomID');
               }
             }
           }
@@ -1800,8 +1841,17 @@ mixin OpenIMLive {
   }
 
   onRoomDisconnected(SignalingInfo signalingInfo) {
-    Logger.print(
-        'call room disconnected roomID=${signalingInfo.invitation?.roomID}');
+    final roomID = signalingInfo.invitation?.roomID?.trim() ?? '';
+    Logger.print('call room disconnected roomID=$roomID');
+    CallAudioDebugLog.add('livekit', 'roomDisconnected → hangup roomID=$roomID');
+    // Notify peer — bare UI close left the other side timing forever.
+    if (roomID.isEmpty || _isRoomEnded(roomID)) {
+      _terminateCallUi(roomID.isEmpty ? null : roomID);
+      return;
+    }
+    unawaited(
+      onTapHangup(signalingInfo..userID = OpenIM.iMManager.userID, 0, true),
+    );
   }
 
   Future<SignalingCertificate> onDialSingle(SignalingInfo signaling) async {

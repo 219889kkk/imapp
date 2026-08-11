@@ -180,9 +180,11 @@ class _SingleRoomViewState extends SignalState<SingleRoomView> {
 
   void _onLiveKitDisconnected() {
     if (!mounted) return;
+    // Immediate hangup sync (controller onRoomDisconnected → onTapHangup).
     widget.onRoomDisconnected?.call();
     _disconnectCloseTimer?.cancel();
-    _disconnectCloseTimer = Timer(const Duration(seconds: 8), () {
+    // Fallback UI close if hangup path didn't tear down overlay.
+    _disconnectCloseTimer = Timer(const Duration(seconds: 2), () {
       if (!mounted) return;
       final room = _room;
       if (room?.connectionState == ConnectionState.connected) return;
