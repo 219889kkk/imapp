@@ -651,11 +651,12 @@ mixin OpenIMLive {
     final active = _activeCallSignaling;
     final activeRoom = active?.invitation?.roomID?.trim() ?? '';
 
-    // Live / connecting call — ensure in-app UI matches media state.
+    // Live / connecting call — attach UI only; never end media on unlock.
     if (active != null &&
         activeRoom.isNotEmpty &&
         !_isRoomEnded(activeRoom) &&
-        client.hasMediaFor(activeRoom)) {
+        (client.hasMediaFor(activeRoom) ||
+            client.isBusy && client.currentRoomID == activeRoom)) {
       _beCalledEvent = null;
       if (!client.hasOverlay) {
         Logger.print('iOS fg: attach call UI roomID=$activeRoom');
@@ -699,15 +700,19 @@ mixin OpenIMLive {
       return;
     }
 
-    // Stale active signaling after lock-screen hangup must NOT reopen a call page.
+    // After lock-screen hangup: do not reopen a call page from leftover signaling.
+    // Never clear _activeCallSignaling / never hang up here — unlock must not
+    // tear down a live or reconnecting call (media path above already handled).
     if (active != null &&
         activeRoom.isNotEmpty &&
         !_isRoomEnded(activeRoom) &&
         !client.hasOverlay) {
       if (client.hasMediaFor(activeRoom) ||
+          client.isBusy ||
           _isAcceptInProgressForRoom(activeRoom)) {
         Logger.print('iOS fg: attach mid-call UI roomID=$activeRoom');
         _presentCallUi(active, fromHeadless: true);
+        await _restoreLiveCallAudio(active);
         return;
       }
       final callKitAlive =
@@ -720,10 +725,9 @@ mixin OpenIMLive {
         }
       } else {
         Logger.print(
-            'iOS fg: drop stale active signaling (no media/CallKit) roomID=$activeRoom');
+            'iOS fg: skip present (no media/CallKit) keep signaling roomID=$activeRoom');
         CallAudioDebugLog.add(
-            'fg', 'drop stale signaling roomID=$activeRoom');
-        _activeCallSignaling = null;
+            'fg', 'skip present stale UI roomID=$activeRoom');
       }
     }
   }
