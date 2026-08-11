@@ -212,7 +212,10 @@ class HomeLogic extends SuperController {
   void onPaused() {}
 
   @override
-  void onResumed() {}
+  void onResumed() {
+    // Foreground after offline: drop stale lock-screen rings / timers.
+    imLogic.recoverPendingRtcInvitations();
+  }
 
   @override
   void onHidden() {}

@@ -313,11 +313,12 @@ class IMController extends GetxController with IMCallback, OpenIMLive {
     }
   }
 
-  /// After IM sync / cold start: replay a pending invite missed while offline.
+  /// After IM sync / network restore / cold start:
+  /// 1) clear CallKit/UI for rooms already cancel/hungup (callee was offline)
+  /// 2) only then replay a still-pending invite
   Future<void> recoverPendingRtcInvitations() async {
     if (!SessionGuard.shouldNotify) return;
     if (_rtcRecoveryInFlight || !OpenIM.iMManager.isLogined) return;
-    if (_isActiveCallInProgress()) return;
 
     final now = DateTime.now();
     if (_lastRtcRecoveryAt != null &&
@@ -329,43 +330,67 @@ class IMController extends GetxController with IMCallback, OpenIMLive {
     try {
       final result = await OpenIM.iMManager.messageManager.searchLocalMessages(
         messageTypeList: [MessageType.custom],
-        searchTimePeriod: 120,
-        count: 200,
+        searchTimePeriod: 180,
+        count: 300,
       );
       final messages = <Message>[];
       for (final item in result.searchResultItems ?? const []) {
         messages.addAll(item.messageList ?? const []);
       }
-      if (messages.isEmpty) return;
-
       messages.sort((a, b) => (a.sendTime ?? 0).compareTo(b.sendTime ?? 0));
+
       final nowMs = now.millisecondsSinceEpoch;
       final selfID = OpenIM.iMManager.userID;
       final pending = <String, ({SignalingInfo signaling, int sendTime})>{};
+      final endedRooms = <String>{};
+      final terminalAt = <String, int>{};
 
       for (final msg in messages) {
         final parsed = _parseCallingCustomMessage(msg);
         if (parsed == null) continue;
         final roomID = parsed.signaling.invitation?.roomID?.trim() ?? '';
         if (roomID.isEmpty) continue;
+        final sendTime = msg.sendTime ?? 0;
 
         switch (parsed.customType) {
           case CustomMessageType.callingInvite:
             if (msg.sendID == selfID) break;
-            final sendTime = msg.sendTime ?? 0;
-            if (sendTime > 0 && nowMs - sendTime > 60 * 1000) break;
-            if (PackageBridge.isCallRoomEnded?.call(roomID) == true) break;
-            pending[roomID] = (signaling: parsed.signaling, sendTime: sendTime);
+            if (endedRooms.contains(roomID)) break;
+            if (sendTime > 0 && nowMs - sendTime > 60 * 1000) {
+              endedRooms.add(roomID);
+              pending.remove(roomID);
+              break;
+            }
+            if (PackageBridge.isCallRoomEnded?.call(roomID) == true) {
+              endedRooms.add(roomID);
+              pending.remove(roomID);
+              break;
+            }
+            pending[roomID] =
+                (signaling: parsed.signaling, sendTime: sendTime);
             break;
-          case CustomMessageType.callingAccept:
           case CustomMessageType.callingReject:
           case CustomMessageType.callingCancel:
           case CustomMessageType.callingHungup:
+            endedRooms.add(roomID);
             pending.remove(roomID);
+            if (sendTime >= (terminalAt[roomID] ?? 0)) {
+              terminalAt[roomID] = sendTime;
+            }
+            break;
+          case CustomMessageType.callingAccept:
+            // Accept alone does not keep a stale invite after later hungup.
             break;
         }
       }
 
+      // Offline miss: caller hung up while we were dead — tear down zombies.
+      await _reconcileStaleRtcCalls(
+        endedRooms: endedRooms,
+        pendingRoomIDs: pending.keys.toSet(),
+      );
+
+      if (_isActiveCallInProgress()) return;
       if (pending.isEmpty) return;
 
       SignalingInfo? latest;
@@ -385,6 +410,50 @@ class IMController extends GetxController with IMCallback, OpenIMLive {
       Logger.print('recoverPendingRtcInvitations failed: $e $s');
     } finally {
       _rtcRecoveryInFlight = false;
+    }
+  }
+
+  /// End CallKit / in-app call UI for rooms already terminated while offline.
+  Future<void> _reconcileStaleRtcCalls({
+    required Set<String> endedRooms,
+    required Set<String> pendingRoomIDs,
+  }) async {
+    final voip = VoipCallkitController.toOrNull;
+    final client = OpenIMLiveClient();
+    final activeRoom = client.currentRoomID?.trim() ?? '';
+
+    Future<void> endStale(String roomID, {required String reason}) async {
+      Logger.print('RTC reconcile: end stale room=$roomID reason=$reason');
+      PackageBridge.suppressCallKitEnded?.call(roomID);
+      unawaited(voip?.markRoomEndedNative(roomID) ?? Future.value());
+      await (voip?.endCall(roomID) ?? Future.value());
+      final touchesLocal = activeRoom == roomID ||
+          (client.isBusy && (activeRoom.isEmpty || activeRoom == roomID));
+      if (touchesLocal) {
+        beHangup(SignalingInfo(
+          userID: OpenIM.iMManager.userID,
+          invitation: InvitationInfo(roomID: roomID),
+        ));
+      }
+    }
+
+    for (final roomID in endedRooms) {
+      await endStale(roomID, reason: 'terminal-signal');
+    }
+
+    // Lock-screen CallKit still up after reconnect, but invite is no longer pending.
+    final callKitRooms = await voip?.activeCallRoomIDs() ?? const <String>[];
+    for (final id in callKitRooms) {
+      if (pendingRoomIDs.contains(id) && !endedRooms.contains(id)) continue;
+      if (endedRooms.contains(id)) {
+        // Already handled above.
+        continue;
+      }
+      if (client.isBusy && client.currentRoomID?.trim() == id) {
+        // Still in live media for this room and no terminal signal — keep.
+        continue;
+      }
+      await endStale(id, reason: 'callkit-not-pending');
     }
   }
 

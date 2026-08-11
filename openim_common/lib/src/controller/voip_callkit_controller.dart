@@ -666,5 +666,28 @@ class VoipCallkitController extends GetxService {
     callKitActive.value = false;
   }
 
+  /// Active CallKit room IDs (lock-screen ring / ongoing timer).
+  Future<List<String>> activeCallRoomIDs() async {
+    if (!Platform.isIOS && !Platform.isAndroid) return const [];
+    try {
+      final active = await FlutterCallkitIncoming.activeCalls();
+      if (active is! List) return const [];
+      final ids = <String>[];
+      for (final raw in active) {
+        String id = '';
+        if (raw is CallKitParams) {
+          id = raw.id?.trim() ?? '';
+        } else if (raw is Map) {
+          id = '${raw['id'] ?? ''}'.trim();
+        }
+        if (id.isNotEmpty) ids.add(id);
+      }
+      return ids;
+    } catch (e, s) {
+      Logger.print('activeCallRoomIDs failed: $e $s');
+      return const [];
+    }
+  }
+
   static String newCallId() => const Uuid().v4();
 }

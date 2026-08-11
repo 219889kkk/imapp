@@ -207,6 +207,10 @@ class AppController extends GetxController
       final online = results.any((r) => r != ConnectivityResult.none);
       if (online) {
         _nudgeImConnection();
+        // Callee was offline when caller hung up — reconcile CallKit/timer zombies.
+        if (Get.isRegistered<IMController>()) {
+          unawaited(Get.find<IMController>().recoverPendingRtcInvitations());
+        }
       }
     });
   }
