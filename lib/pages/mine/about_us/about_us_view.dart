@@ -4,7 +4,6 @@ import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:get/get.dart';
 import 'package:openim_common/openim_common.dart';
 
-import '../../../routes/app_navigator.dart';
 import 'about_us_logic.dart';
 
 class AboutUsPage extends StatelessWidget {
