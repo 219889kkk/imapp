@@ -100,7 +100,11 @@ class ChatLogic extends SuperController {
   /// Pagination cursor even when a page is all filtered signaling msgs.
   Message? _historyCursor;
   bool _historyLoadInFlight = false;
+  /// Sync-end reload requested while another history pull was in flight.
+  bool _pendingSyncEndReload = false;
+  bool _unreadCleared = false;
   Timer? _typingTimer;
+  Timer? _latestGapReloadDebounce;
 
   final copyTextMap = <String?, String?>{};
 
@@ -169,7 +173,9 @@ class ChatLogic extends SuperController {
   @override
   void onReady() {
     _resetGroupAtType();
-    _clearUnreadCount();
+    // Defer mark-read until the visible list covers conversation.latestMsg,
+    // otherwise rapid offline bursts can be marked read while UI still incomplete.
+    _tryClearUnreadIfReady();
     _initChatConfigAfterFirstFrame();
     _subscribePeerOnlineStatus();
 
@@ -234,45 +240,13 @@ class ChatLogic extends SuperController {
 
       if (obj != null) {
         conversationInfo = obj;
+        _scheduleLatestGapReload();
       }
     });
 
-    imLogic.onRecvNewMessage = (Message message) async {
-      if (isCurrentChat(message)) {
-        if (message.contentType == MessageType.typing) {
-          if (isSingleChat) {
-            _showTypingStatus();
-          } else if (message.sendID != OpenIM.iMManager.userID) {
-            final nickname = _resolveTypingNickname(message.sendID);
-            _showTypingStatus(nickname: nickname);
-          }
-        } else if (!message.isCallingSignalingType) {
-          _normalizeCallRecordMessage(message);
-          if (!messageList.contains(message) &&
-              !scrollingCacheMessageList.contains(message)) {
-            _isReceivedMessageWhenSyncing = true;
-            if (scrollController.offset != 0) {
-              scrollingCacheMessageList.add(message);
-            } else {
-              messageList.add(message);
-              scrollBottom();
-            }
-          } else {
-            // Own send may already be in list with empty payload from ack;
-            // merge recv body so sender bubble keeps the link/text.
-            final existing = messageList.firstWhereOrNull(
-                    (e) => e.clientMsgID == message.clientMsgID) ??
-                scrollingCacheMessageList.firstWhereOrNull(
-                    (e) => e.clientMsgID == message.clientMsgID);
-            if (existing != null) {
-              existing.fillMissingPayload(message);
-              if (message.status != null) existing.status = message.status;
-              messageList.refresh();
-            }
-          }
-        }
-      }
-    };
+    // Online + offline share the same append path (offline was previously ignored).
+    imLogic.onRecvNewMessage = _onRecvIncomingMessage;
+    imLogic.onRecvOfflineMessage = _onRecvIncomingMessage;
 
     inputStatusSub = imLogic.inputStateChangedSubject.listen((data) {
       if (data.conversationID != conversationInfo.conversationID) return;
@@ -1252,8 +1226,12 @@ class ChatLogic extends SuperController {
     }
   }
 
-  _clearUnreadCount() {
+  _clearUnreadCount({bool force = false}) {
+    if (!force && !_historyCoversLatest()) {
+      return;
+    }
     // Always clear on enter/leave — SDK unreadCount can lag after call hangup.
+    _unreadCleared = true;
     conversationInfo.unreadCount = 0;
     unawaited(OpenIM.iMManager.conversationManager
         .markConversationMessageAsRead(
@@ -1261,6 +1239,78 @@ class ChatLogic extends SuperController {
         .catchError((e, s) {
       Logger.print('clearUnreadCount failed: $e $s');
     }));
+  }
+
+  bool _historyCoversLatest() {
+    final latest = conversationInfo.latestMsg;
+    if (latest == null) {
+      return messageList.isNotEmpty || !shouldAutoLoadInitialMessages;
+    }
+    if (latest.isCallingSignalingType) return true;
+    final id = latest.clientMsgID;
+    if (id == null || id.isEmpty) return true;
+    return messageList.any((m) => m.clientMsgID == id) ||
+        scrollingCacheMessageList.any((m) => m.clientMsgID == id);
+  }
+
+  void _tryClearUnreadIfReady() {
+    if (_unreadCleared) return;
+    if (!_historyCoversLatest()) return;
+    _clearUnreadCount();
+  }
+
+  void _onRecvIncomingMessage(Message message) {
+    if (!isCurrentChat(message)) return;
+    if (message.contentType == MessageType.typing) {
+      if (isSingleChat) {
+        _showTypingStatus();
+      } else if (message.sendID != OpenIM.iMManager.userID) {
+        final nickname = _resolveTypingNickname(message.sendID);
+        _showTypingStatus(nickname: nickname);
+      }
+      return;
+    }
+    if (message.isCallingSignalingType) return;
+
+    _normalizeCallRecordMessage(message);
+    if (!messageList.contains(message) &&
+        !scrollingCacheMessageList.contains(message)) {
+      _isReceivedMessageWhenSyncing = true;
+      if (scrollController.hasClients && scrollController.offset != 0) {
+        scrollingCacheMessageList.add(message);
+      } else {
+        messageList.add(message);
+        scrollBottom();
+      }
+      _tryClearUnreadIfReady();
+    } else {
+      // Own send may already be in list with empty payload from ack;
+      // merge recv body so sender bubble keeps the link/text.
+      final existing = messageList.firstWhereOrNull(
+              (e) => e.clientMsgID == message.clientMsgID) ??
+          scrollingCacheMessageList.firstWhereOrNull(
+              (e) => e.clientMsgID == message.clientMsgID);
+      if (existing != null) {
+        existing.fillMissingPayload(message);
+        if (message.status != null) existing.status = message.status;
+        messageList.refresh();
+      }
+    }
+  }
+
+  void _scheduleLatestGapReload() {
+    _latestGapReloadDebounce?.cancel();
+    _latestGapReloadDebounce = Timer(const Duration(milliseconds: 400), () {
+      if (isClosed) return;
+      if (_historyCoversLatest()) {
+        _tryClearUnreadIfReady();
+        return;
+      }
+      // Conversation shows a newer latestMsg than the open list — pull again.
+      _isFirstLoad = true;
+      _historyCursor = null;
+      unawaited(_loadHistoryForSyncEnd());
+    });
   }
 
   void closeToolbox() {
@@ -1575,7 +1625,7 @@ class ChatLogic extends SuperController {
   @override
   void onClose() {
     sendTypingMsg();
-    _clearUnreadCount();
+    _clearUnreadCount(force: true);
     if (appLogic.viewingConversationID == conversationInfo.conversationID) {
       appLogic.viewingConversationID = null;
     }
@@ -1602,11 +1652,13 @@ class ChatLogic extends SuperController {
     }
     imLogic.onRecvMessageRevoked = null;
     imLogic.onRecvNewMessage = null;
+    imLogic.onRecvOfflineMessage = null;
     imLogic.onRecvC2CReadReceipt = null;
 
     _debounce?.cancel();
     _typingStartDebounce?.cancel();
     _typingTimer?.cancel();
+    _latestGapReloadDebounce?.cancel();
     super.onClose();
   }
 
@@ -1988,14 +2040,26 @@ class ChatLogic extends SuperController {
     }
     final remoteIds =
         remote.map((e) => e.clientMsgID).whereType<String>().toSet();
+    final oldestRemoteTime = remote.isEmpty
+        ? 0
+        : remote
+            .map((m) => m.sendTime ?? 0)
+            .reduce((a, b) => a < b ? a : b);
+    // Keep sending/failed locals, and any live-received msgs that a partial
+    // history page would otherwise wipe (rapid offline / sync races).
     final pending = messageList.where((m) {
       final id = m.clientMsgID;
       if (id == null || remoteIds.contains(id)) return false;
-      return m.status == MessageStatus.sending ||
-          m.status == MessageStatus.failed;
+      if (m.status == MessageStatus.sending ||
+          m.status == MessageStatus.failed) {
+        return true;
+      }
+      return (m.sendTime ?? 0) >= oldestRemoteTime;
     }).toList();
     if (pending.isEmpty) return remote;
-    return [...remote, ...pending];
+    final merged = [...remote, ...pending];
+    merged.sort((a, b) => (a.sendTime ?? 0).compareTo(b.sendTime ?? 0));
+    return merged;
   }
 
   Future<bool> onScrollToBottomLoad() async {
@@ -2040,6 +2104,7 @@ class ChatLogic extends SuperController {
         messageList.insertAll(0, visible);
         _ensureGroupReadInfoForList(visible);
       }
+      _tryClearUnreadIfReady();
       return hasMoreHistory;
     } catch (e, s) {
       Logger.print('onScrollToBottomLoad failed: $e $s');
@@ -2048,11 +2113,18 @@ class ChatLogic extends SuperController {
       return false;
     } finally {
       _historyLoadInFlight = false;
+      if (_pendingSyncEndReload) {
+        _pendingSyncEndReload = false;
+        unawaited(_loadHistoryForSyncEnd());
+      }
     }
   }
 
   Future<void> _loadHistoryForSyncEnd() async {
-    if (_historyLoadInFlight) return;
+    if (_historyLoadInFlight) {
+      _pendingSyncEndReload = true;
+      return;
+    }
     _historyLoadInFlight = true;
     try {
       final result =
@@ -2074,14 +2146,22 @@ class ChatLogic extends SuperController {
         _historyCursor = raw.first;
       }
 
-      final offset = scrollController.offset;
+      final offset =
+          scrollController.hasClients ? scrollController.offset : 0.0;
       messageList.assignAll(_mergeHistoryWithLocal(list));
       _ensureGroupReadInfoForList(messageList);
-      scrollController.jumpTo(offset);
+      if (scrollController.hasClients) {
+        scrollController.jumpTo(offset);
+      }
+      _tryClearUnreadIfReady();
     } catch (e, s) {
       Logger.print('_loadHistoryForSyncEnd failed: $e $s');
     } finally {
       _historyLoadInFlight = false;
+      if (_pendingSyncEndReload) {
+        _pendingSyncEndReload = false;
+        unawaited(_loadHistoryForSyncEnd());
+      }
     }
   }
 
@@ -2110,11 +2190,27 @@ class ChatLogic extends SuperController {
       return;
     }
 
+    final latest = conversationInfo.latestMsg;
+    final latestId = latest?.clientMsgID;
+    final coversLatest = latest == null ||
+        latestId == null ||
+        latestId.isEmpty ||
+        latest.isCallingSignalingType ||
+        visible.any((m) => m.clientMsgID == latestId) ||
+        value.any((m) => m.clientMsgID == latestId);
+    if (!coversLatest) {
+      // Stale/incomplete first page — leave auto-load on so SDK pull fills gaps.
+      Logger.print(
+          'prefetch incomplete vs latestMsg=$latestId — skip apply');
+      return;
+    }
+
     shouldAutoLoadInitialMessages = false;
     _isFirstLoad = false;
     messageList.assignAll(visible);
     scrollBottom();
     _deferGroupPostMessageWork(visible);
+    _tryClearUnreadIfReady();
   }
 
   void _deferGroupPostMessageWork(Iterable<Message> messages) {

@@ -603,6 +603,18 @@ class ConversationLogic extends GetxController {
     try {
       prefetchedMessages =
           await ChatMessagePrefetchCache.prefetch(conversationInfo);
+      final latestId = conversationInfo.latestMsg?.clientMsgID;
+      final latest = conversationInfo.latestMsg;
+      if (prefetchedMessages != null &&
+          latestId != null &&
+          latestId.isNotEmpty &&
+          latest != null &&
+          !latest.isCallingSignalingType &&
+          !prefetchedMessages.messages.any((m) => m.clientMsgID == latestId)) {
+        // Incomplete first page — open chat with auto-load instead of freezing.
+        ChatMessagePrefetchCache.invalidate(conversationInfo);
+        prefetchedMessages = null;
+      }
     } catch (_) {}
 
     await AppNavigator.startChat(

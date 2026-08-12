@@ -19,6 +19,8 @@ class ChatMessagePrefetchCache {
 
   static final _cache = <String, PrefetchedChatMessages>{};
   static final _inFlight = <String, Future<PrefetchedChatMessages>>{};
+  /// Bumped on [invalidate] so in-flight fetches cannot write stale pages.
+  static final _generation = <String, int>{};
 
   static String _key(ConversationInfo conversationInfo) =>
       conversationInfo.conversationID;
@@ -33,7 +35,12 @@ class ChatMessagePrefetchCache {
   }
 
   static void invalidate(ConversationInfo conversationInfo) {
-    _cache.remove(_key(conversationInfo));
+    final key = _key(conversationInfo);
+    _cache.remove(key);
+    _generation[key] = (_generation[key] ?? 0) + 1;
+    // Drop in-flight handle so a new prefetch can start; old future still
+    // completes but will not write into the cache (generation mismatch).
+    _inFlight.remove(key);
   }
 
   static Future<PrefetchedChatMessages> prefetch(
@@ -52,7 +59,9 @@ class ChatMessagePrefetchCache {
     final running = _inFlight[key];
     if (running != null) return running;
 
-    final future = OpenIM.iMManager.messageManager
+    final gen = _generation[key] ?? 0;
+    late final Future<PrefetchedChatMessages> future;
+    future = OpenIM.iMManager.messageManager
         .getAdvancedHistoryMessageList(
       conversationID: conversationInfo.conversationID,
       count: pageSize,
@@ -63,6 +72,10 @@ class ChatMessagePrefetchCache {
         messages: List<Message>.of(result.messageList ?? const []),
         isEnd: result.isEnd == true,
       );
+      if ((_generation[key] ?? 0) != gen) {
+        // Conversation moved on while this page was loading — do not cache.
+        return value;
+      }
       // Only cache non-empty or confirmed end results.
       if (value.messages.isNotEmpty || value.isEnd) {
         _put(key, value);
@@ -72,7 +85,9 @@ class ChatMessagePrefetchCache {
       Logger.print('prefetch chat messages failed: $key, $error');
       throw error;
     }).whenComplete(() {
-      _inFlight.remove(key);
+      if (identical(_inFlight[key], future)) {
+        _inFlight.remove(key);
+      }
     });
 
     _inFlight[key] = future;

@@ -148,9 +148,13 @@ class IMManager {
               messageManager.msgListener.recvNewMessage(msg);
               break;
             case 'onRecvOfflineNewMessage':
+              // Native SDK may emit a JSON array batch (see Android OnAdvanceMsgListener).
               var value = call.arguments['data']['message'];
-              final msg = Utils.toObj(value, (map) => Message.fromJson(map));
-              messageManager.msgListener.recvOfflineNewMessage(msg);
+              final list =
+                  Utils.toObjOrList(value, (map) => Message.fromJson(map));
+              for (final msg in list) {
+                messageManager.msgListener.recvOfflineNewMessage(msg);
+              }
               break;
             case 'onRecvOnlineOnlyMessage':
               var value = call.arguments['data']['message'];

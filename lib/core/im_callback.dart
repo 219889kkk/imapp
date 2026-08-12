@@ -188,14 +188,17 @@ mixin IMCallback {
   }
 
   void recvNewMessage(Message msg) {
-    if (!SessionGuard.shouldNotify) return;
-    initLogic.showNotification(msg);
+    // Always deliver to open chat UI; only gate local notifications.
+    if (SessionGuard.shouldNotify) {
+      initLogic.showNotification(msg);
+    }
     onRecvNewMessage?.call(msg);
   }
 
   void recvOfflineMessage(Message msg) {
-    if (!SessionGuard.shouldNotify) return;
-    initLogic.showNotification(msg);
+    if (SessionGuard.shouldNotify) {
+      initLogic.showNotification(msg);
+    }
     onRecvOfflineMessage?.call(msg);
   }
 
