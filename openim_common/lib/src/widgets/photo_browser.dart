@@ -303,6 +303,26 @@ class _MediaBrowserState extends State<MediaBrowser> with TickerProviderStateMix
               ),
             ),
           ),
+          // Always-visible close — video controls eat the page tap-to-dismiss.
+          Positioned(
+            top: MediaQuery.of(context).padding.top + 8,
+            left: 12,
+            child: Material(
+              color: Colors.black54,
+              shape: const CircleBorder(),
+              child: InkWell(
+                customBorder: const CircleBorder(),
+                onTap: () {
+                  slidePagekey.currentState?.popPage();
+                  Navigator.of(context).maybePop();
+                },
+                child: const Padding(
+                  padding: EdgeInsets.all(8),
+                  child: Icon(Icons.close, color: Colors.white, size: 22),
+                ),
+              ),
+            ),
+          ),
           if (widget.allowEdit &&
               widget.onEdit != null &&
               !widget.sources[currentIndex.clamp(0, widget.sources.length - 1)]
@@ -439,6 +459,18 @@ class _VideoPlayerViewState extends State<VideoPlayerView> {
             seekBarMargin: const EdgeInsets.only(bottom: 60, left: 24, right: 24),
             seekBarThumbColor: Colors.white,
             seekBarPositionColor: Colors.white,
+            topButtonBarMargin: const EdgeInsets.only(left: 8, right: 8),
+            topButtonBar: [
+              MaterialCustomButton(
+                icon: const Icon(Icons.close, color: Colors.white),
+                onPressed: () {
+                  if (Navigator.of(context).canPop()) {
+                    Navigator.of(context).pop();
+                  }
+                },
+              ),
+              const Spacer(),
+            ],
             bottomButtonBar: [
               const MaterialPlayOrPauseButton(),
               const MaterialPositionIndicator(),
@@ -450,7 +482,19 @@ class _VideoPlayerViewState extends State<VideoPlayerView> {
                   }),
             ],
           ),
-          fullscreen: media_kit_video_controls.kDefaultMaterialVideoControlsThemeDataFullscreen,
+          fullscreen: media_kit_video_controls.kDefaultMaterialVideoControlsThemeDataFullscreen.copyWith(
+            topButtonBar: [
+              MaterialCustomButton(
+                icon: const Icon(Icons.close, color: Colors.white),
+                onPressed: () {
+                  if (Navigator.of(context).canPop()) {
+                    Navigator.of(context).pop();
+                  }
+                },
+              ),
+              const Spacer(),
+            ],
+          ),
           child: Video(
             controller: controller,
             fit: BoxFit.contain,

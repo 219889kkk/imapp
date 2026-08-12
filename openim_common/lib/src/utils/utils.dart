@@ -761,6 +761,27 @@ class IMUtils {
         case MessageType.picture:
           content = '[${StrRes.picture}]';
           break;
+        case MessageType.video:
+          content = '[${StrRes.video}]';
+          break;
+        case MessageType.voice:
+          content = '[${StrRes.voice}]';
+          break;
+        case MessageType.file:
+          final name = message.fileElem?.fileName?.trim();
+          content = isNotNullEmptyStr(name)
+              ? '[${StrRes.file}] $name'
+              : '[${StrRes.file}]';
+          break;
+        case MessageType.card:
+          content = '[${StrRes.carte}]';
+          break;
+        case MessageType.atText:
+          content = message.atTextElem?.text ?? '[${StrRes.unsupportedMessage}]';
+          break;
+        case MessageType.quote:
+          content = message.quoteElem?.text ?? '[${StrRes.unsupportedMessage}]';
+          break;
         case MessageType.location:
           content = '[${StrRes.location}]';
           break;
