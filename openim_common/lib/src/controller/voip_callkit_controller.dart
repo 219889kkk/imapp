@@ -105,7 +105,7 @@ class VoipCallkitController extends GetxService {
     unawaited(logoutAsync());
   }
 
-  static Future<void> logoutAsync() async {
+  static Future<void> logoutAsync({bool deleteServerToken = true}) async {
     if (!Platform.isIOS && !Platform.isAndroid) return;
     if (!Get.isRegistered<VoipCallkitController>()) return;
     final ctrl = Get.find<VoipCallkitController>();
@@ -120,12 +120,38 @@ class VoipCallkitController extends GetxService {
       Logger.print('VoipCallkit endAllCalls: $e $s');
     }
     ctrl.callKitActive.value = false;
-    if (Platform.isIOS &&
+    // Kick must NOT wipe the per-user VoIP token — re-login on this phone
+    // (or another) would miss lock-screen rings until upload succeeds again.
+    if (deleteServerToken &&
+        Platform.isIOS &&
         userID != null &&
         userID.isNotEmpty &&
         (DataSp.chatToken?.trim().isNotEmpty ?? false)) {
       await Apis.deleteVoipToken(userID: userID);
     }
+  }
+
+  /// Force re-upload after IM reconnect (token may have been wiped / never sent).
+  static Future<void> ensureVoipTokenUploaded() async {
+    if (!Platform.isIOS) return;
+    if (!Get.isRegistered<VoipCallkitController>()) return;
+    final ctrl = Get.find<VoipCallkitController>();
+    ctrl._lastUploadedToken = null;
+    await ctrl._refreshVoipToken(upload: true);
+    if (!isPlausibleVoipToken(ctrl._voipToken)) {
+      try {
+        final cached =
+            await ctrl._nativeChannel.invokeMethod<String>('getCachedVoipToken');
+        final t = (cached ?? '').trim();
+        if (isPlausibleVoipToken(t)) {
+          ctrl._voipToken = t;
+          await ctrl._uploadVoipTokenIfNeeded();
+        }
+      } catch (e, s) {
+        Logger.print('getCachedVoipToken failed: $e $s');
+      }
+    }
+    ctrl._scheduleTokenRetries();
   }
 
   /// Android: notification + full-screen intent (+ overlay if needed).
@@ -301,8 +327,15 @@ class VoipCallkitController extends GetxService {
 
   Future<void> _refreshVoipToken({bool upload = false}) async {
     try {
-      final token = await FlutterCallkitIncoming.getDevicePushTokenVoIP();
-      final raw = '$token'.trim();
+      var token = await FlutterCallkitIncoming.getDevicePushTokenVoIP();
+      var raw = '$token'.trim();
+      if (raw.isEmpty) {
+        try {
+          final cached =
+              await _nativeChannel.invokeMethod<String>('getCachedVoipToken');
+          raw = (cached ?? '').trim();
+        } catch (_) {}
+      }
       if (raw.isNotEmpty) {
         _voipToken = raw;
         Logger.print('VoIP PushKit token: $_voipToken');
@@ -318,7 +351,7 @@ class VoipCallkitController extends GetxService {
   void _scheduleTokenRetries() {
     _tokenRetryTimer?.cancel();
     _tokenRetryCount = 0;
-    // PushKit token often arrives after Flutter login; retry ~2 minutes.
+    // PushKit token often arrives after Flutter login; retry ~5 minutes.
     _tokenRetryTimer = Timer.periodic(const Duration(seconds: 2), (timer) async {
       _tokenRetryCount++;
       await _refreshVoipToken(upload: true);
@@ -327,7 +360,7 @@ class VoipCallkitController extends GetxService {
         timer.cancel();
         return;
       }
-      if (_tokenRetryCount >= 60) {
+      if (_tokenRetryCount >= 150) {
         Logger.print(
             'VoIP token upload gave up after retries; last=$_voipToken uploaded=$_lastUploadedToken');
         timer.cancel();
@@ -354,12 +387,20 @@ class VoipCallkitController extends GetxService {
     if (_uploading) return;
     _uploading = true;
     final prefix = token.length <= 8 ? token : token.substring(0, 8);
-    Logger.print(
-        'voip_token upload start userID=$userID len=${token.length} prefix=$prefix');
+    String? env;
     try {
-      await Apis.updateVoipToken(userID: userID, voipToken: token);
+      env = await _nativeChannel.invokeMethod<String>('getApsEnvironment');
+    } catch (_) {}
+    Logger.print(
+        'voip_token upload start userID=$userID len=${token.length} prefix=$prefix env=$env');
+    try {
+      await Apis.updateVoipToken(
+        userID: userID,
+        voipToken: token,
+        environment: env,
+      );
       _lastUploadedToken = token;
-      Logger.print('voip_token upload success userID=$userID');
+      Logger.print('voip_token upload success userID=$userID env=$env');
     } catch (e, s) {
       Logger.print('voip_token upload error (will retry): $e $s');
     } finally {

@@ -128,6 +128,8 @@ class IMController extends GetxController with IMCallback, OpenIMLive {
               unawaited(
                   Get.find<AppController>().syncNativeLoginHint(true));
             }
+            // Lock-screen CallKit needs a fresh APNs VoIP token after reconnect.
+            unawaited(VoipCallkitController.ensureVoipTokenUploaded());
           },
           onKickedOffline: kickedOffline,
           onUserTokenExpired: userTokenExpired,

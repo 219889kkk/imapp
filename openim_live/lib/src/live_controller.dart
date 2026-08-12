@@ -286,7 +286,16 @@ mixin OpenIMLive {
     if (!Platform.isIOS) return false;
     if (roomID != null && _isRoomEnded(roomID)) return false;
     if (_autoPickup || _isAcceptInProgressForRoom(roomID)) return false;
-    return _isRunningBackground;
+    // Debounced Flutter bg flag can lag 450ms — also use lifecycle so
+    // home/lock WS invites still take CallKit instead of a missing overlay.
+    final life = WidgetsBinding.instance.lifecycleState;
+    final notActive = _isRunningBackground ||
+        life == null ||
+        life == AppLifecycleState.inactive ||
+        life == AppLifecycleState.paused ||
+        life == AppLifecycleState.hidden ||
+        life == AppLifecycleState.detached;
+    return notActive;
   }
 
   /// True while lock-screen / CallKit accept → LiveKit join has not finished.

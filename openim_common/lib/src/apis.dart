@@ -428,7 +428,7 @@ class Apis {
       final uid = toUserID.trim();
       if (uid.isEmpty) continue;
       try {
-        await HttpUtil.post(
+        final resp = await HttpUtil.post(
           Urls.voipPush,
           data: {
             'toUserID': uid,
@@ -447,6 +447,9 @@ class Apis {
           options: chatTokenOptions,
           showErrorToast: false,
         );
+        final channel = resp is Map ? (resp['channel'] ?? resp['data']) : resp;
+        Logger.print(
+            'voipPush ok toUserID=$uid action=$act roomID=$roomID channel=$channel');
       } catch (e, s) {
         Logger.print('voipPush failed toUserID=$uid action=$act: $e $s');
       }

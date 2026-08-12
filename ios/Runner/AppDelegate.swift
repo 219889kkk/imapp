@@ -75,6 +75,33 @@ import flutter_callkit_incoming
                     self.clearIconBadge()
                 }
                 result(true)
+            case "getCachedVoipToken":
+                let token = UserDefaults.standard.string(forKey: "DevicePushTokenVoIP") ?? ""
+                result(token)
+            case "getApsEnvironment":
+                // Prefer embedded provisioning entitlement over dart.vm.product guess.
+                var env = "production"
+                if let path = Bundle.main.path(forResource: "embedded.mobileprovision", ofType: nil),
+                   let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
+                   let raw = String(data: data, encoding: .ascii) {
+                    if raw.contains("<key>aps-environment</key>") {
+                        if let range = raw.range(of: "<key>aps-environment</key>") {
+                            let tail = String(raw[range.upperBound...])
+                            if tail.contains("development") {
+                                env = "sandbox"
+                            }
+                        }
+                    }
+                } else if let entitlements = Bundle.main.infoDictionary?["Entitlements"] as? [String: Any],
+                          let aps = entitlements["aps-environment"] as? String,
+                          aps == "development" {
+                    env = "sandbox"
+                }
+                // Ad-hoc / TF / App Store profiles are production even when
+                // Runner.entitlements in source says development.
+                result(env)
+            case "isApplicationActive":
+                result(UIApplication.shared.applicationState == .active)
             default:
                 result(FlutterMethodNotImplemented)
             }

@@ -71,7 +71,8 @@ class SessionLogout {
         (Get.isRegistered<IMController>() ? Get.find<IMController>() : null);
     imCtrl?.terminateAllCallsOnLogout();
 
-    await VoipCallkitController.logoutAsync();
+    // Keep server VoIP token on kick — wipe only on voluntary logout.
+    await VoipCallkitController.logoutAsync(deleteServerToken: false);
     await PushController.logoutAsync();
 
     if (imCtrl != null) {
