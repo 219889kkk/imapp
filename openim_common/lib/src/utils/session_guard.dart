@@ -6,10 +6,24 @@ class SessionGuard {
 
   static bool suppressNotifications = false;
 
-  static bool get shouldNotify =>
-      !suppressNotifications &&
-      DataSp.userID != null &&
-      DataSp.userID!.isNotEmpty;
+  static bool get _hasCredentials {
+    final id = DataSp.userID?.trim() ?? '';
+    final token = DataSp.imToken?.trim() ?? '';
+    return id.isNotEmpty && token.isNotEmpty;
+  }
+
+  /// Heal stuck [suppressNotifications] when login cert is still present
+  /// (kick/logout races used to leave suppress=true and kill all call rings).
+  static void _healIfLoggedIn() {
+    if (suppressNotifications && _hasCredentials) {
+      suppressNotifications = false;
+    }
+  }
+
+  static bool get shouldNotify {
+    _healIfLoggedIn();
+    return !suppressNotifications && _hasCredentials;
+  }
 
   static void markLoggedIn() {
     suppressNotifications = false;

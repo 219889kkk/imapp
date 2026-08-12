@@ -1735,7 +1735,17 @@ mixin OpenIMLive {
 
   _signalingListener() => _stream.listen(
         (event) async {
-          if (!SessionGuard.shouldNotify) return;
+          // Incoming calls must still ring even if suppress flag raced after
+          // kick/relogin — only drop when there is truly no session.
+          if (!SessionGuard.shouldNotify &&
+              event.state != CallState.beCalled) {
+            return;
+          }
+          if (event.state == CallState.beCalled && !SessionGuard.shouldNotify) {
+            Logger.print(
+                'beCalled with shouldNotify=false — heal+continue room=${event.data.invitation?.roomID}');
+            SessionGuard.markLoggedIn();
+          }
           final roomID = event.data.invitation?.roomID;
           if (event.state != CallState.beCalled) {
             _beCalledEvent = null;

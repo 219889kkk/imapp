@@ -103,13 +103,12 @@ import flutter_callkit_incoming
     }
 
     /// Wipe SpringBoard badge without touching OpenIM (safe before login).
+    /// Never remove delivered/pending notifications — that cancels incoming-call
+    /// banners / CallKit companions while a ring is in progress.
     private func clearIconBadge() {
         UIApplication.shared.applicationIconBadgeNumber = 0
-        let center = UNUserNotificationCenter.current()
-        center.removeAllDeliveredNotifications()
-        center.removeAllPendingNotificationRequests()
         if #available(iOS 16.0, *) {
-            center.setBadgeCount(0) { error in
+            UNUserNotificationCenter.current().setBadgeCount(0) { error in
                 if let error = error {
                     NSLog("HangXun clearIconBadge setBadgeCount failed: %@", error.localizedDescription)
                 }
@@ -540,14 +539,12 @@ import flutter_callkit_incoming
             return
         }
 
-        // Kicked / logged out on this phone — never ring CallKit here.
-        // (Another device may still hold the account; old VoIP token can linger briefly.)
+        // Prefer ringing over silence: only skip CallKit when we *know* this
+        // phone has no session (logout/kick). Hint is refreshed on IM connect.
         if !hasActiveLoginHint() {
-            NSLog("HangXun VoIP: skip CallKit (no login session, room=%@)", roomID)
-            markVoipRoomEnded(roomID)
-            endCallKitCalls(roomID: roomID)
-            DispatchQueue.main.async { completion() }
-            return
+            // Cold VoIP before Flutter sets hint — still ring once; Dart will
+            // no-op if truly logged out. Skipping here caused "no prompt".
+            NSLog("HangXun VoIP: login hint false — still show CallKit room=%@", roomID)
         }
 
         if UIApplication.shared.applicationState == .active {

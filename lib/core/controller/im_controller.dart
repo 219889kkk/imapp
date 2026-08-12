@@ -122,6 +122,12 @@ class IMController extends GetxController with IMCallback, OpenIMLive {
           },
           onConnectSuccess: () {
             imSdkStatus(IMSdkStatus.connectionSucceeded);
+            // Re-arm call alerts after reconnect (suppress/login-hint races).
+            SessionGuard.markLoggedIn();
+            if (Get.isRegistered<AppController>()) {
+              unawaited(
+                  Get.find<AppController>().syncNativeLoginHint(true));
+            }
           },
           onKickedOffline: kickedOffline,
           onUserTokenExpired: userTokenExpired,
@@ -523,7 +529,18 @@ class IMController extends GetxController with IMCallback, OpenIMLive {
 
   /// Returns true when the message is a calling signaling payload.
   bool _dispatchCallingMessage(Message msg) {
-    if (!SessionGuard.shouldNotify) return msg.isCallingSignalingType;
+    // Never swallow invites when credentials exist — stuck suppress used to
+    // return true here and kill all ring UI with no side effects.
+    if (!SessionGuard.shouldNotify) {
+      if (msg.isCallingSignalingType) {
+        SessionGuard.markLoggedIn();
+        if (!SessionGuard.shouldNotify) {
+          return true;
+        }
+      } else {
+        return false;
+      }
+    }
     if (!msg.isCustomType) return false;
     final raw = msg.customElem?.data;
     if (raw == null || raw.isEmpty) return false;
