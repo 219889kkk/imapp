@@ -141,7 +141,7 @@ class VoipCallkitController extends GetxService {
     if (!isPlausibleVoipToken(ctrl._voipToken)) {
       try {
         final cached =
-            await ctrl._nativeChannel.invokeMethod<String>('getCachedVoipToken');
+            await _nativeChannel.invokeMethod<String>('getCachedVoipToken');
         final t = (cached ?? '').trim();
         if (isPlausibleVoipToken(t)) {
           ctrl._voipToken = t;
