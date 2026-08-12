@@ -1956,7 +1956,6 @@ mixin OpenIMLive {
               _beCalledEvent = event;
               // Overlay may not be ready on cold unlock — retry shortly.
               Future.delayed(const Duration(milliseconds: 350), () {
-                if (isClosed) return;
                 if (_beCalledEvent?.data.invitation?.roomID != roomID) return;
                 if (_isRoomEnded(roomID)) return;
                 if (Get.overlayContext == null) return;
