@@ -178,7 +178,16 @@ class _ControlsViewState extends State<ControlsView> with WidgetsBindingObserver
   }
 
   void _startCallingTimer() {
-    _callingTimer ??= Timer.periodic(const Duration(seconds: 1), (timer) {
+    if (_callingTimer != null) return;
+    // Unlock/reattach remounts Controls at 00:00 while CallKit already counted —
+    // seed from LiveController wall-clock so we never show a fake 00:00 under the real time.
+    final seeded = PackageBridge.connectedCallDurationSec?.call() ?? 0;
+    if (seeded > _callingDuration) {
+      _callingDuration = seeded;
+      _callingDurationStr = IMUtils.seconds2HMS(_callingDuration);
+      widget.onCallingDuration?.call(_callingDuration);
+    }
+    _callingTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (!mounted) return;
       setState(() {
         _callingDurationStr = IMUtils.seconds2HMS(++_callingDuration);

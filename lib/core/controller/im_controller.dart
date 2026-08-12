@@ -630,13 +630,27 @@ class IMController extends GetxController with IMCallback, OpenIMLive {
                   Future.value());
           break;
         case CustomMessageType.callingHungup:
+          // Own hangup echo must not insert a second "通话时长 00:00" bubble.
+          if (msg.sendID == OpenIM.iMManager.userID) {
+            _clearCallNotification();
+            unawaited(
+                VoipCallkitController.toOrNull?.endCall(
+                        signaling.invitation?.roomID) ??
+                    Future.value());
+            break;
+          }
           PackageBridge.suppressCallKitEnded
               ?.call(signaling.invitation?.roomID);
           unawaited(
               VoipCallkitController.toOrNull?.markRoomEndedNative(
                       signaling.invitation?.roomID) ??
                   Future.value());
-          beHangup(signaling);
+          // Prefer duration from peer hungup payload (wall clock on sender).
+          final rawDur = data['duration'];
+          final peerSec = rawDur is int
+              ? rawDur
+              : int.tryParse('$rawDur') ?? 0;
+          beHangup(signaling, durationSec: peerSec);
           _clearCallNotification();
           unawaited(
               VoipCallkitController.toOrNull?.endCall(

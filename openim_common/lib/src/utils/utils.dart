@@ -862,15 +862,24 @@ class IMUtils {
             switch (customType) {
               case CustomMessageType.call:
                 {
-                  final duration = map['data']['duration'];
+                  final rawDuration = map['data']['duration'];
+                  final duration = rawDuration is int
+                      ? rawDuration
+                      : int.tryParse('$rawDuration') ?? 0;
                   final state = map['data']['state'];
                   final type = map['data']['type'];
                   String? content;
                   switch (state) {
                     case 'beHangup':
                     case 'hangup':
-                      content =
-                          sprintf(StrRes.callDuration, [seconds2HMS(duration)]);
+                      // Prefer a single real duration; never show a bare 00:00
+                      // when we can treat it as missed (duration still 0).
+                      if (duration <= 0) {
+                        content = StrRes.missedCall;
+                      } else {
+                        content = sprintf(
+                            StrRes.callDuration, [seconds2HMS(duration)]);
+                      }
                       break;
                     case 'cancel':
                       content = StrRes.cancelled;

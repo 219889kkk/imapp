@@ -513,6 +513,16 @@ import flutter_callkit_incoming
             return
         }
 
+        // Kicked / logged out on this phone — never ring CallKit here.
+        // (Another device may still hold the account; old VoIP token can linger briefly.)
+        if !hasActiveLoginHint() {
+            NSLog("HangXun VoIP: skip CallKit (no login session, room=%@)", roomID)
+            markVoipRoomEnded(roomID)
+            endCallKitCalls(roomID: roomID)
+            DispatchQueue.main.async { completion() }
+            return
+        }
+
         if UIApplication.shared.applicationState == .active {
             NSLog("HangXun VoIP: skip CallKit (app foreground, room=%@)", roomID)
             DispatchQueue.main.async { completion() }

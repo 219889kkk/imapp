@@ -95,9 +95,10 @@ mixin OpenIMLive {
     signalingSubject.add(CallEvent(CallState.beCalled, info));
   }
 
-  void beHangup(SignalingInfo info) {
+  void beHangup(SignalingInfo info, {int durationSec = 0}) {
     final roomID = info.invitation?.roomID;
-    final sec = _connectedDurationSec();
+    final wall = _connectedDurationSec();
+    final sec = durationSec > wall ? durationSec : wall;
     _markRoomEnded(roomID);
     signalingSubject.add(CallEvent(CallState.beHangup, info, fields: sec));
     // Do not rely on signaling listener alone — background/lock may miss the stream pass.
@@ -201,6 +202,9 @@ mixin OpenIMLive {
   final backgroundSubject = PublishSubject<bool>();
 
   final insertSignalingMessageSubject = PublishSubject<CallEvent>();
+
+  /// One chat call-record bubble per room (hangup + beHangup echo used to double).
+  final Set<String> _hangupRecordInsertedRooms = {};
 
   Function(SignalingMessageEvent)? onSignalingMessage;
   final roomParticipantDisconnectedSubject = PublishSubject<RoomCallingInfo>();
@@ -459,6 +463,10 @@ mixin OpenIMLive {
         PackageBridge.onCallKitAudioDeactivated, _onCallKitAudioDeactivated)) {
       PackageBridge.onCallKitAudioDeactivated = null;
     }
+    if (identical(
+        PackageBridge.connectedCallDurationSec, _connectedDurationSec)) {
+      PackageBridge.connectedCallDurationSec = null;
+    }
     _clearPickupCache();
     _cancelRingTimeout();
     signalingSubject.close();
@@ -481,6 +489,7 @@ mixin OpenIMLive {
     PackageBridge.markOutboundPeerPresent = markOutboundPeerPresent;
     PackageBridge.onCallKitAudioActivated = _onCallKitAudioActivated;
     PackageBridge.onCallKitAudioDeactivated = _onCallKitAudioDeactivated;
+    PackageBridge.connectedCallDurationSec = _connectedDurationSec;
     _signalingListener();
     _insertSignalingMessageListener();
     _bindLiveAlertButtons();
@@ -1922,7 +1931,9 @@ mixin OpenIMLive {
     );
 
     _activeCallSignaling = signal;
-    _peerAcceptedRooms.remove(signal.invitation!.roomID?.trim() ?? '');
+    final newRoom = signal.invitation!.roomID?.trim() ?? '';
+    _peerAcceptedRooms.remove(newRoom);
+    _hangupRecordInsertedRooms.remove(newRoom);
     _ringTimeoutExtendCount = 0;
 
     OpenIMLiveClient().start(
@@ -2566,6 +2577,16 @@ mixin OpenIMLive {
       var inviterUserID = invitation.inviterUserID;
       var inviteeUserID = invitation.inviteeUserIDList!.first;
       var groupID = invitation.groupID;
+      final roomKey = invitation.roomID?.trim() ?? '';
+      // hangup / beHangup both mean "answered then ended" — only one bubble.
+      if (state == CallState.hangup || state == CallState.beHangup) {
+        if (roomKey.isNotEmpty &&
+            !_hangupRecordInsertedRooms.add(roomKey)) {
+          Logger.print(
+              'skip duplicate hangup record roomID=$roomKey state=${state.name}');
+          return;
+        }
+      }
       Logger.print(
           'end calling and insert message state:${state.name}, mediaType:$mediaType, inviterUserID:$inviterUserID, inviteeUserID:$inviteeUserID, groupID:$groupID, duration:$duration',
           functionName: '_insertMessage');

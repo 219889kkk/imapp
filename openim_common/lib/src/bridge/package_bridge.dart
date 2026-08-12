@@ -53,6 +53,9 @@ class PackageBridge {
 
   /// HTTP/WS endpoint switched (primary ↔ backup). App should reinit IM SDK.
   static Future<void> Function()? onEndpointSwitched;
+
+  /// Wall-clock seconds since the active call was answered (0 if not connected).
+  static int Function()? connectedCallDurationSec;
 }
 
 abstract class ScanBridge {

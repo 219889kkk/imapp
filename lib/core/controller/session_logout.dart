@@ -42,6 +42,7 @@ class SessionLogout {
     IMController? im,
     void Function()? onConversationsCleared,
   }) async {
+    // Suppress local alerts immediately — before any await.
     SessionGuard.markLoggedOut();
 
     if (Get.isRegistered<AppController>()) {
@@ -52,6 +53,11 @@ class SessionLogout {
         (Get.isRegistered<IMController>() ? Get.find<IMController>() : null);
     imCtrl?.terminateAllCallsOnLogout();
 
+    // Unbind VoIP / push WHILE chatToken is still valid, then IM logout.
+    // Old order (IM logout first) left this phone ringing after multi-login kick.
+    await VoipCallkitController.logoutAsync();
+    await PushController.logoutAsync();
+
     if (imCtrl != null) {
       try {
         await imCtrl.logout();
@@ -60,8 +66,6 @@ class SessionLogout {
       }
     }
 
-    await VoipCallkitController.logoutAsync();
-    await PushController.logoutAsync();
     await DataSp.removeLoginCertificate();
     onConversationsCleared?.call();
   }
