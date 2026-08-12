@@ -48,7 +48,8 @@ class IosWebRtcAudio {
       );
       await enable(speakerOn: speakerOn);
       if (await isEnabled()) return true;
-      await Future<void>.delayed(Duration(milliseconds: 120 + i * 80));
+      // Keep retries tight so in-app answer is not stuck muddy for half a second.
+      await Future<void>.delayed(Duration(milliseconds: 60 + i * 40));
     }
     CallAudioDebugLog.add('webrtc', 'ensureEnabled still off after retries');
     return false;

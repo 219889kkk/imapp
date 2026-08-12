@@ -220,8 +220,9 @@ import flutter_callkit_incoming
         }
         try session.setCategory(.playAndRecord, mode: .voiceChat, options: options)
         try session.setPreferredSampleRate(48000)
-        // 5ms was too aggressive with speaker and caused howling; 20ms stabilizes AEC.
-        try session.setPreferredIOBufferDuration(preferSpeaker ? 0.02 : 0.01)
+        // Stable 20ms for both routes — tighter buffers delay AEC convergence
+        // and made the first seconds after answer sound muddy.
+        try session.setPreferredIOBufferDuration(0.02)
         if activate {
             try session.setActive(true, options: [])
         }
@@ -327,9 +328,9 @@ import flutter_callkit_incoming
             emitAudioDebug("in-app audio enabled speaker=\(preferSpeaker) isActive=\(rtc.isActive)")
             result(true)
         } catch {
-            // CallKit tear-down often races setActive — retry once after a beat.
+            // CallKit tear-down often races setActive — retry quickly.
             emitAudioDebug("in-app enable failed \(error.localizedDescription) — retry")
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
                 let session = AVAudioSession.sharedInstance()
                 let rtc = RTCAudioSession.sharedInstance()
                 rtc.lockForConfiguration()

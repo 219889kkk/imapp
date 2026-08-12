@@ -590,6 +590,23 @@ mixin OpenIMLive {
     await _acceptIncomingCall(signaling, requestPermissions: false);
   }
 
+  /// Foreground invite / in-app accept: activate VoIP session early so AEC is
+  /// already warm when LiveKit media starts (clear audio immediately).
+  Future<void> _prewarmInAppCallAudio({bool force = false}) async {
+    if (!Platform.isIOS) return;
+    final speaker = OpenIMLiveClient().userSpeakerPreference;
+    CallAudioDebugLog.add(
+      'audio',
+      'prewarm in-app speaker=$speaker force=$force',
+    );
+    try {
+      await IosWebRtcAudio.ensureEnabled(speakerOn: speaker, force: force);
+    } catch (e, s) {
+      Logger.print('prewarm in-app audio failed: $e $s');
+      CallAudioDebugLog.add('audio', 'prewarm failed: $e');
+    }
+  }
+
   /// Create or preserve the CallKit audio gate (never reset a pending gate — fixes race).
   void _ensureIosCallKitAudioGate() {
     if (_iosCallKitAudioActivated) {
@@ -878,6 +895,7 @@ mixin OpenIMLive {
       final ctx = Get.overlayContext;
       if (ctx != null) {
         _presentCallUi(pending.data);
+        unawaited(_prewarmInAppCallAudio(force: true));
       } else {
         _beCalledEvent = pending;
       }
@@ -1170,6 +1188,11 @@ mixin OpenIMLive {
     if (isCallKitAccept) {
       _ensureIosCallKitAudioGate();
       await _refreshHeadlessMicPending();
+    } else if (Platform.isIOS) {
+      // In-app accept: take the session now so PeerConnection starts on a live
+      // VoIP route (avoids muddy audio while AEC re-converges after late enable).
+      CallAudioKeepAlive.instance.releaseCallKitSession();
+      await _prewarmInAppCallAudio(force: true);
     }
 
     final cert =
@@ -1910,6 +1933,7 @@ mixin OpenIMLive {
                 _presentCallUi(pending.data, fromHeadless: _autoPickup);
                 _autoPickup = false;
                 unawaited(_dismissCallKitIncoming(roomID));
+                unawaited(_prewarmInAppCallAudio(force: true));
               });
               return;
             }
@@ -1919,6 +1943,8 @@ mixin OpenIMLive {
             _presentCallUi(event.data, fromHeadless: _autoPickup);
             _autoPickup = false;
             unawaited(_dismissCallKitIncoming(roomID));
+            // Warm VoIP session while ringing so answer → clear audio is instant.
+            unawaited(_prewarmInAppCallAudio(force: true));
           } else if (event.state == CallState.beRejected) {
             insertSignalingMessageSubject.add(event);
             _terminateCallUi(roomID);
