@@ -231,8 +231,10 @@ mixin OpenIMLive {
   /// Lock-screen CallKit: wait for didActivateAudioSession before LiveKit join.
   Completer<void>? _iosCallKitAudioGate;
 
-  /// After programmatic [endCall] — iOS fires spurious `actionCallEnded`.
-  final Map<String, int> _suppressCallKitEndedUntilMs = {};
+  /// After *our* programmatic [endCall] (UI switch) — ignore Ended/Decline.
+  final Map<String, int> _callKitUiDismissUntilMs = {};
+  /// Short window after Accept for CallKit incoming→active noise only.
+  final Map<String, int> _callKitAcceptSettleUntilMs = {};
 
   // --- iOS call UI rules (single source of truth) ---
   // | App state              | Incoming ring | Active call      |
@@ -241,35 +243,55 @@ mixin OpenIMLive {
   // | Background / lock      | CallKit       | LiveKit + keepalive |
   // | Return to foreground   | overlay + dismiss CallKit | attach/promote overlay |
   //
-  // Never treat CallKit `ended` as hangup while: accept in flight, media
-  // connecting/connected, in-app ring overlay visible, or suppress window.
+  // CallKit Ended classification:
+  // - uiDismiss armed     → NO-OP (we closed CallKit for UI switch)
+  // - acceptSettle+joining → NO-OP (CallKit transition after Answer)
+  // - answered / in-call   → hangup (real user End on lock screen)
+  // - still ringing        → reject (user dismissed incoming CallKit)
 
-  void _suppressCallKitEnded(String? roomID,
-      {Duration duration = const Duration(seconds: 4)}) {
+  void _armCallKitUiDismiss(String? roomID,
+      {Duration duration = const Duration(seconds: 3)}) {
     final id = roomID?.trim() ?? '';
     if (id.isEmpty) return;
     final until =
         DateTime.now().millisecondsSinceEpoch + duration.inMilliseconds;
-    // Never shorten an existing longer suppress (accept uses 45s; dismiss uses 4s).
-    final prev = _suppressCallKitEndedUntilMs[id] ?? 0;
-    if (until > prev) {
-      _suppressCallKitEndedUntilMs[id] = until;
-    }
+    final prev = _callKitUiDismissUntilMs[id] ?? 0;
+    if (until > prev) _callKitUiDismissUntilMs[id] = until;
+  }
+
+  void _armCallKitAcceptSettle(String? roomID,
+      {Duration duration = const Duration(milliseconds: 2500)}) {
+    final id = roomID?.trim() ?? '';
+    if (id.isEmpty) return;
+    final until =
+        DateTime.now().millisecondsSinceEpoch + duration.inMilliseconds;
+    final prev = _callKitAcceptSettleUntilMs[id] ?? 0;
+    if (until > prev) _callKitAcceptSettleUntilMs[id] = until;
+  }
+
+  bool _isCallKitUiDismissArmed(String? roomID) {
+    final id = roomID?.trim() ?? '';
+    if (id.isEmpty) return false;
+    final until = _callKitUiDismissUntilMs[id];
+    return until != null && DateTime.now().millisecondsSinceEpoch < until;
+  }
+
+  bool _isCallKitAcceptSettleArmed(String? roomID) {
+    final id = roomID?.trim() ?? '';
+    if (id.isEmpty) return false;
+    final until = _callKitAcceptSettleUntilMs[id];
+    return until != null && DateTime.now().millisecondsSinceEpoch < until;
+  }
+
+  /// Bridge for PackageBridge / plugin — always means "we dismissed CallKit".
+  void _suppressCallKitEnded(String? roomID,
+      {Duration duration = const Duration(seconds: 4)}) {
+    _armCallKitUiDismiss(roomID, duration: duration);
   }
 
   bool _shouldIgnoreCallKitEnded(String? roomID) {
-    // Do NOT ignore while accept/connect is in flight — user End on CallKit
-    // must abort join (was: ignored → unlock reopened a zombie call page).
     if (_isRoomEnded(roomID)) return true;
-    final id = roomID?.trim() ?? '';
-    if (id.isNotEmpty) {
-      final until = _suppressCallKitEndedUntilMs[id];
-      if (until != null &&
-          DateTime.now().millisecondsSinceEpoch < until) {
-        return true;
-      }
-    }
-    return false;
+    return _isCallKitUiDismissArmed(roomID);
   }
 
   /// Dismiss system incoming UI only — not a user reject/hangup.
@@ -277,8 +299,8 @@ mixin OpenIMLive {
     if (!Platform.isIOS) return;
     final id = roomID?.trim() ?? '';
     if (id.isEmpty) return;
-    // Prefer keeping a longer accept suppress if already armed.
-    _suppressCallKitEnded(id, duration: const Duration(seconds: 45));
+    // 3s is enough for plugin Ended echo; do NOT use 45s (that swallowed real hangups).
+    _armCallKitUiDismiss(id, duration: const Duration(seconds: 3));
     await VoipCallkitController.toOrNull?.endCall(id);
   }
 
@@ -550,8 +572,9 @@ mixin OpenIMLive {
     PackageBridge.clearCallNotification?.call();
     if (roomID.isNotEmpty) {
       _markRoomAnswered(roomID);
-      // Banner Accept → FG → dismiss CallKit fires spurious Ended; keep call alive.
-      _suppressCallKitEnded(roomID, duration: const Duration(seconds: 45));
+      // Only cover CallKit incoming→active transition noise (~2.5s).
+      // Long suppress was swallowing real lock-screen hangups (Bug1).
+      _armCallKitAcceptSettle(roomID);
       // Do NOT setConnected here — wait until LiveKit join succeeds (avoids audio flap).
     }
     CallAudioDebugLog.add('callkit', 'accept join roomID=$roomID');
@@ -816,7 +839,7 @@ mixin OpenIMLive {
             'iOS fg: answered/joining from banner roomID=$pendingRoom');
         CallAudioDebugLog.add(
             'fg', 'answered banner — attach UI roomID=$pendingRoom');
-        _suppressCallKitEnded(pendingRoom, duration: const Duration(seconds: 45));
+        _armCallKitAcceptSettle(pendingRoom);
         _activeCallSignaling = pending.data;
         await _dismissCallKitIncoming(pendingRoom);
         final inFlight = _acceptJoinInFlight;
@@ -987,7 +1010,7 @@ mixin OpenIMLive {
         _markCallConnected();
         signalingSubject.add(CallEvent(CallState.calling, signaling));
         // Single setConnected after successful join.
-        _suppressCallKitEnded(roomID, duration: const Duration(seconds: 45));
+        _armCallKitAcceptSettle(roomID);
         unawaited(
             VoipCallkitController.toOrNull?.setConnected(roomID) ??
                 Future.value());
@@ -1554,10 +1577,18 @@ mixin OpenIMLive {
   }
 
   void _onCallKitDecline(SignalingInfo signaling) {
+    final resolved = _resolveIncomingSignaling(signaling) ?? signaling;
+    final roomID = resolved.invitation?.roomID?.trim() ?? '';
+    // Programmatic endCall while switching to in-app UI must not reject.
+    if (_isCallKitUiDismissArmed(roomID) || _isRoomEnded(roomID)) {
+      Logger.print('CallKit decline ignored — uiDismiss/ended roomID=$roomID');
+      CallAudioDebugLog.add(
+          'callkit', 'decline ignored uiDismiss roomID=$roomID');
+      return;
+    }
     _stopSound();
     PackageBridge.clearCallNotification?.call();
     _beCalledEvent = null;
-    final resolved = _resolveIncomingSignaling(signaling) ?? signaling;
     onTapReject(resolved..userID = OpenIM.iMManager.userID);
   }
 
@@ -1584,9 +1615,7 @@ mixin OpenIMLive {
     _terminateCallUi(roomID.isEmpty ? null : roomID);
   }
 
-  /// Lock-screen / system UI End — tear down LiveKit + notify peer when in-call.
-  /// While still ringing, do NOT auto-reject (duplicate CallKit / programmatic
-  /// end while callee is in WeChat would leave caller stuck on 请求中).
+  /// Lock-screen / system UI End — classify before reject/hangup.
   void _onCallKitEnded(SignalingInfo? signaling) {
     _stopSound();
     PackageBridge.clearCallNotification?.call();
@@ -1596,18 +1625,19 @@ mixin OpenIMLive {
         _activeCallSignaling;
     final roomID =
         info?.invitation?.roomID ?? OpenIMLiveClient().currentRoomID;
+    final roomKey = roomID?.trim() ?? '';
 
-    if (_shouldIgnoreCallKitEnded(roomID)) {
-      Logger.print('CallKit ended ignored roomID=$roomID');
-      CallAudioDebugLog.add('callkit', 'ended ignored roomID=$roomID');
+    // 1) We closed CallKit for UI switch (unlock → in-app) — never reject/hangup.
+    if (_isCallKitUiDismissArmed(roomID) || _isRoomEnded(roomID)) {
+      Logger.print('CallKit ended ignored — uiDismiss/ended roomID=$roomKey');
+      CallAudioDebugLog.add(
+          'callkit', 'ended ignored uiDismiss roomID=$roomKey');
       return;
     }
 
     final client = OpenIMLiveClient();
-    final roomKey = roomID?.trim() ?? '';
     final inCall = client.hasMediaFor(roomID) ||
         client.mediaRoom?.localParticipant != null;
-    // Check BEFORE clearing _autoPickup — banner Answer often fires Ended during join.
     final acceptSent = roomKey.isNotEmpty &&
         (_pickupCertRoomID == roomKey ||
             _acceptJoinRoomID == roomKey ||
@@ -1621,29 +1651,19 @@ mixin OpenIMLive {
 
     CallAudioDebugLog.add(
       'callkit',
-      'ended roomID=$roomKey inCall=$inCall acceptSent=$acceptSent joining=$joining',
+      'ended roomID=$roomKey inCall=$inCall acceptSent=$acceptSent joining=$joining settle=${_isCallKitAcceptSettleArmed(roomID)}',
     );
 
-    // CallKit banner→active / FG dismiss fires spurious Ended. Never drop the call.
-    if (acceptSent && (joining || !inCall)) {
+    // 2) Accept→active transition noise (short settle only, while not yet in media).
+    if (acceptSent &&
+        !inCall &&
+        joining &&
+        _isCallKitAcceptSettleArmed(roomID)) {
       Logger.print(
-          'CallKit ended ignored — accept/join in progress roomID=$roomKey');
+          'CallKit ended ignored — accept settle joining roomID=$roomKey');
       CallAudioDebugLog.add(
-          'callkit', 'ended ignored accept/join roomID=$roomKey');
+          'callkit', 'ended ignored acceptSettle roomID=$roomKey');
       return;
-    }
-    // Just connected from unlocked banner: End is almost always programmatic dismiss.
-    if (acceptSent && inCall) {
-      final until = _suppressCallKitEndedUntilMs[roomKey];
-      final suppressed = until != null &&
-          DateTime.now().millisecondsSinceEpoch < until;
-      if (suppressed) {
-        Logger.print(
-            'CallKit ended ignored — answered call still settling roomID=$roomKey');
-        CallAudioDebugLog.add(
-            'callkit', 'ended ignored answered settling roomID=$roomKey');
-        return;
-      }
     }
 
     _beCalledEvent = null;
@@ -1654,14 +1674,17 @@ mixin OpenIMLive {
     _acceptJoinRoomID = null;
     _callSessionGen++;
 
+    // 3) Already answered — real user End (incl. lock-screen hangup after settle).
     if (info != null && (inCall || acceptSent)) {
-      Logger.print('CallKit ended after accept roomID=$roomID');
-      unawaited(onTapHangup(info..userID = OpenIM.iMManager.userID, _connectedDurationSec(), true));
+      Logger.print('CallKit ended after accept → hangup roomID=$roomID');
+      CallAudioDebugLog.add(
+          'callkit', 'ended after accept → hangup roomID=$roomKey');
+      unawaited(onTapHangup(
+          info..userID = OpenIM.iMManager.userID, _connectedDurationSec(), true));
       return;
     }
 
-    // Still ringing and not suppressed → real dismiss/swipe. Notify caller
-    // (duplicate CallKit Ended is filtered by _shouldIgnoreCallKitEnded above).
+    // 4) Still ringing — user dismissed incoming CallKit → reject caller.
     if (info != null && !inCall) {
       Logger.print(
           'CallKit ended before connect — reject peer roomID=$roomID');
@@ -1687,7 +1710,7 @@ mixin OpenIMLive {
       if (roomID.isNotEmpty) {
         _callKitAcceptHandledRoomID = roomID;
         _markRoomAnswered(roomID);
-        _suppressCallKitEnded(roomID, duration: const Duration(seconds: 45));
+        _armCallKitAcceptSettle(roomID);
       }
       _beCalledEvent = null;
       if (signaling != null) {
@@ -1720,7 +1743,7 @@ mixin OpenIMLive {
         if (roomID.isNotEmpty) {
           _callKitAcceptHandledRoomID = roomID;
           _markRoomAnswered(roomID);
-          _suppressCallKitEnded(roomID, duration: const Duration(seconds: 45));
+          _armCallKitAcceptSettle(roomID);
         }
         if (signaling != null) {
           unawaited(_acceptIncomingCall(signaling, requestPermissions: false));
@@ -1823,8 +1846,6 @@ mixin OpenIMLive {
                     OpenIMLiveClient().closeOverlayOnly();
                   }
                   // PushKit may already own CallKit — never re-show same UUID.
-                  _suppressCallKitEnded(
-                      roomID, duration: const Duration(seconds: 45));
                   if (!voip.ownsIncomingUi) {
                     await voip.showIncoming(event.data);
                   }
@@ -2105,11 +2126,32 @@ mixin OpenIMLive {
       }
       return certificate;
     } catch (e, s) {
+      // Invite already left the device — must cancel or callee keeps ringing (Bug3).
       if (!_isRoomEnded(roomID)) {
         insertSignalingMessageSubject
             .add(CallEvent(CallState.networkError, signaling));
+        unawaited(_abortOutboundDialAfterInvite(signaling));
       }
       Error.throwWithStackTrace(e, s);
+    }
+  }
+
+  /// After invite was sent but dial cannot continue (RTC/network) — notify callee.
+  Future<void> _abortOutboundDialAfterInvite(SignalingInfo signaling) async {
+    final roomID = signaling.invitation?.roomID?.trim() ?? '';
+    Logger.print('abort outbound dial after invite roomID=$roomID');
+    CallAudioDebugLog.add('dial', 'abort after invite → cancel roomID=$roomID');
+    try {
+      await onTapCancel(signaling);
+    } catch (e, s) {
+      Logger.print('abort outbound dial cancel failed: $e $s');
+      _markRoomEnded(roomID);
+      _terminateCallUi(roomID.isEmpty ? null : roomID);
+      try {
+        await _triggerVoipPush(signaling, action: 'cancel');
+      } catch (e2, s2) {
+        Logger.print('abort outbound dial voip cancel failed: $e2 $s2');
+      }
     }
   }
 
@@ -2143,12 +2185,23 @@ mixin OpenIMLive {
         Logger.print('dial group invite VoIP failed: $e $s');
       }
     }
-    final certificate = await Apis.getTokenForRTC(
-      invitation.roomID!,
-      OpenIM.iMManager.userID,
-    );
-
-    return certificate;
+    try {
+      final certificate = await Apis.getTokenForRTC(
+        invitation.roomID!,
+        OpenIM.iMManager.userID,
+      );
+      if (roomID != null && _isRoomEnded(roomID)) {
+        throw StateError('dial aborted after token: room cancelled $roomID');
+      }
+      return certificate;
+    } catch (e, s) {
+      if (roomID != null && !_isRoomEnded(roomID)) {
+        insertSignalingMessageSubject
+            .add(CallEvent(CallState.networkError, signaling));
+        unawaited(_abortOutboundDialAfterInvite(signaling));
+      }
+      Error.throwWithStackTrace(e, s);
+    }
   }
 
   Future<void> _triggerVoipPush(
