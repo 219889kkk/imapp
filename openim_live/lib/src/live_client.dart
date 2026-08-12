@@ -646,14 +646,9 @@ class OpenIMLiveClient implements RTCBridge {
       await _startKeepAlive(roomID, callType, speakerOn: on);
     }
     try {
-      // One session activate + one route set — repeating ensure/route resets AEC.
       await CallAudioKeepAlive.instance.prepareForRtc(speakerOn: on);
       if (Platform.isIOS) {
-        final already = await IosWebRtcAudio.isEnabled();
-        if (!already) {
-          await IosWebRtcAudio.ensureEnabled(speakerOn: on, force: true);
-        }
-        await IosWebRtcAudio.setSpeakerRoute(on);
+        await _applyIosCallAudioRoute(on);
       }
       await Hardware.instance.setSpeakerphoneOn(on);
       await room.setSpeakerOn(on);
@@ -671,6 +666,27 @@ class OpenIMLiveClient implements RTCBridge {
     }
   }
 
+  /// Single iOS route path: CallKit → bridge only; in-app → enable once + verify.
+  /// Avoids the old ensure→route→ensure thrash that reset AEC, while still
+  /// recovering the "isEnabled=true but session dead" zombie after CallKit handoff.
+  Future<void> _applyIosCallAudioRoute(bool speakerOn) async {
+    if (CallAudioKeepAlive.instance.callKitOwnsSession) {
+      await IosWebRtcAudio.bridgeCallKitSession();
+      return;
+    }
+    final already = await IosWebRtcAudio.isEnabled();
+    if (!already) {
+      await IosWebRtcAudio.ensureEnabled(speakerOn: speakerOn, force: true);
+    }
+    await IosWebRtcAudio.setSpeakerRoute(speakerOn);
+    // setSpeakerRoute can mark enabled without a live session after CallKit
+    // tear-down — one verify/repair, not a second unconditional ensure.
+    if (!await IosWebRtcAudio.isEnabled()) {
+      CallAudioDebugLog.add('webrtc', 'route verify failed — force re-enable');
+      await IosWebRtcAudio.ensureEnabled(speakerOn: speakerOn, force: true);
+    }
+  }
+
   /// Start mic/CallKit keepalive after peer joins (caller left wait-ring state).
   Future<void> ensureCallKeepAlive({bool? speakerOn}) async {
     await onCallActive(speakerOn: speakerOn, unmuteMic: true);
@@ -684,11 +700,7 @@ class OpenIMLiveClient implements RTCBridge {
     try {
       await CallAudioKeepAlive.instance.prepareForRtc(speakerOn: on);
       if (Platform.isIOS) {
-        final already = await IosWebRtcAudio.isEnabled();
-        if (!already) {
-          await IosWebRtcAudio.ensureEnabled(speakerOn: on, force: true);
-        }
-        await IosWebRtcAudio.setSpeakerRoute(on);
+        await _applyIosCallAudioRoute(on);
       }
       await Hardware.instance.setSpeakerphoneOn(on);
       await room.setSpeakerOn(on);

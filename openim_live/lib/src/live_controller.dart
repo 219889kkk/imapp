@@ -592,14 +592,46 @@ mixin OpenIMLive {
 
   /// Foreground invite / in-app accept: activate VoIP session early so AEC is
   /// already warm when LiveKit media starts (clear audio immediately).
-  Future<void> _prewarmInAppCallAudio({bool force = false}) async {
+  ///
+  /// Never fights CallKit: skip while CallKit owns the session / incoming UI,
+  /// and only run after programmatic dismiss has armed uiDismiss.
+  Future<void> _prewarmInAppCallAudio({
+    bool force = false,
+    String? afterDismissRoomID,
+  }) async {
     if (!Platform.isIOS) return;
+    final roomID = afterDismissRoomID?.trim() ?? '';
+    if (roomID.isNotEmpty) {
+      // Wait for CallKit endCall echo window so setActive does not race didDeactivate.
+      var waited = 0;
+      while (waited < 800 && _isCallKitUiDismissArmed(roomID)) {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+        waited += 50;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+    }
+    final voip = VoipCallkitController.toOrNull;
+    if (CallAudioKeepAlive.instance.callKitOwnsSession ||
+        voip?.ownsIncomingUi == true ||
+        _iosCallKitDidActivateNative) {
+      CallAudioDebugLog.add(
+        'audio',
+        'prewarm skipped — CallKit still owns session',
+      );
+      return;
+    }
+    // Lock / bg ring must stay on CallKit audio — never pre-setActive there.
+    if (_iosShouldUseCallKitForRing(roomID.isEmpty ? null : roomID)) {
+      CallAudioDebugLog.add('audio', 'prewarm skipped — CallKit ring path');
+      return;
+    }
     final speaker = OpenIMLiveClient().userSpeakerPreference;
     CallAudioDebugLog.add(
       'audio',
       'prewarm in-app speaker=$speaker force=$force',
     );
     try {
+      CallAudioKeepAlive.instance.releaseCallKitSession();
       await IosWebRtcAudio.ensureEnabled(speakerOn: speaker, force: force);
     } catch (e, s) {
       Logger.print('prewarm in-app audio failed: $e $s');
@@ -895,7 +927,10 @@ mixin OpenIMLive {
       final ctx = Get.overlayContext;
       if (ctx != null) {
         _presentCallUi(pending.data);
-        unawaited(_prewarmInAppCallAudio(force: true));
+        unawaited(_prewarmInAppCallAudio(
+          force: true,
+          afterDismissRoomID: pendingRoom,
+        ));
       } else {
         _beCalledEvent = pending;
       }
@@ -1932,8 +1967,12 @@ mixin OpenIMLive {
                 FlutterOpenimLiveAlert.closeLiveAlert();
                 _presentCallUi(pending.data, fromHeadless: _autoPickup);
                 _autoPickup = false;
-                unawaited(_dismissCallKitIncoming(roomID));
-                unawaited(_prewarmInAppCallAudio(force: true));
+                unawaited(_dismissCallKitIncoming(roomID).then((_) {
+                  return _prewarmInAppCallAudio(
+                    force: true,
+                    afterDismissRoomID: roomID,
+                  );
+                }));
               });
               return;
             }
@@ -1942,9 +1981,13 @@ mixin OpenIMLive {
             FlutterOpenimLiveAlert.closeLiveAlert();
             _presentCallUi(event.data, fromHeadless: _autoPickup);
             _autoPickup = false;
-            unawaited(_dismissCallKitIncoming(roomID));
-            // Warm VoIP session while ringing so answer → clear audio is instant.
-            unawaited(_prewarmInAppCallAudio(force: true));
+            // Dismiss first, then prewarm — never setActive under live CallKit.
+            unawaited(_dismissCallKitIncoming(roomID).then((_) {
+              return _prewarmInAppCallAudio(
+                force: true,
+                afterDismissRoomID: roomID,
+              );
+            }));
           } else if (event.state == CallState.beRejected) {
             insertSignalingMessageSubject.add(event);
             _terminateCallUi(roomID);
