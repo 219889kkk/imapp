@@ -60,7 +60,7 @@ class ChatItemContainer extends StatelessWidget {
           if (null != timelineStr)
             ChatTimelineView(
               timeStr: timelineStr!,
-              margin: EdgeInsets.only(bottom: 20.h),
+              margin: EdgeInsets.only(top: 8.h, bottom: 16.h),
             ),
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,

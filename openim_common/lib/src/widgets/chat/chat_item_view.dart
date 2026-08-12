@@ -175,7 +175,7 @@ class _ChatItemViewState extends State<ChatItemView> {
     return FocusDetector(
       child: Container(
         color: widget.highlightColor,
-        margin: EdgeInsets.only(bottom: 20.h),
+        margin: EdgeInsets.only(bottom: 24.h),
         padding: EdgeInsets.symmetric(horizontal: 10.w),
         child: Center(child: _child),
       ),
