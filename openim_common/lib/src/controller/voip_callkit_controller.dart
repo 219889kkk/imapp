@@ -64,12 +64,18 @@ class VoipCallkitController extends GetxService {
   String? get incomingRoomID => _incomingRoomID;
 
   /// PushKit/Flutter double-show often kills CallKit within a few seconds.
-  bool isSpuriousEarlyCallKitEnd(String? roomID, {int withinMs = 8000}) {
+  /// If Dart never recorded present time (PushKit-only wake), treat short-lived
+  /// ends as spurious too — otherwise WeChat/background wakes false-reject.
+  bool isSpuriousEarlyCallKitEnd(String? roomID, {int withinMs = 12000}) {
     final id = roomID?.trim() ?? '';
     if (id.isEmpty) return false;
     final at = _incomingPresentedAtMs[id];
-    if (at == null) return false;
-    return DateTime.now().millisecondsSinceEpoch - at < withinMs;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (at == null) {
+      // No timestamp yet — still ringing / just presented via PushKit.
+      return callKitActive.value || _incomingRoomID == id;
+    }
+    return now - at < withinMs;
   }
 
   void noteIncomingPresented(String? roomID) {
@@ -474,13 +480,23 @@ class VoipCallkitController extends GetxService {
           final incomingRoom = incoming?.invitation?.roomID?.trim() ?? '';
           noteIncomingPresented(
               incomingRoom.isNotEmpty ? incomingRoom : null);
-          // WS invite may have already opened in-app UI — drop duplicate banner.
-          // endCall itself arms Ended-suppress; do not arm suppress on present.
+          // WS invite may have already opened in-app UI.
+          // Background (WeChat etc.): NEVER end CallKit for a stale overlay —
+          // that fired Ended → false callingReject within ~2s.
           if (PackageBridge.rtcBridge?.hasCallOverlay == true) {
+            final life = WidgetsBinding.instance.lifecycleState;
+            final inForeground = life == AppLifecycleState.resumed;
             final roomID = incoming?.invitation?.roomID;
-            unawaited(endCall(roomID));
-            callKitActive.value = false;
-            _incomingRoomID = null;
+            if (inForeground) {
+              unawaited(endCall(roomID));
+              callKitActive.value = false;
+              _incomingRoomID = null;
+            } else {
+              Logger.print(
+                  'CallKit incoming: keep system ring (overlay stale, bg)');
+              CallAudioDebugLog.add(
+                  'callkit', 'incoming keep CallKit bg overlay roomID=$incomingRoom');
+            }
           }
           break;
         case Event.actionCallAccept:

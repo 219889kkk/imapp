@@ -1778,8 +1778,26 @@ mixin OpenIMLive {
       return;
     }
 
-    // 4) Still ringing — user dismissed incoming CallKit → reject caller.
+    // 4) Still ringing — classify carefully (WeChat/bg false Ends are common).
     if (info != null && !inCall) {
+      final life = WidgetsBinding.instance.lifecycleState;
+      final inBackground = _isRunningBackground ||
+          life == null ||
+          life == AppLifecycleState.inactive ||
+          life == AppLifecycleState.paused ||
+          life == AppLifecycleState.hidden ||
+          life == AppLifecycleState.detached;
+      // Background: system/plugin often tears CallKit while user is in WeChat.
+      // Never map that to callingReject — caller would see "对方已拒绝".
+      // Real reject is actionCallDecline only.
+      if (inBackground) {
+        Logger.print(
+            'CallKit ended in background while ringing — local miss only roomID=$roomKey');
+        CallAudioDebugLog.add(
+            'callkit', 'ended bg ringing → local miss roomID=$roomKey');
+        _terminateCallUi(roomID);
+        return;
+      }
       Logger.print(
           'CallKit ended before connect — reject peer roomID=$roomID');
       CallAudioDebugLog.add(
