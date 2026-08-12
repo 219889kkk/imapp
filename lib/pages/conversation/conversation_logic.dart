@@ -515,6 +515,8 @@ class ConversationLogic extends GetxController {
           info.unreadCount = 0;
         }
       }
+      final listSum = list.fold<int>(0, (a, e) => a + e.unreadCount);
+      homeLogic.applyConversationUnreadSum(listSum);
     } catch (e, s) {
       Logger.print('getFirstPage error: $e $s');
       list.assignAll(

@@ -1,3 +1,4 @@
+import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_easyloading/flutter_easyloading.dart';
@@ -37,10 +38,56 @@ class HomeLogic extends SuperController {
   }
 
   _getUnreadMsgCount() {
-    OpenIM.iMManager.conversationManager.getTotalUnreadMsgCount().then((count) {
-      unreadMsgCount.value = int.tryParse(count) ?? 0;
-      initLogic.showBadge(unreadMsgCount.value);
-    });
+    unawaited(_reconcileUnreadMsgCount());
+  }
+
+  /// Redis badge can drift after server-side clears; prefer sum of conversation unreads.
+  Future<void> _reconcileUnreadMsgCount() async {
+    try {
+      final sdkStr =
+          await OpenIM.iMManager.conversationManager.getTotalUnreadMsgCount();
+      final sdkTotal = int.tryParse(sdkStr) ?? 0;
+      final listTotal = await _sumConversationUnread();
+      final count = listTotal < sdkTotal ? listTotal : sdkTotal;
+      if (count != sdkTotal) {
+        Logger.print(
+            'unread reconcile sdk=$sdkTotal list=$listTotal → $count');
+      }
+      unreadMsgCount.value = count;
+      initLogic.showBadge(count);
+    } catch (e, s) {
+      Logger.print('reconcileUnread failed: $e $s');
+    }
+  }
+
+  Future<int> _sumConversationUnread() async {
+    var total = 0;
+    var offset = 0;
+    const page = 200;
+    while (true) {
+      final chunk = await OpenIM.iMManager.conversationManager
+          .getConversationListSplit(offset: offset, count: page);
+      if (chunk.isEmpty) break;
+      for (final c in chunk) {
+        total += c.unreadCount;
+      }
+      offset += chunk.length;
+      if (chunk.length < page) break;
+      // Safety: avoid infinite loops on huge accounts.
+      if (offset > 5000) break;
+    }
+    return total;
+  }
+
+  /// Called when conversation list is ready — clamp tab badge to list reality.
+  void applyConversationUnreadSum(int listTotal) {
+    if (listTotal < 0) return;
+    if (listTotal < unreadMsgCount.value) {
+      Logger.print(
+          'unread clamp from list $listTotal (was ${unreadMsgCount.value})');
+      unreadMsgCount.value = listTotal;
+      initLogic.showBadge(listTotal);
+    }
   }
 
   Future<void> getUnhandledFriendApplicationCount() async {
@@ -90,6 +137,7 @@ class HomeLogic extends SuperController {
     }
     imLogic.unreadMsgCountEventSubject.listen((value) {
       unreadMsgCount.value = value;
+      initLogic.showBadge(value);
     });
     imLogic.friendApplicationChangedSubject.listen((value) {
       getUnhandledFriendApplicationCount();
