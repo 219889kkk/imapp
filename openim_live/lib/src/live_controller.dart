@@ -387,11 +387,15 @@ mixin OpenIMLive {
       final client = OpenIMLiveClient();
       final isCaller =
           signaling.invitation?.inviterUserID == OpenIM.iMManager.userID;
-      // Callee answering / ICE slow: keep waiting (up to 2 extensions).
+      // Only extend when peer is actually answering / joining — never because
+      // caller alone sits in an empty LiveKit wait room (felt like forever).
       if (isCaller &&
           _ringTimeoutExtendCount < 2 &&
-          client.isBusy &&
-          client.currentRoomID == roomID) {
+          client.currentRoomID == roomID &&
+          (_peerAcceptedRooms.contains(roomID) ||
+              client.peerAcceptedForUi ||
+              client.isMediaConnecting ||
+              (client.mediaRoom?.remoteParticipants.isNotEmpty ?? false))) {
         _ringTimeoutExtendCount++;
         Logger.print(
             'call ring timeout extended #$_ringTimeoutExtendCount roomID=$roomID');
@@ -1602,6 +1606,22 @@ mixin OpenIMLive {
     final roomID = info?.invitation?.roomID?.trim() ??
         OpenIMLiveClient().currentRoomID?.trim() ??
         '';
+    final voip = VoipCallkitController.toOrNull;
+    // PushKit + Flutter re-show same UUID fires Timeout in ~1s and used to
+    // mark the room ended → unlock shows nothing, caller waits forever.
+    if (roomID.isNotEmpty &&
+        voip != null &&
+        voip.isSpuriousEarlyCallKitEnd(roomID) &&
+        info != null &&
+        !_isRoomEnded(roomID) &&
+        !_answeredRoomUntilMs.containsKey(roomID)) {
+      Logger.print(
+          'CallKit timeout ignored — spurious re-show race roomID=$roomID');
+      CallAudioDebugLog.add(
+          'callkit', 'timeout ignored spurious roomID=$roomID');
+      unawaited(voip.recoverSpuriousIncoming(info));
+      return;
+    }
     Logger.print('CallKit timeout — local miss only roomID=$roomID');
     CallAudioDebugLog.add('callkit', 'timeout local miss roomID=$roomID');
     // Same as Dart ring timeout for callee: do not send callingReject.
@@ -1663,6 +1683,22 @@ mixin OpenIMLive {
           'CallKit ended ignored — accept settle joining roomID=$roomKey');
       CallAudioDebugLog.add(
           'callkit', 'ended ignored acceptSettle roomID=$roomKey');
+      return;
+    }
+
+    final voip = VoipCallkitController.toOrNull;
+    // Early Ended without accept — PushKit/Flutter UUID collision, not user reject.
+    if (!inCall &&
+        !acceptSent &&
+        roomKey.isNotEmpty &&
+        info != null &&
+        voip != null &&
+        voip.isSpuriousEarlyCallKitEnd(roomKey)) {
+      Logger.print(
+          'CallKit ended ignored — spurious re-show race roomID=$roomKey');
+      CallAudioDebugLog.add(
+          'callkit', 'ended ignored spurious roomID=$roomKey');
+      unawaited(voip.recoverSpuriousIncoming(info));
       return;
     }
 
@@ -1845,10 +1881,8 @@ mixin OpenIMLive {
                   if (OpenIMLiveClient().hasOverlay) {
                     OpenIMLiveClient().closeOverlayOnly();
                   }
-                  // PushKit may already own CallKit — never re-show same UUID.
-                  if (!voip.ownsIncomingUi) {
-                    await voip.showIncoming(event.data);
-                  }
+                  // PushKit may already own CallKit — showIncoming dedupes UUID.
+                  await voip.showIncoming(event.data);
                 }
               }
               return;
@@ -1862,6 +1896,21 @@ mixin OpenIMLive {
             final overlayContext = Get.overlayContext;
             if (overlayContext == null) {
               _beCalledEvent = event;
+              // Overlay may not be ready on cold unlock — retry shortly.
+              Future.delayed(const Duration(milliseconds: 350), () {
+                if (isClosed) return;
+                if (_beCalledEvent?.data.invitation?.roomID != roomID) return;
+                if (_isRoomEnded(roomID)) return;
+                if (Get.overlayContext == null) return;
+                final pending = _beCalledEvent;
+                if (pending == null) return;
+                _beCalledEvent = null;
+                PackageBridge.clearCallNotification?.call();
+                FlutterOpenimLiveAlert.closeLiveAlert();
+                _presentCallUi(pending.data, fromHeadless: _autoPickup);
+                _autoPickup = false;
+                unawaited(_dismissCallKitIncoming(roomID));
+              });
               return;
             }
             // Foreground in-app: overlay primary, dismiss duplicate CallKit.

@@ -519,6 +519,14 @@ import flutter_callkit_incoming
         }
     }
 
+    private func notifyDartVoipCallKitPresented(roomID: String) {
+        DispatchQueue.main.async {
+            self.voipChannel?.invokeMethod("onVoipCallKitPresented", arguments: [
+                "roomID": roomID,
+            ])
+        }
+    }
+
     /// iOS 13+: MUST report CallKit incoming call before invoking completion.
     func pushRegistry(
         _ registry: PKPushRegistry,
@@ -574,12 +582,9 @@ import flutter_callkit_incoming
             NSLog("HangXun VoIP: login hint false — still show CallKit room=%@", roomID)
         }
 
-        if UIApplication.shared.applicationState == .active {
-            NSLog("HangXun VoIP: skip CallKit (app foreground, room=%@)", roomID)
-            DispatchQueue.main.async { completion() }
-            return
-        }
-
+        // Always report CallKit before completion (Apple VoIP requirement).
+        // Foreground: Dart dismisses CallKit and shows in-app overlay.
+        // Never skip report when .active — that kills future VoIP wakes.
         let mediaType = (dict["mediaType"] as? String) ?? "audio"
         let isVideo = mediaType == "video"
         let nameCaller = (dict["nickname"] as? String)
@@ -613,7 +618,10 @@ import flutter_callkit_incoming
         // Let CallKit activate session; WebRTC bridges in didActivateAudioSession.
         data.configureAudioSession = false
         data.audioSessionActive = false
+        let appState = UIApplication.shared.applicationState
+        NSLog("HangXun VoIP: report CallKit room=%@ state=%ld", roomID, appState.rawValue)
         SwiftFlutterCallkitIncomingPlugin.sharedInstance?.showCallkitIncoming(data, fromPushKit: true)
+        notifyDartVoipCallKitPresented(roomID: roomID)
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
             completion()

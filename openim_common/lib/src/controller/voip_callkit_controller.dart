@@ -50,10 +50,54 @@ class VoipCallkitController extends GetxService {
   /// True while a CallKit / Android incoming UI is active (avoid double banners).
   final RxBool callKitActive = false.obs;
 
+  /// roomID → millis when CallKit/PushKit first presented (detect re-show races).
+  final Map<String, int> _incomingPresentedAtMs = {};
+
+  /// roomID already recovered once after a spurious Timeout/Ended.
+  final Set<String> _spuriousRecoveredRooms = {};
+
   String? get voipToken => _voipToken;
 
   bool get ownsIncomingUi =>
       (Platform.isIOS || Platform.isAndroid) && callKitActive.value;
+
+  String? get incomingRoomID => _incomingRoomID;
+
+  /// PushKit/Flutter double-show often kills CallKit within a few seconds.
+  bool isSpuriousEarlyCallKitEnd(String? roomID, {int withinMs = 8000}) {
+    final id = roomID?.trim() ?? '';
+    if (id.isEmpty) return false;
+    final at = _incomingPresentedAtMs[id];
+    if (at == null) return false;
+    return DateTime.now().millisecondsSinceEpoch - at < withinMs;
+  }
+
+  void noteIncomingPresented(String? roomID) {
+    final id = roomID?.trim() ?? '';
+    if (id.isEmpty) return;
+    _incomingRoomID = id;
+    callKitActive.value = true;
+    _incomingPresentedAtMs.putIfAbsent(
+        id, () => DateTime.now().millisecondsSinceEpoch);
+    Logger.print('CallKit noted presented roomID=$id');
+  }
+
+  /// After a false Timeout/Ended, try one re-show if the invite is still live.
+  Future<bool> recoverSpuriousIncoming(SignalingInfo info) async {
+    final id = info.invitation?.roomID?.trim() ?? '';
+    if (id.isEmpty) return false;
+    if (_spuriousRecoveredRooms.contains(id)) {
+      Logger.print('CallKit recover skipped — already tried roomID=$id');
+      return false;
+    }
+    if (PackageBridge.isCallRoomEnded?.call(id) == true) return false;
+    _spuriousRecoveredRooms.add(id);
+    callKitActive.value = false;
+    _incomingRoomID = null;
+    Logger.print('CallKit recover re-show roomID=$id');
+    await showIncoming(info);
+    return true;
+  }
 
   @override
   void onInit() {
@@ -296,6 +340,17 @@ class VoipCallkitController extends GetxService {
         PackageBridge.onVoipRemoteEnd?.call(roomID, action);
         return;
       }
+      if (call.method == 'onVoipCallKitPresented') {
+        final args = call.arguments;
+        String? roomID;
+        if (args is Map) {
+          roomID = args['roomID']?.toString();
+        } else if (args != null) {
+          roomID = args.toString();
+        }
+        noteIncomingPresented(roomID);
+        return;
+      }
       if (call.method == 'onCallKitAudioActivated') {
         Logger.print('CallKit audio session activated (native)');
         CallAudioDebugLog.add('native', 'onCallKitAudioActivated');
@@ -415,17 +470,14 @@ class VoipCallkitController extends GetxService {
       Logger.print('CallKit event: ${event.event} body=${event.body}');
       switch (event.event) {
         case Event.actionCallIncoming:
-          callKitActive.value = true;
           final incoming = signalingFromCallKitBody(event.body);
           final incomingRoom = incoming?.invitation?.roomID?.trim() ?? '';
-          if (incomingRoom.isNotEmpty) {
-            _incomingRoomID = incomingRoom;
-          }
+          noteIncomingPresented(
+              incomingRoom.isNotEmpty ? incomingRoom : null);
           // WS invite may have already opened in-app UI — drop duplicate banner.
-          // Suppress Ended so programmatic dismiss does NOT auto-reject the caller.
+          // endCall itself arms Ended-suppress; do not arm suppress on present.
           if (PackageBridge.rtcBridge?.hasCallOverlay == true) {
             final roomID = incoming?.invitation?.roomID;
-            PackageBridge.suppressCallKitEnded?.call(roomID);
             unawaited(endCall(roomID));
             callKitActive.value = false;
             _incomingRoomID = null;
@@ -595,10 +647,10 @@ class VoipCallkitController extends GetxService {
 
     final uuid = invitation!.roomID!;
     // PushKit already reported CallKit — re-show same UUID ends the first call
-    // and fires Timeout/Ended → false reject while callee is in WeChat/browser.
+    // and fires Timeout/Ended → callee UI dies while caller keeps waiting.
     if (callKitActive.value && _incomingRoomID == uuid) {
+      noteIncomingPresented(uuid);
       Logger.print('showIncoming skipped: already ringing roomID=$uuid');
-      PackageBridge.suppressCallKitEnded?.call(uuid);
       return;
     }
     try {
@@ -607,9 +659,7 @@ class VoipCallkitController extends GetxService {
         for (final item in active) {
           final id = item is Map ? item['id']?.toString() : null;
           if (id == uuid) {
-            callKitActive.value = true;
-            _incomingRoomID = uuid;
-            PackageBridge.suppressCallKitEnded?.call(uuid);
+            noteIncomingPresented(uuid);
             Logger.print('showIncoming skipped: native active roomID=$uuid');
             return;
           }
@@ -690,9 +740,7 @@ class VoipCallkitController extends GetxService {
       ),
     );
 
-    callKitActive.value = true;
-    _incomingRoomID = uuid;
-    PackageBridge.suppressCallKitEnded?.call(uuid);
+    noteIncomingPresented(uuid);
     Logger.print(
         'showIncoming platform=${Platform.operatingSystem} roomID=$uuid caller=$caller video=$isVideo');
     await FlutterCallkitIncoming.showCallkitIncoming(params);
@@ -730,6 +778,9 @@ class VoipCallkitController extends GetxService {
     final id = roomID?.trim() ?? '';
     if (id.isEmpty) return;
     _setConnectedAtMs.remove(id);
+    _incomingPresentedAtMs.remove(id);
+    _spuriousRecoveredRooms.remove(id);
+    if (_incomingRoomID == id) _incomingRoomID = null;
     if (!Platform.isIOS) return;
     try {
       await _nativeChannel.invokeMethod('markRoomEnded', {'roomID': id});
@@ -742,15 +793,23 @@ class VoipCallkitController extends GetxService {
     if (!Platform.isIOS && !Platform.isAndroid) return;
     try {
       if (roomID != null && roomID.isNotEmpty) {
+        // Only arm suppress when *we* programmatically dismiss CallKit.
         PackageBridge.suppressCallKitEnded?.call(roomID);
+        _incomingPresentedAtMs.remove(roomID);
+        _spuriousRecoveredRooms.remove(roomID);
         await FlutterCallkitIncoming.endCall(roomID);
       } else {
         await FlutterCallkitIncoming.endAllCalls();
+        _incomingPresentedAtMs.clear();
+        _spuriousRecoveredRooms.clear();
       }
     } catch (e, s) {
       Logger.print('endCall failed: $e $s');
     }
     callKitActive.value = false;
+    if (roomID != null && roomID.isNotEmpty && _incomingRoomID == roomID) {
+      _incomingRoomID = null;
+    }
   }
 
   Future<void> endAllCalls() async {
