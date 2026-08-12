@@ -1224,15 +1224,12 @@ class ChatLogic extends SuperController {
   }
 
   void markMessageAsRead(Message message, bool visible) async {
-    if (visible &&
-        message.contentType! < 1000 &&
-        message.contentType! != MessageType.voice) {
-      var data = IMUtils.parseCustomMessage(message);
-      if (null != data && data['viewType'] == CustomMessageType.call) {
-        return;
-      }
-      _markMessageAsRead(message);
-    }
+    if (!visible) return;
+    if (message.contentType == null) return;
+    if (message.contentType! >= 1000) return;
+    if (message.contentType! == MessageType.voice) return;
+    // Call records used to return early and leave the conversation unread forever.
+    _markMessageAsRead(message);
   }
 
   _markMessageAsRead(Message message) async {
@@ -1243,6 +1240,7 @@ class ChatLogic extends SuperController {
         await OpenIM.iMManager.conversationManager
             .markConversationMessageAsRead(
                 conversationID: conversationInfo.conversationID);
+        conversationInfo.unreadCount = 0;
       } catch (e) {
         Logger.print(
             'failed to send group message read receipt： ${message.clientMsgID} ${message.isRead}');
@@ -1255,10 +1253,14 @@ class ChatLogic extends SuperController {
   }
 
   _clearUnreadCount() {
-    if (conversationInfo.unreadCount > 0) {
-      OpenIM.iMManager.conversationManager.markConversationMessageAsRead(
-          conversationID: conversationInfo.conversationID);
-    }
+    // Always clear on enter/leave — SDK unreadCount can lag after call hangup.
+    conversationInfo.unreadCount = 0;
+    unawaited(OpenIM.iMManager.conversationManager
+        .markConversationMessageAsRead(
+            conversationID: conversationInfo.conversationID)
+        .catchError((e, s) {
+      Logger.print('clearUnreadCount failed: $e $s');
+    }));
   }
 
   void closeToolbox() {

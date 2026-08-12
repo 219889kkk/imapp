@@ -113,6 +113,10 @@ class LoginLogic extends GetxController {
     _initData();
     phoneCtrl.addListener(_onChanged);
     pwdCtrl.addListener(_onChanged);
+    // Reinstall / logout can leave a SpringBoard badge until first paint.
+    if (Get.isRegistered<AppController>()) {
+      Get.find<AppController>().clearBadgeForLoggedOut();
+    }
     super.onInit();
   }
 

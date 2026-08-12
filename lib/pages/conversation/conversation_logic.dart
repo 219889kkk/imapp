@@ -54,26 +54,13 @@ class ConversationLogic extends GetxController {
 
   /// Answered voice/video records keep history but must not show unread badges.
   bool _isAnsweredCallLatest(ConversationInfo info) {
-    final msg = info.latestMsg;
-    if (msg == null || !msg.isCustomType) return false;
-    try {
-      final map = json.decode(msg.customElem!.data!);
-      final customType = map['customType'];
-      if (customType == CustomMessageType.callingAccept ||
-          customType == CustomMessageType.callingHungup) {
-        return true;
-      }
-      if (customType == CustomMessageType.call) {
-        final data = map['data'];
-        final state =
-            data is Map ? data['state']?.toString() ?? '' : '';
-        return state == 'hangup' ||
-            state == 'beHangup' ||
-            state == 'calling' ||
-            state == 'beAccepted';
-      }
-    } catch (_) {}
-    return false;
+    return info.latestMsg?.isAnsweredCallRecordType == true;
+  }
+
+  /// Unread that should actually show on list / tab / icon badge.
+  int _effectiveUnread(ConversationInfo info) {
+    if (_isAnsweredCallLatest(info)) return 0;
+    return info.unreadCount;
   }
 
   @override
@@ -161,12 +148,15 @@ class ConversationLogic extends GetxController {
       _sortConversationList();
     }
     _schedulePrefetchFirstPages();
+    final listSum = list.fold<int>(0, (a, e) => a + _effectiveUnread(e));
+    homeLogic.forceUnreadCount(listSum);
   }
 
   void promptSoundOrNotification(ConversationInfo info) {
+    if (_isAnsweredCallLatest(info)) return;
     if (imLogic.userInfo.value.globalRecvMsgOpt == 0 &&
         info.recvMsgOpt == 0 &&
-        info.unreadCount > 0 &&
+        _effectiveUnread(info) > 0 &&
         info.latestMsg?.sendID != OpenIM.iMManager.userID) {
       appLogic.promptSoundOrNotification(info.latestMsg!);
     }
@@ -251,9 +241,7 @@ class ConversationLogic extends GetxController {
   }
 
   int getUnreadCount(ConversationInfo info) {
-    // Missed calls may keep unread; answered voice/video only keep the record.
-    if (_isAnsweredCallLatest(info)) return 0;
-    return info.unreadCount;
+    return _effectiveUnread(info);
   }
 
   bool existUnreadMsg(ConversationInfo info) {
@@ -382,13 +370,17 @@ class ConversationLogic extends GetxController {
 
   Future<void> clearAllUnread() async {
     try {
-      final localUnread =
-          list.where((e) => e.unreadCount > 0).toList(growable: false);
+      // Also mark answered-call leftovers (SDK unread > 0 but UI shows 0).
+      final localUnread = list
+          .where((e) => e.unreadCount > 0 || _isAnsweredCallLatest(e))
+          .toList(growable: false);
       final totalStr =
           await OpenIM.iMManager.conversationManager.getTotalUnreadMsgCount();
       final totalUnread = int.tryParse(totalStr) ?? 0;
+      final effectiveSum =
+          list.fold<int>(0, (a, e) => a + _effectiveUnread(e));
 
-      if (localUnread.isEmpty && totalUnread == 0) {
+      if (localUnread.isEmpty && totalUnread == 0 && effectiveSum == 0) {
         IMViews.showToast(StrRes.noUnreadMessage);
         return;
       }
@@ -398,6 +390,7 @@ class ConversationLogic extends GetxController {
         unreadConversations = await _loadUnreadConversations();
       }
       if (unreadConversations.isEmpty) {
+        homeLogic.forceUnreadCount(0);
         IMViews.showToast(StrRes.noUnreadMessage);
         return;
       }
@@ -416,8 +409,7 @@ class ConversationLogic extends GetxController {
       for (final info in unreadConversations) {
         info.unreadCount = 0;
       }
-      homeLogic.unreadMsgCount.value = 0;
-      appLogic.showBadge(0);
+      homeLogic.forceUnreadCount(0);
       list.refresh();
       IMViews.showToast(StrRes.allRead);
     } catch (e, s) {
@@ -435,7 +427,8 @@ class ConversationLogic extends GetxController {
           .getConversationListSplit(offset: offset, count: pageSize);
       if (page.isEmpty) break;
 
-      unread.addAll(page.where((e) => e.unreadCount > 0));
+      unread.addAll(page.where(
+          (e) => e.unreadCount > 0 || _isAnsweredCallLatest(e)));
       offset += page.length;
       if (page.length < pageSize) break;
     }
@@ -515,8 +508,10 @@ class ConversationLogic extends GetxController {
           info.unreadCount = 0;
         }
       }
-      final listSum = list.fold<int>(0, (a, e) => a + e.unreadCount);
+      final listSum = list.fold<int>(0, (a, e) => a + _effectiveUnread(e));
       homeLogic.applyConversationUnreadSum(listSum);
+      // Force icon/tab to the effective sum (not only when smaller).
+      homeLogic.forceUnreadCount(listSum);
     } catch (e, s) {
       Logger.print('getFirstPage error: $e $s');
       list.assignAll(

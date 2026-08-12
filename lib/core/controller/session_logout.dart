@@ -13,11 +13,19 @@ class SessionLogout {
     bool imLogout = true,
     void Function()? onConversationsCleared,
   }) async {
-    SessionGuard.markLoggedOut();
-
+    // Zero server+icon badge BEFORE marking logged out / killing IM session.
     if (Get.isRegistered<AppController>()) {
+      try {
+        if (OpenIM.iMManager.isLogined) {
+          await OpenIM.iMManager.messageManager.setAppBadge(0);
+        }
+      } catch (e, s) {
+        Logger.print('SessionLogout setAppBadge(0): $e $s');
+      }
       await Get.find<AppController>().onSessionLogout();
     }
+
+    SessionGuard.markLoggedOut();
 
     final imCtrl = im ??
         (Get.isRegistered<IMController>() ? Get.find<IMController>() : null);
@@ -35,6 +43,9 @@ class SessionLogout {
     }
 
     await DataSp.removeLoginCertificate();
+    if (Get.isRegistered<AppController>()) {
+      Get.find<AppController>().clearBadgeForLoggedOut();
+    }
     onConversationsCleared?.call();
   }
 
@@ -42,19 +53,23 @@ class SessionLogout {
     IMController? im,
     void Function()? onConversationsCleared,
   }) async {
-    // Suppress local alerts immediately — before any await.
-    SessionGuard.markLoggedOut();
-
     if (Get.isRegistered<AppController>()) {
+      try {
+        if (OpenIM.iMManager.isLogined) {
+          await OpenIM.iMManager.messageManager.setAppBadge(0);
+        }
+      } catch (e, s) {
+        Logger.print('SessionLogout kickoff setAppBadge(0): $e $s');
+      }
       await Get.find<AppController>().onSessionLogout();
     }
+
+    SessionGuard.markLoggedOut();
 
     final imCtrl = im ??
         (Get.isRegistered<IMController>() ? Get.find<IMController>() : null);
     imCtrl?.terminateAllCallsOnLogout();
 
-    // Unbind VoIP / push WHILE chatToken is still valid, then IM logout.
-    // Old order (IM logout first) left this phone ringing after multi-login kick.
     await VoipCallkitController.logoutAsync();
     await PushController.logoutAsync();
 
@@ -67,6 +82,9 @@ class SessionLogout {
     }
 
     await DataSp.removeLoginCertificate();
+    if (Get.isRegistered<AppController>()) {
+      Get.find<AppController>().clearBadgeForLoggedOut();
+    }
     onConversationsCleared?.call();
   }
 }

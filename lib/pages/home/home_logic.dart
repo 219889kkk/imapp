@@ -60,6 +60,23 @@ class HomeLogic extends SuperController {
     }
   }
 
+  /// Called when conversation list is ready — clamp tab badge to list reality.
+  void applyConversationUnreadSum(int listTotal) {
+    if (listTotal < 0) return;
+    if (listTotal < unreadMsgCount.value) {
+      Logger.print(
+          'unread clamp from list $listTotal (was ${unreadMsgCount.value})');
+      forceUnreadCount(listTotal);
+    }
+  }
+
+  /// Authoritative unread from conversation list (answered calls already excluded).
+  void forceUnreadCount(int count) {
+    final n = count < 0 ? 0 : count;
+    unreadMsgCount.value = n;
+    initLogic.showBadge(n);
+  }
+
   Future<int> _sumConversationUnread() async {
     var total = 0;
     var offset = 0;
@@ -69,25 +86,15 @@ class HomeLogic extends SuperController {
           .getConversationListSplit(offset: offset, count: page);
       if (chunk.isEmpty) break;
       for (final c in chunk) {
+        // Answered call as latest must not inflate badge.
+        if (c.latestMsg?.isAnsweredCallRecordType == true) continue;
         total += c.unreadCount;
       }
       offset += chunk.length;
       if (chunk.length < page) break;
-      // Safety: avoid infinite loops on huge accounts.
       if (offset > 5000) break;
     }
     return total;
-  }
-
-  /// Called when conversation list is ready — clamp tab badge to list reality.
-  void applyConversationUnreadSum(int listTotal) {
-    if (listTotal < 0) return;
-    if (listTotal < unreadMsgCount.value) {
-      Logger.print(
-          'unread clamp from list $listTotal (was ${unreadMsgCount.value})');
-      unreadMsgCount.value = listTotal;
-      initLogic.showBadge(listTotal);
-    }
   }
 
   Future<void> getUnhandledFriendApplicationCount() async {

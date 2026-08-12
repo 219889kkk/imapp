@@ -680,7 +680,18 @@ class AppController extends GetxController
 
   /// Force-clear desktop badge + local call/chat banners (logout / no session).
   void clearBadgeForLoggedOut() {
-    removeBadge();
+    // Prefer zeroing OpenIM server badge while still logged in when possible.
+    try {
+      if (OpenIM.iMManager.isLogined) {
+        unawaited(
+          OpenIM.iMManager.messageManager.setAppBadge(0).catchError((_) {}),
+        );
+      }
+    } catch (_) {}
+    unawaited(_clearLocalIconBadge());
+    // Repeat — notification permission / Getui can restore SpringBoard badge.
+    Future<void>.delayed(const Duration(milliseconds: 400), _clearLocalIconBadge);
+    Future<void>.delayed(const Duration(seconds: 2), _clearLocalIconBadge);
     unawaited(_cancelAllNotifications());
   }
 

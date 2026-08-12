@@ -104,6 +104,28 @@ extension MessageExt on Message {
     }
   }
 
+  /// Answered / hung-up call record — keep history, never count as unread.
+  bool get isAnsweredCallRecordType {
+    if (!isCustomType) return false;
+    try {
+      final map = json.decode(customElem!.data!);
+      final customType = map['customType'];
+      if (customType == CustomMessageType.callingAccept ||
+          customType == CustomMessageType.callingHungup) {
+        return true;
+      }
+      if (customType != CustomMessageType.call) return false;
+      final data = map['data'];
+      final state = data is Map ? data['state']?.toString() ?? '' : '';
+      return state == 'hangup' ||
+          state == 'beHangup' ||
+          state == 'calling' ||
+          state == 'beAccepted';
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// RTC signaling messages (invite/accept/reject/cancel/hangup).
   /// They should not render as normal chat bubbles.
   bool get isCallingSignalingType {

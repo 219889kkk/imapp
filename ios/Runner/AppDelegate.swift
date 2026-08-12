@@ -105,10 +105,30 @@ import flutter_callkit_incoming
     /// Wipe SpringBoard badge without touching OpenIM (safe before login).
     private func clearIconBadge() {
         UIApplication.shared.applicationIconBadgeNumber = 0
+        let center = UNUserNotificationCenter.current()
+        center.removeAllDeliveredNotifications()
+        center.removeAllPendingNotificationRequests()
         if #available(iOS 16.0, *) {
-            UNUserNotificationCenter.current().setBadgeCount(0) { error in
+            center.setBadgeCount(0) { error in
                 if let error = error {
                     NSLog("HangXun clearIconBadge setBadgeCount failed: %@", error.localizedDescription)
+                }
+            }
+        }
+        // Permission / push registration can restore a stale number — clear again shortly.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            if !self.hasActiveLoginHint() {
+                UIApplication.shared.applicationIconBadgeNumber = 0
+                if #available(iOS 16.0, *) {
+                    UNUserNotificationCenter.current().setBadgeCount(0, withCompletionHandler: { _ in })
+                }
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            if !self.hasActiveLoginHint() {
+                UIApplication.shared.applicationIconBadgeNumber = 0
+                if #available(iOS 16.0, *) {
+                    UNUserNotificationCenter.current().setBadgeCount(0, withCompletionHandler: { _ in })
                 }
             }
         }
@@ -119,6 +139,13 @@ import flutter_callkit_incoming
         // Permission dialog / push wake can restore a stale badge before login.
         // Dart will re-apply the real unread count after IM login.
         if !self.hasActiveLoginHint() {
+            clearIconBadge()
+        }
+    }
+
+    override func applicationWillEnterForeground(_ application: UIApplication) {
+        super.applicationWillEnterForeground(application)
+        if !hasActiveLoginHint() {
             clearIconBadge()
         }
     }
