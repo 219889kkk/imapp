@@ -93,9 +93,11 @@ class OpenIMLiveClient implements RTCBridge {
   bool get isMediaConnecting => _mediaConnectInFlight != null;
 
   /// Callee is in the LiveKit room but has not answered yet.
+  /// True from [beginIncomingPrejoin] until accept publishes mic or we hang up —
+  /// including the ICE window before `localParticipant` exists.
   bool get hasRingingPrejoin {
     final id = _ringingPrejoinRoomID?.trim() ?? '';
-    return id.isNotEmpty && currentRoomID == id && _mediaRoom != null;
+    return id.isNotEmpty;
   }
 
   void beginIncomingPrejoin(String roomID) {
@@ -321,6 +323,27 @@ class OpenIMLiveClient implements RTCBridge {
       defaultVideoPublishOptions: const VideoPublishOptions(
         simulcast: true,
         videoCodec: 'VP8',
+      ),
+    );
+  }
+
+  /// Cellular iOS gathers VPN / Private Relay / IPv6 hosts for ~5s before ICE
+  /// completes. Relay uses the LiveKit TURN from join (UDP 3478) immediately.
+  ConnectOptions _connectOptionsForCall() {
+    return ConnectOptions(
+      autoSubscribe: true,
+      rtcConfiguration: RTCConfiguration(
+        iceCandidatePoolSize: 8,
+        iceTransportPolicy: Platform.isIOS
+            ? RTCIceTransportPolicy.relay
+            : RTCIceTransportPolicy.all,
+      ),
+      timeouts: const Timeouts(
+        connection: Duration(seconds: 30),
+        debounce: Duration(milliseconds: 50),
+        publish: Duration(seconds: 15),
+        peerConnection: Duration(seconds: 30),
+        iceRestart: Duration(seconds: 15),
       ),
     );
   }
@@ -557,16 +580,7 @@ class OpenIMLiveClient implements RTCBridge {
             .connect(
           liveURL,
           token,
-          connectOptions: const ConnectOptions(
-            autoSubscribe: true,
-            timeouts: Timeouts(
-              connection: Duration(seconds: 30),
-              debounce: Duration(milliseconds: 50),
-              publish: Duration(seconds: 15),
-              peerConnection: Duration(seconds: 30),
-              iceRestart: Duration(seconds: 15),
-            ),
-          ),
+          connectOptions: _connectOptionsForCall(),
           roomOptions: _roomOptionsForCall(speakerOn: speakerOn),
           fastConnectOptions: fastConnect,
         )
@@ -897,6 +911,7 @@ class OpenIMLiveClient implements RTCBridge {
           await room.connect(
             liveURL,
             token,
+            connectOptions: _connectOptionsForCall(),
             roomOptions: _roomOptionsForCall(
               speakerOn: _userSpeakerPreference ?? false,
             ),

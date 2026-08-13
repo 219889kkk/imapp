@@ -36,6 +36,10 @@ class PackageBridge {
   /// PushKit remote cancel/hungup (native endCall before Dart WS).
   static void Function(String? roomID, String action)? onVoipRemoteEnd;
 
+  /// CallKit incoming is on screen (PushKit or Flutter show). Start LiveKit
+  /// ICE immediately — do not wait for the IM `beCalled` event.
+  static void Function(String roomID)? onIncomingCallPresented;
+
   /// iOS CallKit activated AVAudioSession — WebRTC may now capture/play.
   static VoidCallback? onCallKitAudioActivated;
 

@@ -83,9 +83,13 @@ class VoipCallkitController extends GetxService {
     if (id.isEmpty) return;
     _incomingRoomID = id;
     callKitActive.value = true;
+    final first = !_incomingPresentedAtMs.containsKey(id);
     _incomingPresentedAtMs.putIfAbsent(
         id, () => DateTime.now().millisecondsSinceEpoch);
     Logger.print('CallKit noted presented roomID=$id');
+    if (first) {
+      PackageBridge.onIncomingCallPresented?.call(id);
+    }
   }
 
   /// After a false Timeout/Ended, try one re-show if the invite is still live.

@@ -171,6 +171,7 @@ mixin OpenIMLive {
     _iosCallKitAudioActivated = false;
     _iosCallKitDidActivateNative = false;
     _callKitAcceptHandledRoomID = null;
+    if (id.isNotEmpty) _callKitAcceptAtMs.remove(id);
     _iosCallKitAudioGate = null;
     _beCalledEvent = null;
     _activeCallSignaling = null;
@@ -252,10 +253,11 @@ mixin OpenIMLive {
   // | Return to foreground   | overlay + dismiss CallKit | attach/promote overlay |
   //
   // CallKit Ended classification:
-  // - uiDismiss armed     → NO-OP (we closed CallKit for UI switch)
-  // - acceptSettle+joining → NO-OP (CallKit transition after Answer)
-  // - answered / in-call   → hangup (real user End on lock screen)
-  // - still ringing        → reject (user dismissed incoming CallKit)
+  // - uiDismiss armed           → NO-OP (we closed CallKit for UI switch)
+  // - plugin Ended after answer → NO-OP (incoming→active UUID swap)
+  // - ringing prejoin           → NO-OP (ICE warm, not answered)
+  // - native CXEndCallAction    → hangup only after user actually answered
+  // - still ringing (no prejoin)→ local miss (never callingReject in bg)
 
   void _armCallKitUiDismiss(String? roomID,
       {Duration duration = const Duration(seconds: 3)}) {
@@ -351,6 +353,42 @@ mixin OpenIMLive {
     return notActive;
   }
 
+  /// Prefetch/prejoin occupies LiveKit while still ringing. That is not an answer.
+  bool _isRingingPrejoinOnly(String? roomID) {
+    final client = OpenIMLiveClient();
+    if (!client.hasRingingPrejoin) return false;
+    final id = roomID?.trim() ?? '';
+    final current = client.currentRoomID?.trim() ?? '';
+    if (id.isNotEmpty && current.isNotEmpty && current != id) return false;
+    return !_userHasAnsweredCall(id);
+  }
+
+  /// User actually tapped Answer / in-app pickup — not token prefetch.
+  bool _userHasAnsweredCall(String? roomID) {
+    final id = roomID?.trim() ?? '';
+    if (id.isEmpty) {
+      return _callKitAcceptHandledRoomID != null ||
+          _acceptJoinInFlight != null;
+    }
+    return _answeredRoomUntilMs.containsKey(id) ||
+        _callKitAcceptHandledRoomID == id ||
+        _isAcceptInProgressForRoom(id);
+  }
+
+  bool _isNativeAnswerEndEcho(String? roomID) {
+    final id = roomID?.trim() ?? '';
+    if (id.isEmpty) return false;
+    final at = _callKitAcceptAtMs[id];
+    if (at == null) return false;
+    return DateTime.now().millisecondsSinceEpoch - at < 1500;
+  }
+
+  void _markCallKitAcceptClock(String? roomID) {
+    final id = roomID?.trim() ?? '';
+    if (id.isEmpty) return;
+    _callKitAcceptAtMs[id] = DateTime.now().millisecondsSinceEpoch;
+  }
+
   /// True while lock-screen / CallKit accept → LiveKit join has not finished.
   bool _isAcceptInProgressForRoom(String? roomID) {
     final id = roomID?.trim() ?? '';
@@ -375,6 +413,10 @@ mixin OpenIMLive {
   String? _pickupRoomID;
   SignalingCertificate? _pickupCertCache;
   String? _pickupCertRoomID;
+
+  /// Millis when CallKit Answer was handled — ignore native End echo (~1.5s).
+  final Map<String, int> _callKitAcceptAtMs = {};
+  int _nativeEndDeferGen = 0;
 
   /// Recently ended roomIDs — ignore late/synced invites (WeChat-like).
   final Map<String, int> _endedRoomUntilMs = {};
@@ -526,6 +568,9 @@ mixin OpenIMLive {
     if (identical(PackageBridge.onVoipRemoteEnd, _onVoipRemoteEnd)) {
       PackageBridge.onVoipRemoteEnd = null;
     }
+    if (identical(PackageBridge.onIncomingCallPresented, _onIncomingCallPresented)) {
+      PackageBridge.onIncomingCallPresented = null;
+    }
     if (identical(PackageBridge.suppressCallKitEnded, _suppressCallKitEnded)) {
       PackageBridge.suppressCallKitEnded = null;
     }
@@ -566,6 +611,7 @@ mixin OpenIMLive {
     PackageBridge.onCallKitUserHangup = _onCallKitUserHangup;
     PackageBridge.onCallKitTimeout = _onCallKitTimeout;
     PackageBridge.onVoipRemoteEnd = _onVoipRemoteEnd;
+    PackageBridge.onIncomingCallPresented = _onIncomingCallPresented;
     PackageBridge.suppressCallKitEnded = _suppressCallKitEnded;
     PackageBridge.isCallRoomEnded = _isRoomEnded;
     PackageBridge.onPeerLeftCall = _onPeerLeftCall;
@@ -624,6 +670,7 @@ mixin OpenIMLive {
     if (roomID.isNotEmpty) {
       _markRoomAnswered(roomID);
       _markCallConnected();
+      _markCallKitAcceptClock(roomID);
       _armCallKitAcceptSettle(roomID);
     }
     signalingSubject.add(CallEvent(CallState.calling, resolved));
@@ -894,7 +941,8 @@ mixin OpenIMLive {
     if (!_iosShouldUseCallKitForRing(roomID)) return;
 
     final client = OpenIMLiveClient();
-    if (client.hasMediaFor(roomID) || client.isBusy) return;
+    if ((client.hasMediaFor(roomID) || client.isBusy) &&
+        !_isRingingPrejoinOnly(roomID)) return;
 
     final voip = VoipCallkitController.toOrNull;
     if (voip == null) return;
@@ -926,10 +974,11 @@ mixin OpenIMLive {
       return;
     }
     final keepCallKit = _shouldKeepCallKitAudio();
+    final ringingPrejoin = _isRingingPrejoinOnly(endedRoom.isEmpty ? null : endedRoom);
     if (keepCallKit) {
       unawaited(_refreshHeadlessMicPending());
       final client = OpenIMLiveClient();
-      if (client.mediaRoom != null) {
+      if (client.mediaRoom != null && !ringingPrejoin) {
         unawaited(client.kickstartIosCallKitMedia(
           speakerOn: OpenIMLiveClient().userSpeakerPreference,
           unmuteMic: true,
@@ -955,10 +1004,17 @@ mixin OpenIMLive {
       return;
     }
 
+    if (active != null &&
+        activeRoom.isNotEmpty &&
+        _isRingingPrejoinOnly(activeRoom)) {
+      _beCalledEvent ??= CallEvent(CallState.beCalled, active);
+    }
+
     // Live / connecting call — attach UI only; never end media on unlock.
     if (active != null &&
         activeRoom.isNotEmpty &&
         !_isRoomEnded(activeRoom) &&
+        !_isRingingPrejoinOnly(activeRoom) &&
         (client.hasMediaFor(activeRoom) ||
             client.isBusy && client.currentRoomID == activeRoom)) {
       _beCalledEvent = null;
@@ -1045,6 +1101,7 @@ mixin OpenIMLive {
         return;
       }
       if (!_isRoomEnded(activeRoom) &&
+          !_isRingingPrejoinOnly(activeRoom) &&
           (client.hasMediaFor(activeRoom) ||
               client.isBusy ||
               _isAcceptInProgressForRoom(activeRoom))) {
@@ -1061,6 +1118,15 @@ mixin OpenIMLive {
       _activeCallSignaling = null;
       _beCalledEvent = null;
     }
+  }
+
+  /// PushKit / CallKit incoming is on screen — start ICE before IM beCalled.
+  void _onIncomingCallPresented(String roomID) {
+    final id = roomID.trim();
+    if (id.isEmpty || _isRoomEnded(id) || _userHasAnsweredCall(id)) return;
+    if (_isOutboundWaitingRoom(id)) return;
+    CallAudioDebugLog.add('prejoin', 'voip presented — prefetch roomID=$id');
+    unawaited(_prefetchPickupToken(id));
   }
 
   /// PushKit cancel/hungup/accept — tear down or mark answered.
@@ -1574,6 +1640,7 @@ mixin OpenIMLive {
     final outboundWaiting = _isOutboundWaitingRoom(roomKey);
     if (client.hasOverlay) {
       if (outboundWaiting) return;
+      if (_isRingingPrejoinOnly(roomKey)) return;
       if (client.hasMediaFor(roomID) || fromHeadless) {
         _promoteOverlayToInCall(signaling);
       }
@@ -1587,8 +1654,10 @@ mixin OpenIMLive {
         ? CallObj.single
         : CallObj.group;
     final overlayContext = Get.overlayContext;
-    final mediaReady = client.hasMediaFor(roomID);
+    final ringingPrejoin = _isRingingPrejoinOnly(roomKey);
+    final mediaReady = client.hasMediaFor(roomID) && !ringingPrejoin;
     final answered = !outboundWaiting &&
+        !ringingPrejoin &&
         roomKey.isNotEmpty &&
         (_answeredRoomUntilMs.containsKey(roomKey) ||
             _peerAcceptedRooms.contains(roomKey) ||
@@ -1665,6 +1734,10 @@ mixin OpenIMLive {
       Logger.print('skip promote — outbound still ringing roomID=$roomKey');
       CallAudioDebugLog.add(
           'fg', 'skip promote outbound waiting roomID=$roomKey');
+      return;
+    }
+    if (_isRingingPrejoinOnly(roomKey)) {
+      Logger.print('skip promote — ringing prejoin roomID=$roomKey');
       return;
     }
     final client = OpenIMLiveClient();
@@ -1845,16 +1918,17 @@ mixin OpenIMLive {
     CallAudioDebugLog.add('callkit', 'timeout local miss roomID=$roomID');
     // Same as Dart ring timeout for callee: do not send callingReject.
     if (roomID.isNotEmpty &&
-        (_answeredRoomUntilMs.containsKey(roomID) ||
-            _isAcceptInProgressForRoom(roomID) ||
-            OpenIMLiveClient().hasMediaFor(roomID))) {
-      // Timeout after answer is treated as hangup path via Ended normally.
+        (_userHasAnsweredCall(roomID) ||
+            (OpenIMLiveClient().hasMediaFor(roomID) &&
+                !_isRingingPrejoinOnly(roomID)))) {
+      // Timeout after answer is treated as hangup path via native End.
       return;
     }
     _terminateCallUi(roomID.isEmpty ? null : roomID);
   }
 
-  /// Native CXEndCallAction — lock-screen red button after answer. Never ignore.
+  /// Native CXEndCallAction — lock-screen red button after the user answered.
+  /// Plugin UUID swap on Answer also fires this; ignore that echo (~1.5s).
   void _onCallKitUserHangup(String? roomID) {
     final id = roomID?.trim() ?? '';
     if (_isCallKitUiDismissArmed(id) || _isRoomEnded(id)) {
@@ -1868,26 +1942,44 @@ mixin OpenIMLive {
     final matched = info != null && (infoRoom.isEmpty || infoRoom == id || id.isEmpty);
     CallAudioDebugLog.add(
       'callkit',
-      'native user end hangup roomID=$id matched=$matched',
+      'native user end roomID=$id matched=$matched answered=${_userHasAnsweredCall(id)} echo=${_isNativeAnswerEndEcho(id)} prejoin=${_isRingingPrejoinOnly(id)}',
     );
-    Logger.print('CallKit native user end → hangup roomID=$id');
-    final answered = id.isNotEmpty &&
-        (_answeredRoomUntilMs.containsKey(id) ||
-            _callKitAcceptHandledRoomID == id ||
-            _isAcceptInProgressForRoom(id) ||
-            OpenIMLiveClient().hasMediaFor(id) ||
-            OpenIMLiveClient().isBusy);
-    if (!answered) {
+
+    if (_isNativeAnswerEndEcho(id)) {
       CallAudioDebugLog.add(
-          'callkit', 'native end while ringing — local miss roomID=$id');
+          'callkit', 'native end ignored — Answer UUID-swap echo roomID=$id');
+      return;
+    }
+
+    if (_userHasAnsweredCall(id)) {
+      Logger.print('CallKit native user end → hangup roomID=$id');
+      if (matched) {
+        unawaited(onTapHangup(
+            info!..userID = OpenIM.iMManager.userID, _connectedDurationSec(), true));
+        return;
+      }
       _terminateCallUi(id.isEmpty ? null : id);
       return;
     }
-    if (matched) {
-      unawaited(onTapHangup(
-          info!..userID = OpenIM.iMManager.userID, _connectedDurationSec(), true));
+
+    // Still ringing: this may be Answer's incoming-CXCall end arriving before
+    // Dart Accept. Wait briefly; if Accept wins, keep the call.
+    unawaited(_deferredNativeEndWhileRinging(id));
+  }
+
+  Future<void> _deferredNativeEndWhileRinging(String id) async {
+    final gen = ++_nativeEndDeferGen;
+    await Future<void>.delayed(const Duration(milliseconds: 500));
+    if (gen != _nativeEndDeferGen) return;
+    if (_isRoomEnded(id) || _isCallKitUiDismissArmed(id)) return;
+    if (_userHasAnsweredCall(id) || _isNativeAnswerEndEcho(id)) {
+      CallAudioDebugLog.add(
+          'callkit', 'deferred native end dropped — already answered roomID=$id');
       return;
     }
+    CallAudioDebugLog.add(
+        'callkit', 'native end while ringing — local miss roomID=$id');
+    Logger.print('CallKit native end while ringing — local miss roomID=$id');
     _terminateCallUi(id.isEmpty ? null : id);
   }
 
@@ -1912,48 +2004,37 @@ mixin OpenIMLive {
     }
 
     final client = OpenIMLiveClient();
-    final inCall = client.hasMediaFor(roomID) ||
-        client.mediaRoom?.localParticipant != null;
-    final acceptSent = roomKey.isNotEmpty &&
-        (_pickupCertRoomID == roomKey ||
-            _acceptJoinRoomID == roomKey ||
-            _callKitAcceptHandledRoomID == roomKey ||
-            _answeredRoomUntilMs.containsKey(roomKey) ||
-            _isAcceptInProgressForRoom(roomKey));
+    final ringingPrejoin = _isRingingPrejoinOnly(roomKey);
+    final inCall = !ringingPrejoin &&
+        (client.hasMediaFor(roomID) ||
+            client.mediaRoom?.localParticipant != null);
+    final acceptSent = _userHasAnsweredCall(roomKey);
     final joining = _isAcceptInProgressForRoom(roomKey) ||
-        client.isMediaConnecting ||
+        (!ringingPrejoin && client.isMediaConnecting) ||
         (_acceptJoinInFlight != null &&
             (_acceptJoinRoomID == null || _acceptJoinRoomID == roomKey));
 
     CallAudioDebugLog.add(
       'callkit',
-      'ended roomID=$roomKey inCall=$inCall acceptSent=$acceptSent joining=$joining settle=${_isCallKitAcceptSettleArmed(roomID)}',
+      'ended roomID=$roomKey inCall=$inCall acceptSent=$acceptSent joining=$joining prejoin=$ringingPrejoin settle=${_isCallKitAcceptSettleArmed(roomID)}',
     );
 
-    final life = WidgetsBinding.instance.lifecycleState;
-    final lockedOrBackground = _isRunningBackground ||
-        life == AppLifecycleState.paused ||
-        life == AppLifecycleState.hidden ||
-        life == AppLifecycleState.detached;
-
-    // Lock-screen red button after answer: always hang up. The 4s settle
-    // used to swallow this — caller kept timing, unlock restored the UI.
-    if ((inCall || acceptSent) && lockedOrBackground) {
+    // Plugin Ended after Answer is the incoming→active UUID swap, not the red
+    // button. Real lock-screen hangup is native CXEndCallAction.
+    if (acceptSent || joining || inCall) {
       Logger.print(
-          'CallKit ended while locked/bg after accept → hangup roomID=$roomKey');
+          'CallKit ended ignored — native hangup owns answered call roomID=$roomKey');
       CallAudioDebugLog.add(
-          'callkit', 'ended locked/bg after accept → hangup roomID=$roomKey');
-      _beCalledEvent = null;
-      _autoPickup = false;
-      _acceptJoinInFlight = null;
-      _acceptJoinRoomID = null;
-      _callSessionGen++;
-      if (info != null) {
-        unawaited(onTapHangup(
-            info..userID = OpenIM.iMManager.userID, _connectedDurationSec(), true));
-      } else {
-        _terminateCallUi(roomKey.isEmpty ? null : roomKey);
-      }
+          'callkit', 'ended ignored answered/joining (native owns hangup) roomID=$roomKey');
+      return;
+    }
+
+    // Prejoin occupies LiveKit during ring — keep ICE; do not treat as hangup.
+    if (ringingPrejoin) {
+      Logger.print(
+          'CallKit ended ignored — ringing prejoin roomID=$roomKey');
+      CallAudioDebugLog.add(
+          'callkit', 'ended ignored ringing prejoin roomID=$roomKey');
       return;
     }
 
@@ -2002,15 +2083,8 @@ mixin OpenIMLive {
     _acceptJoinRoomID = null;
     _callSessionGen++;
 
-    // 3) Already answered — real user End (incl. lock-screen hangup after settle).
-    if (info != null && (inCall || acceptSent)) {
-      Logger.print('CallKit ended after accept → hangup roomID=$roomID');
-      CallAudioDebugLog.add(
-          'callkit', 'ended after accept → hangup roomID=$roomKey');
-      unawaited(onTapHangup(
-          info..userID = OpenIM.iMManager.userID, _connectedDurationSec(), true));
-      return;
-    }
+    // 3) Already answered — native CXEndCallAction owns hangup. Unreachable
+    // hangup-on-plugin-Ended kept out on purpose (Answer UUID swap).
 
     // 4) Still ringing — classify carefully (WeChat/bg false Ends are common).
     if (info != null && !inCall) {
@@ -2057,6 +2131,7 @@ mixin OpenIMLive {
         _callKitAcceptHandledRoomID = roomID;
         _markRoomAnswered(roomID);
         _markCallConnected();
+        _markCallKitAcceptClock(roomID);
         _armCallKitAcceptSettle(roomID);
       }
       _beCalledEvent = null;
@@ -2092,6 +2167,7 @@ mixin OpenIMLive {
           _callKitAcceptHandledRoomID = roomID;
           _markRoomAnswered(roomID);
           _markCallConnected();
+          _markCallKitAcceptClock(roomID);
           _armCallKitAcceptSettle(roomID);
         }
         if (signaling != null) {
@@ -2619,11 +2695,31 @@ mixin OpenIMLive {
 
   Future<void> _prefetchPickupToken(String? roomID) async {
     final id = roomID?.trim() ?? '';
-    if (id.isEmpty) return;
+    if (id.isEmpty || _isRoomEnded(id)) return;
+    if (_userHasAnsweredCall(id) || _isOutboundWaitingRoom(id)) return;
     if (_pickupInFlight != null && _pickupRoomID == id) return;
+    if (OpenIMLiveClient().hasMediaFor(id) &&
+        OpenIMLiveClient().mediaRoom?.localParticipant != null) {
+      return;
+    }
+    String userID = '';
+    for (var i = 0; i < 10; i++) {
+      try {
+        userID = OpenIM.iMManager.userID.trim();
+      } catch (_) {
+        userID = '';
+      }
+      if (userID.isNotEmpty) break;
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      if (_isRoomEnded(id) || _userHasAnsweredCall(id)) return;
+    }
+    if (userID.isEmpty) {
+      Logger.print('prefetch skipped: no IM userID roomID=$id');
+      return;
+    }
     try {
       if (_pickupCertRoomID != id || _pickupCertCache == null) {
-        final cert = await Apis.getTokenForRTC(id, OpenIM.iMManager.userID);
+        final cert = await Apis.getTokenForRTC(id, userID);
         _pickupCertCache = cert;
         _pickupCertRoomID = id;
         Logger.print('prefetch rtc token ok roomID=$id');
