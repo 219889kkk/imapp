@@ -31,6 +31,7 @@ class PushController extends GetxService {
   PushType pushType = PushType.none;
 
   String? _boundAlias;
+  String? _pendingAlias;
   bool _getuiInited = false;
   bool _handlersAttached = false;
   Completer<void>? _unbindCompleter;
@@ -40,8 +41,11 @@ class PushController extends GetxService {
     super.onInit();
     if (_hasGetuiCredentials) {
       pushType = PushType.getui;
-      // Do not start Getui until [login]. startSdk registers APNs and can
-      // stamp the home-screen badge from queued payloads before any account.
+      // Do NOT startSdk here. Overlay-install keeps the previous Getui CID;
+      // registering APNs on the login screen lets queued payloads stamp the
+      // SpringBoard badge (未登录图标未读数). Start only in [login] after IM
+      // session succeeds. Native willPresent / hasLoginSession still wipe
+      // leftover badges if a push slips through.
     } else {
       pushType = PushType.none;
       Logger.print(
@@ -110,15 +114,23 @@ class PushController extends GetxService {
         }
 
         gt.addEventHandler(
-          onReceiveClientId: (res) => _log('clientId', res),
+          onReceiveClientId: (res) async {
+            await _log('clientId', res);
+            _bindPendingAlias();
+          },
           onReceiveOnlineState: (res) => _log('online', res),
           onRegisterDeviceToken: (res) => _log('deviceToken', res),
           onReceivePayload: (msg) => _log('payload', msg),
           onReceiveNotificationResponse: (msg) =>
               _log('notificationResponse', msg),
           onTransmitUserMessageReceive: (msg) => _log('userMessage', msg),
-          onNotificationMessageArrived: (msg) =>
-              _log('notificationArrived', msg),
+          onNotificationMessageArrived: (msg) async {
+            await _log('notificationArrived', msg);
+            if (!SessionGuard.shouldNotify) {
+              Logger.print(
+                  'Getui notification arrived while logged out — ignore (badge wipe is native)');
+            }
+          },
           onNotificationMessageClicked: (msg) =>
               _log('notificationClicked', msg),
           onAppLinkPayload: (res) => _log('appLink', res),
@@ -129,7 +141,12 @@ class PushController extends GetxService {
             _unbindCompleter?.complete();
           },
           onQueryTagResult: (msg) => _log('queryTag', msg),
-          onWillPresentNotification: (msg) => _log('willPresent', msg),
+          onWillPresentNotification: (msg) async {
+            await _log('willPresent', msg);
+            if (!SessionGuard.shouldNotify) {
+              Logger.print('Getui willPresent ignored — not logged in');
+            }
+          },
           onOpenSettingsForNotification: (msg) =>
               _log('openSettings', msg),
           onGrantAuthorization: (res) => _log('grantAuth', res),
@@ -158,6 +175,20 @@ class PushController extends GetxService {
       _getuiInited = false;
     }
   }
+
+  void _bindPendingAlias() {
+    // Alias bind is not a login-screen start. SDK is only running after IM login.
+    final alias = _pendingAlias?.trim() ?? '';
+    if (alias.isEmpty || !_getuiInited) return;
+    try {
+      final sn = 'alias_${DateTime.now().millisecondsSinceEpoch}';
+      Getuiflut().bindAlias(alias, sn);
+      _boundAlias = alias;
+      Logger.print('Getui bindAlias: $alias sn=$sn');
+    } catch (e, s) {
+      Logger.print('Getui bindAlias failed: $e $s');
+    }
+  }
 }
 
 class GetuiPushController {
@@ -170,14 +201,8 @@ class GetuiPushController {
         ? Get.find<PushController>()
         : null;
     push?._ensureGetuiStarted();
-    try {
-      final sn = 'alias_${DateTime.now().millisecondsSinceEpoch}';
-      Getuiflut().bindAlias(alias, sn);
-      push?._boundAlias = alias;
-      Logger.print('Getui bindAlias: $alias sn=$sn');
-    } catch (e, s) {
-      Logger.print('Getui bindAlias failed: $e $s');
-    }
+    push?._pendingAlias = alias;
+    push?._bindPendingAlias();
   }
 
   void _logout() {
@@ -189,6 +214,7 @@ class GetuiPushController {
         ? Get.find<PushController>()
         : null;
     final alias = push?._boundAlias;
+    push?._pendingAlias = null;
     if (alias == null || alias.isEmpty) return;
     try {
       final sn = 'unalias_${DateTime.now().millisecondsSinceEpoch}';

@@ -43,7 +43,7 @@ class Apis {
         'password': null != password ? IMUtils.generateMD5(password) : null,
         'platform': IMUtils.getPlatform(),
         'verifyCode': verificationCode,
-      });
+      }, showErrorToast: false);
       final cert = LoginCertificate.fromJson(data!);
 
       return cert;

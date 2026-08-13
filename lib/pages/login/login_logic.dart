@@ -137,37 +137,61 @@ class LoginLogic extends GetxController {
 
   void login() {
     DataSp.putLoginType(LoginType.account.rawValue);
+    if (account?.isNotEmpty != true) {
+      IMViews.showToast(StrRes.plsEnterRightAccount);
+      return;
+    }
     // Prefer EasyLoading over Overlay LoadingView to avoid stuck blank masks.
     EasyLoading.show(status: '登录中...', dismissOnTap: false);
     () async {
+      String? err;
       try {
         final suc = await _login();
         if (!suc) return;
         final result = await ConversationLogic.getConversationFirstPage();
         Get.find<CacheController>().resetCache();
-        await EasyLoading.dismiss();
-        LoadingView.singleton.dismiss();
         AppNavigator.startMain(conversations: result);
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          EasyLoading.dismiss();
-          LoadingView.singleton.dismiss();
-        });
       } catch (e, s) {
         Logger.print('login flow e: $e $s');
-        IMViews.showToast('$e');
+        err = _loginErrorMessage(e);
       } finally {
         await EasyLoading.dismiss();
         LoadingView.singleton.dismiss();
       }
+      if (err != null) {
+        IMViews.showToast(err);
+      }
     }();
+  }
+
+  String _loginErrorMessage(Object e) {
+    int? code;
+    String? msg;
+    if (e is (int, String?)) {
+      code = e.$1;
+      msg = e.$2;
+    } else {
+      final s = e.toString();
+      final m = RegExp(r'\b(\d{5,6})\b').firstMatch(s);
+      if (m != null) code = int.tryParse(m.group(1)!);
+      msg = s;
+    }
+    if (code != null) {
+      final key = '$code';
+      final localized = key.tr;
+      if (localized != key) return localized;
+    }
+    if (msg != null &&
+        msg.trim().isNotEmpty &&
+        !msg.contains('接口：') &&
+        msg != 'null') {
+      return msg;
+    }
+    return StrRes.networkError;
   }
 
   Future<bool> _login() async {
     try {
-      if (account?.isNotEmpty != true) {
-        IMViews.showToast(StrRes.plsEnterRightAccount);
-        return false;
-      }
       final hostBefore = Config.serverIp;
       await ServerEndpointSelector.ensureBestEndpoint();
       HttpUtil.updateBaseUrl();
@@ -204,8 +228,8 @@ class LoginLogic extends GetxController {
       return true;
     } catch (e, s) {
       Logger.print('login e: $e $s');
+      rethrow;
     }
-    return false;
   }
 
   void registerNow() => AppNavigator.startRegister();

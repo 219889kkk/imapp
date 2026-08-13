@@ -141,8 +141,10 @@ class AppController extends GetxController
     _syncStylesTheme();
     _initPlayer();
 
-    // Overlay IPA keeps DataSp tokens + UserDefaults. Disarm native badge
-    // immediately; splash/login re-arms only after IM login succeeds.
+    // Overlay IPA keeps DataSp tokens + UserDefaults. Always disarm native
+    // badge until IM login succeeds — otherwise 未登录桌面图标会显示未读数.
+    // Getui SDK must not start here (see PushController); APNs registration
+    // would stamp queued badges onto the login-screen icon.
     SessionGuard.markLoggedOut();
     unawaited(syncNativeLoginHint(false));
     clearBadgeForLoggedOut();

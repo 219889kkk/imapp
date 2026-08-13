@@ -45,19 +45,22 @@ class SplashLogic extends GetxController {
   }
 
   Future<void> _boot() async {
-    // Overlay reinstall can still have tokens. Keep native badge disarmed
-    // until IM login succeeds — leftover UserDefaults must not skip wipes.
-    SessionGuard.markLoggedOut();
-    await appLogic.syncNativeLoginHint(false);
-    appLogic.clearBadgeForLoggedOut();
     final hasSession = (userID?.trim().isNotEmpty ?? false) &&
         (token?.trim().isNotEmpty ?? false);
+    // AppController.onInit already disarmed badge + native login hint.
+    // Only repeat that when there is truly no session. With leftover tokens we
+    // still wait for IM login before PushController.login starts Getui.
+    if (!hasSession) {
+      SessionGuard.markLoggedOut();
+      await appLogic.syncNativeLoginHint(false);
+      appLogic.clearBadgeForLoggedOut();
+    }
 
     // No artificial countdown — leave as soon as SDK init finishes (or times out).
     final sdkOk = await _sdkReady.future;
     if (isClosed) return;
 
-    if (sdkOk && null != userID && null != token) {
+    if (sdkOk && hasSession) {
       final hostBefore = Config.serverIp;
       await ServerEndpointSelector.ensureBestEndpoint();
       HttpUtil.updateBaseUrl();

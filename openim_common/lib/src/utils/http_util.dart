@@ -129,7 +129,8 @@ class HttpUtil {
     if (resp.errCode == 0) return Future.value(resp.data);
     Logger.print(
         'API error: errCode=${resp.errCode}, errMsg=${resp.errMsg}, errDlt=${resp.errDlt}');
-    if (showErrorToast) {
+    // Never toast under a blocking EasyLoading — dismiss() would eat the toast.
+    if (showErrorToast && !EasyLoading.isShow) {
       IMViews.showToast(_resolveErrorMessage(resp));
     }
     return Future.error((resp.errCode, resp.errMsg));
