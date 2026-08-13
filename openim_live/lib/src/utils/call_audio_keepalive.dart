@@ -48,7 +48,6 @@ class CallAudioKeepAlive with WidgetsBindingObserver {
     if (skipSessionActivation) _callKitOwnsSession = true;
     if (_callKitOwnsSession || skipSessionActivation) {
       // CallKit path: only skip setActive while session is actually live.
-      // After didDeactivate, owns flag can be stale — must take over or stay silent.
       if (Platform.isIOS) {
         final on = await IosWebRtcAudio.isEnabled();
         if (on) {
@@ -58,12 +57,13 @@ class CallAudioKeepAlive with WidgetsBindingObserver {
           );
           return;
         }
+        // Audio off is normal while CallKit is still RINGING (and in the
+        // brief window before didActivate). setActive here steals the
+        // session and iOS hangs the incoming CXCall after one ring.
         CallAudioDebugLog.add(
           'keepalive',
-          'prepareForRtc CallKit flag but audio off — takeover enable',
+          'prepareForRtc no takeover — CallKit audio not live yet',
         );
-        _callKitOwnsSession = false;
-        await IosWebRtcAudio.ensureEnabled(speakerOn: speakerOn);
         return;
       }
       CallAudioDebugLog.add(

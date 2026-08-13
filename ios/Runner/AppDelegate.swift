@@ -603,12 +603,10 @@ import flutter_callkit_incoming
         // Dart isolate is often not listening yet on killed-app VoIP wake.
         // Persist + retries so prejoin starts while CallKit is still ringing.
         DispatchQueue.main.async { fire() }
-        for delay in [0.4, 1.0, 2.0, 4.0] as [TimeInterval] {
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-                guard let self = self else { return }
-                if self.pendingIncomingRoomID() == roomID {
-                    fire()
-                }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+            guard let self = self else { return }
+            if self.pendingIncomingRoomID() == roomID {
+                fire()
             }
         }
     }
