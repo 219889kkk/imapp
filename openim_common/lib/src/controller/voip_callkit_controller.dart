@@ -512,6 +512,10 @@ class VoipCallkitController extends GetxService {
       Logger.print('CallKit event: ${event.event} body=${event.body}');
       switch (event.event) {
         case Event.actionCallIncoming:
+          if (_isNonInviteVoipFulfill(event.body)) {
+            Logger.print('CallKit incoming ignored — non-invite VoIP fulfill');
+            break;
+          }
           final incoming = signalingFromCallKitBody(event.body);
           final incomingRoom = incoming?.invitation?.roomID?.trim() ?? '';
           noteIncomingPresented(
@@ -541,6 +545,9 @@ class VoipCallkitController extends GetxService {
           _onAccept(event.body);
           break;
         case Event.actionCallDecline:
+          if (_isNonInviteVoipFulfill(event.body)) {
+            break;
+          }
           callKitActive.value = false;
           _incomingRoomID = null;
           _onDecline(event.body);
@@ -577,6 +584,28 @@ class VoipCallkitController extends GetxService {
           break;
       }
     });
+  }
+
+  bool _isNonInviteVoipFulfill(dynamic body) {
+    final extra = _extraOf(body);
+    if (extra['silentFulfill'] == true || extra['silentFulfill'] == 'true') {
+      return true;
+    }
+    var action = extra['action']?.toString();
+    if ((action == null || action.isEmpty) && body is Map) {
+      action = body['action']?.toString();
+    }
+    switch (action?.toLowerCase().trim()) {
+      case 'accept':
+      case 'answered':
+      case 'cancel':
+      case 'end':
+      case 'hungup':
+      case 'reject':
+        return true;
+      default:
+        return false;
+    }
   }
 
   Map<String, dynamic> _extraOf(dynamic body) {

@@ -159,8 +159,17 @@ mixin OpenIMLive {
 
   /// Tear down in-app + system call UI for [roomID] (peer hangup / cancel).
   void _terminateCallUi(String? roomID) {
-    _markRoomEnded(roomID);
     final id = roomID?.trim() ?? '';
+    final active = _activeCallSignaling?.invitation?.roomID?.trim() ?? '';
+    // Ghost / stale CallKit UUID must not wipe the live invite or answered call.
+    if (id.isNotEmpty && active.isNotEmpty && id != active) {
+      CallAudioDebugLog.add(
+          'callkit', 'terminate ignored — room mismatch id=$id active=$active');
+      unawaited(
+          VoipCallkitController.toOrNull?.endCall(id) ?? Future.value());
+      return;
+    }
+    _markRoomEnded(roomID);
     if (id.isNotEmpty) _peerAcceptedRooms.remove(id);
     _callConnectedAtMs = null;
     _clearPickupCache();
@@ -387,7 +396,7 @@ mixin OpenIMLive {
     if (id.isEmpty) return false;
     final at = _callKitAcceptAtMs[id];
     if (at == null) return false;
-    return DateTime.now().millisecondsSinceEpoch - at < 1500;
+    return DateTime.now().millisecondsSinceEpoch - at < 2000;
   }
 
   /// LiveKit identity + chat HTTP token — available from disk before IM WS login.
@@ -443,9 +452,10 @@ mixin OpenIMLive {
   Future<void>? _prefetchTask;
   String? _prefetchTaskRoomID;
 
-  /// Millis when CallKit Answer was handled — ignore native End echo (~1.5s).
+  /// Millis when CallKit Answer was handled — ignore native End echo (~2s).
   final Map<String, int> _callKitAcceptAtMs = {};
   int _nativeEndDeferGen = 0;
+  int _declineDeferGen = 0;
 
   /// Recently ended roomIDs — ignore late/synced invites (WeChat-like).
   final Map<String, int> _endedRoomUntilMs = {};
@@ -559,6 +569,30 @@ mixin OpenIMLive {
     if (inviter != self) return false;
     if (activeRoom.isNotEmpty && activeRoom != id) return false;
     return true;
+  }
+
+  /// True if [roomID] is the live invite / answered call — not a ghost CallKit UUID.
+  bool _isKnownActiveCallRoom(String? roomID) {
+    final id = roomID?.trim() ?? '';
+    if (id.isEmpty) return false;
+    final active = _activeCallSignaling?.invitation?.roomID?.trim() ?? '';
+    if (active == id) return true;
+    final incoming = VoipCallkitController.toOrNull?.incomingRoomID?.trim() ?? '';
+    if (incoming == id) return true;
+    if (_callKitAcceptHandledRoomID == id) return true;
+    if (_answeredRoomUntilMs.containsKey(id)) return true;
+    final current = OpenIMLiveClient().currentRoomID?.trim() ?? '';
+    return current == id;
+  }
+
+  bool _shouldIgnoreDeclineAsAnswerEcho(String? roomID) {
+    final id = roomID?.trim() ?? '';
+    if (id.isEmpty) return false;
+    return _userHasAnsweredCall(id) ||
+        _isNativeAnswerEndEcho(id) ||
+        _isCallKitAcceptSettleArmed(id) ||
+        _isAcceptInProgressForRoom(id) ||
+        _isOutboundWaitingRoom(id);
   }
 
   void _cancelRingTimeout() {
@@ -1933,14 +1967,59 @@ mixin OpenIMLive {
 
   void _onCallKitDecline(SignalingInfo signaling) {
     final resolved = _resolveIncomingSignaling(signaling) ?? signaling;
-    final roomID = resolved.invitation?.roomID?.trim() ?? '';
+    var roomID = resolved.invitation?.roomID?.trim() ?? '';
+    if (roomID.isEmpty) {
+      roomID = _activeCallSignaling?.invitation?.roomID?.trim() ?? '';
+    }
     // Programmatic endCall while switching to in-app UI must not reject.
+    if (roomID.isEmpty) {
+      CallAudioDebugLog.add('callkit', 'decline ignored empty room');
+      return;
+    }
     if (_isCallKitUiDismissArmed(roomID) || _isRoomEnded(roomID)) {
       Logger.print('CallKit decline ignored — uiDismiss/ended roomID=$roomID');
       CallAudioDebugLog.add(
           'callkit', 'decline ignored uiDismiss roomID=$roomID');
       return;
     }
+    if (roomID.isNotEmpty && !_isKnownActiveCallRoom(roomID)) {
+      CallAudioDebugLog.add(
+          'callkit', 'decline ignored unknown roomID=$roomID');
+      unawaited(
+          VoipCallkitController.toOrNull?.endCall(roomID) ?? Future.value());
+      return;
+    }
+    if (_shouldIgnoreDeclineAsAnswerEcho(roomID)) {
+      CallAudioDebugLog.add(
+          'callkit', 'decline ignored answer-echo roomID=$roomID');
+      return;
+    }
+    // Plugin maps CXEndCallAction to Decline whenever answerCall is still nil.
+    // Lock-screen Answer often delivers End before Accept — wait before reject.
+    unawaited(_deferredDeclineWhileRinging(resolved, roomID));
+  }
+
+  Future<void> _deferredDeclineWhileRinging(
+    SignalingInfo resolved,
+    String roomID,
+  ) async {
+    final gen = ++_declineDeferGen;
+    await Future<void>.delayed(const Duration(milliseconds: 2000));
+    if (gen != _declineDeferGen) return;
+    if (_isCallKitUiDismissArmed(roomID) || _isRoomEnded(roomID)) return;
+    if (_shouldIgnoreDeclineAsAnswerEcho(roomID)) {
+      CallAudioDebugLog.add(
+          'callkit', 'deferred decline dropped — already answered roomID=$roomID');
+      return;
+    }
+    final voip = VoipCallkitController.toOrNull;
+    if (voip?.ownsIncomingUi == true) {
+      CallAudioDebugLog.add(
+          'callkit', 'deferred decline dropped — still ringing roomID=$roomID');
+      return;
+    }
+    CallAudioDebugLog.add(
+        'callkit', 'decline confirmed — reject roomID=$roomID');
     _stopSound();
     PackageBridge.clearCallNotification?.call();
     _beCalledEvent = null;
@@ -1993,6 +2072,11 @@ mixin OpenIMLive {
           'callkit', 'native user end ignored uiDismiss/ended roomID=$id');
       return;
     }
+    if (id.isNotEmpty && !_isKnownActiveCallRoom(id)) {
+      CallAudioDebugLog.add(
+          'callkit', 'native user end ignored unknown roomID=$id');
+      return;
+    }
     final info = _resolveIncomingSignaling(_activeCallSignaling) ??
         _activeCallSignaling;
     final infoRoom = info?.invitation?.roomID?.trim() ?? '';
@@ -2026,7 +2110,7 @@ mixin OpenIMLive {
 
   Future<void> _deferredNativeEndWhileRinging(String id) async {
     final gen = ++_nativeEndDeferGen;
-    await Future<void>.delayed(const Duration(milliseconds: 500));
+    await Future<void>.delayed(const Duration(milliseconds: 2000));
     if (gen != _nativeEndDeferGen) return;
     if (_isRoomEnded(id) || _isCallKitUiDismissArmed(id)) return;
     if (_userHasAnsweredCall(id) || _isNativeAnswerEndEcho(id)) {
@@ -2070,6 +2154,16 @@ mixin OpenIMLive {
       Logger.print('CallKit ended ignored — uiDismiss/ended roomID=$roomKey');
       CallAudioDebugLog.add(
           'callkit', 'ended ignored uiDismiss roomID=$roomKey');
+      return;
+    }
+    if (roomKey.isNotEmpty && !_isKnownActiveCallRoom(roomKey)) {
+      CallAudioDebugLog.add(
+          'callkit', 'ended ignored unknown roomID=$roomKey');
+      return;
+    }
+    if (_isOutboundWaitingRoom(roomKey)) {
+      CallAudioDebugLog.add(
+          'callkit', 'ended ignored outbound waiting roomID=$roomKey');
       return;
     }
 
@@ -2787,8 +2881,10 @@ mixin OpenIMLive {
           _pickupCertRoomID = id;
           Logger.print('prefetch rtc token ok roomID=$id');
         }
-        // Token only. PeerConnection during CallKit ring steals the audio
-        // session and iOS ends the incoming call after one ring.
+        final cert = _pickupCertCache;
+        if (cert != null && Platform.isIOS) {
+          unawaited(_warmIncomingIce(cert));
+        }
       } catch (e, s) {
         Logger.print('prefetch rtc token failed roomID=$id: $e $s');
       }
@@ -2801,6 +2897,41 @@ mixin OpenIMLive {
         _prefetchTask = null;
         _prefetchTaskRoomID = null;
       }
+    }
+  }
+
+  /// Join LiveKit while CallKit is still ringing: TURN/ICE only.
+  /// Must not publish mic, subscribe remote audio, or setActive — that kills
+  /// the incoming CXCall. Accept then only enables mic + subscribe.
+  Future<void> _warmIncomingIce(SignalingCertificate cert) async {
+    final roomID = cert.roomID?.trim() ?? '';
+    if (roomID.isEmpty || _isRoomEnded(roomID) || _userHasAnsweredCall(roomID)) {
+      return;
+    }
+    if (_isOutboundWaitingRoom(roomID)) return;
+    final client = OpenIMLiveClient();
+    if (client.hasMediaFor(roomID) || client.isMediaConnecting) return;
+    client.beginIncomingPrejoin(roomID);
+    CallAudioDebugLog.add('prejoin', 'ICE warmup start roomID=$roomID');
+    try {
+      await client.connectMedia(
+        certificate: cert,
+        callType: CallType.audio,
+        speakerOn: false,
+        enableCamera: false,
+        enableMicrophone: false,
+        enableKeepAlive: false,
+        skipSessionActivation: true,
+        ringingIceWarmup: true,
+      );
+      CallAudioDebugLog.add(
+        'prejoin',
+        'ICE warmup ready roomID=$roomID remotes=${client.mediaRoom?.remoteParticipants.length ?? 0}',
+      );
+    } catch (e, s) {
+      client.endIncomingPrejoin();
+      Logger.print('ICE warmup failed roomID=$roomID: $e $s');
+      CallAudioDebugLog.add('prejoin', 'ICE warmup failed roomID=$roomID err=$e');
     }
   }
 

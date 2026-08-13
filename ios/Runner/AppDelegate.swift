@@ -17,6 +17,9 @@ import flutter_callkit_incoming
     var hasEmittedFirstSample = false
     private var voipRegistry: PKPushRegistry?
     private var voipPushDelegate: HangXunVoipPushDelegate?
+    /// Fulfill non-invite VoIP without going through the plugin (no fake incoming UI).
+    private var voipFulfillProvider: CXProvider?
+    private var lastCallKitAcceptAt: TimeInterval = 0
     /// roomID → endedAt (ignore late PushKit invites that re-show CallKit).
     private var endedVoipRooms: [String: Date] = [:]
     private let endedVoipRoomTTL: TimeInterval = 120
@@ -227,6 +230,7 @@ import flutter_callkit_incoming
     /// Dart handles accept via FlutterCallkitIncoming.onEvent — fulfill so CallKit activates audio.
     func onAccept(_ call: Call, _ action: CXAnswerCallAction) {
         NSLog("HangXun CallKit: onAccept room=%@", call.data.uuid)
+        lastCallKitAcceptAt = Date().timeIntervalSince1970
         // Configure category BEFORE fulfill so CallKit can activate session on lock screen.
         // Do NOT setActive here — CallKit owns activation (didActivateAudioSession).
         let session = AVAudioSession.sharedInstance()
@@ -285,7 +289,8 @@ import flutter_callkit_incoming
     }
 
     func onDecline(_ call: Call, _ action: CXEndCallAction) {
-        NSLog("HangXun CallKit: onDecline room=%@", call.data.uuid)
+        let sinceAccept = Date().timeIntervalSince1970 - lastCallKitAcceptAt
+        NSLog("HangXun CallKit: onDecline room=%@ sinceAccept=%.3f", call.data.uuid, sinceAccept)
         action.fulfill()
     }
 
@@ -649,12 +654,8 @@ import flutter_callkit_incoming
         if action == "accept" || action == "answered" {
             NSLog("HangXun VoIP peer accept room=%@", roomID)
             notifyDartVoipRemoteEnd(roomID: roomID, action: "accept")
-            // Caller-side push: never attach an incoming CXCall to the room UUID.
-            if mustReport {
-                fulfillVoipGhost(completion: completion)
-            } else {
-                completion()
-            }
+            // Caller already has outbound UI. Never show a second incoming banner.
+            fulfillVoipWithoutIncomingUi(mustReport: mustReport, completion: completion)
             return
         }
 
@@ -723,11 +724,16 @@ import flutter_callkit_incoming
         let data = incomingCallKitData(roomID: roomID, dict: dict)
         let appState = UIApplication.shared.applicationState
         NSLog("HangXun VoIP: report CallKit room=%@ state=%ld", roomID, appState.rawValue)
-        SwiftFlutterCallkitIncomingPlugin.sharedInstance?.showCallkitIncoming(data, fromPushKit: true)
+        if let plugin = SwiftFlutterCallkitIncomingPlugin.sharedInstance {
+            plugin.showCallkitIncoming(data, fromPushKit: true) {
+                completion()
+            }
+        } else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45, execute: completion)
+        }
         if notifyDart {
             notifyDartVoipCallKitPresented(roomID: roomID)
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45, execute: completion)
     }
 
     private func callKitHasUUID(_ roomID: String) -> Bool {
@@ -735,7 +741,7 @@ import flutter_callkit_incoming
         return CXCallObserver().calls.contains { $0.uuid.uuidString.lowercased() == target }
     }
 
-    /// Cancel / stale: end an existing CXCall, or report-then-end if none exists.
+    /// Cancel / stale: end an existing CXCall. Never show a new incoming banner.
     private func fulfillVoipEndAction(
         roomID: String,
         dict: [String: Any],
@@ -747,30 +753,38 @@ import flutter_callkit_incoming
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: completion)
             return
         }
-        if mustReport {
-            fulfillVoipThenEnd(roomID: roomID, dict: dict, completion: completion)
-        } else {
-            completion()
-        }
+        fulfillVoipWithoutIncomingUi(mustReport: mustReport, completion: completion)
     }
 
-    /// Report then end so cancel/stale pushes still satisfy iOS 13+/26 VoIP rules.
-    private func fulfillVoipThenEnd(
-        roomID: String,
-        dict: [String: Any],
+    /// iOS 13+/26 require a CallKit report for some VoIP wakes. Do it without
+    /// plugin Incoming/Decline events and without a visible fake incoming call.
+    private func fulfillVoipWithoutIncomingUi(
+        mustReport: Bool,
         completion: @escaping () -> Void
     ) {
-        let data = incomingCallKitData(roomID: roomID, dict: dict)
-        let plugin = SwiftFlutterCallkitIncomingPlugin.sharedInstance
-        plugin?.showCallkitIncoming(data, fromPushKit: true)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-            plugin?.endCall(data)
+        let state = UIApplication.shared.applicationState
+        if !mustReport || state == .active || state == .inactive {
+            NSLog("HangXun VoIP: skip incoming UI fulfill mustReport=%@ state=%ld", mustReport ? "1" : "0", state.rawValue)
+            completion()
+            return
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: completion)
-    }
-
-    private func fulfillVoipGhost(completion: @escaping () -> Void) {
-        fulfillVoipThenEnd(roomID: UUID().uuidString, dict: [:], completion: completion)
+        let uuid = UUID()
+        let update = CXCallUpdate()
+        update.remoteHandle = CXHandle(type: .generic, value: "hangxun")
+        update.localizedCallerName = "航讯"
+        update.hasVideo = false
+        if voipFulfillProvider == nil {
+            let config = CXProviderConfiguration()
+            config.supportedHandleTypes = [.generic]
+            config.maximumCallGroups = 1
+            config.maximumCallsPerCallGroup = 1
+            voipFulfillProvider = CXProvider(configuration: config)
+        }
+        let provider = voipFulfillProvider!
+        provider.reportNewIncomingCall(with: uuid, update: update) { _ in
+            provider.reportCall(with: uuid, endedAt: Date(), reason: .declinedElsewhere)
+            DispatchQueue.main.async(execute: completion)
+        }
     }
 
     func handleReplayKitFromFlutter(result: FlutterResult, call: FlutterMethodCall) {
