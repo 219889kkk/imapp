@@ -83,13 +83,11 @@ class VoipCallkitController extends GetxService {
     if (id.isEmpty) return;
     _incomingRoomID = id;
     callKitActive.value = true;
-    final first = !_incomingPresentedAtMs.containsKey(id);
     _incomingPresentedAtMs.putIfAbsent(
         id, () => DateTime.now().millisecondsSinceEpoch);
     Logger.print('CallKit noted presented roomID=$id');
-    if (first) {
-      PackageBridge.onIncomingCallPresented?.call(id);
-    }
+    // Always notify — first invoke often arrives before OpenIMLive is wired.
+    PackageBridge.onIncomingCallPresented?.call(id);
   }
 
   /// After a false Timeout/Ended, try one re-show if the invite is still live.
@@ -117,6 +115,13 @@ class VoipCallkitController extends GetxService {
     if (Platform.isIOS) {
       _listenNativeVoipChannel();
       _refreshVoipToken();
+      unawaited(_pullPendingIncomingRoom());
+      Future<void>.delayed(const Duration(milliseconds: 800), () {
+        unawaited(_pullPendingIncomingRoom());
+      });
+      Future<void>.delayed(const Duration(milliseconds: 2500), () {
+        unawaited(_pullPendingIncomingRoom());
+      });
     }
   }
 
@@ -327,6 +332,20 @@ class VoipCallkitController extends GetxService {
     if (t.length < 32) return false;
     if (RegExp(r'^(b|0|f)+$', caseSensitive: false).hasMatch(t)) return false;
     return true;
+  }
+
+  Future<void> _pullPendingIncomingRoom() async {
+    if (!Platform.isIOS) return;
+    try {
+      final raw =
+          await _nativeChannel.invokeMethod<String>('getPendingIncomingRoom');
+      final id = (raw ?? '').trim();
+      if (id.isEmpty) return;
+      Logger.print('CallKit pending incoming from native roomID=$id');
+      noteIncomingPresented(id);
+    } catch (e) {
+      Logger.print('getPendingIncomingRoom failed: $e');
+    }
   }
 
   void _listenNativeVoipChannel() {

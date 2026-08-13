@@ -102,6 +102,11 @@ import flutter_callkit_incoming
                 result(env)
             case "isApplicationActive":
                 result(UIApplication.shared.applicationState == .active)
+            case "getPendingIncomingRoom":
+                result(self.pendingIncomingRoomID())
+            case "clearPendingIncomingRoom":
+                self.clearPendingIncomingRoom()
+                result(true)
             default:
                 result(FlutterMethodNotImplemented)
             }
@@ -481,6 +486,11 @@ import flutter_callkit_incoming
         pruneEndedVoipRooms()
         endedVoipRooms[id] = Date()
         persistEndedVoipRooms()
+        let pending = (UserDefaults.standard.string(forKey: pendingIncomingRoomKey) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if pending == id {
+            clearPendingIncomingRoom()
+        }
     }
 
     private func isVoipRoomEnded(_ roomID: String) -> Bool {
@@ -550,11 +560,56 @@ import flutter_callkit_incoming
         }
     }
 
+    private let pendingIncomingRoomKey = "hangxun.pendingIncomingRoomID"
+    private let pendingIncomingAtKey = "hangxun.pendingIncomingAt"
+    private let pendingIncomingTTL: TimeInterval = 60
+
+    private func persistPendingIncomingRoom(_ roomID: String) {
+        let id = roomID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !id.isEmpty else { return }
+        UserDefaults.standard.set(id, forKey: pendingIncomingRoomKey)
+        UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: pendingIncomingAtKey)
+    }
+
+    private func pendingIncomingRoomID() -> String {
+        let id = (UserDefaults.standard.string(forKey: pendingIncomingRoomKey) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !id.isEmpty else { return "" }
+        if isVoipRoomEnded(id) {
+            clearPendingIncomingRoom()
+            return ""
+        }
+        let at = UserDefaults.standard.double(forKey: pendingIncomingAtKey)
+        if at > 0, Date().timeIntervalSince1970 - at > pendingIncomingTTL {
+            clearPendingIncomingRoom()
+            return ""
+        }
+        return id
+    }
+
+    private func clearPendingIncomingRoom() {
+        UserDefaults.standard.removeObject(forKey: pendingIncomingRoomKey)
+        UserDefaults.standard.removeObject(forKey: pendingIncomingAtKey)
+    }
+
     private func notifyDartVoipCallKitPresented(roomID: String) {
-        DispatchQueue.main.async {
+        persistPendingIncomingRoom(roomID)
+        let fire: () -> Void = { [weak self] in
+            guard let self = self else { return }
             self.voipChannel?.invokeMethod("onVoipCallKitPresented", arguments: [
                 "roomID": roomID,
             ])
+        }
+        // Dart isolate is often not listening yet on killed-app VoIP wake.
+        // Persist + retries so prejoin starts while CallKit is still ringing.
+        DispatchQueue.main.async { fire() }
+        for delay in [0.4, 1.0, 2.0, 4.0] as [TimeInterval] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self = self else { return }
+                if self.pendingIncomingRoomID() == roomID {
+                    fire()
+                }
+            }
         }
     }
 

@@ -383,6 +383,26 @@ mixin OpenIMLive {
     return DateTime.now().millisecondsSinceEpoch - at < 1500;
   }
 
+  /// LiveKit identity + chat HTTP token — available from disk before IM WS login.
+  String _rtcUserID() {
+    try {
+      final id = OpenIM.iMManager.userID.trim();
+      if (id.isNotEmpty) return id;
+    } catch (_) {}
+    return DataSp.userID?.trim() ?? '';
+  }
+
+  Future<String> _waitRtcUserID({int maxMs = 8000}) async {
+    final deadline = DateTime.now().millisecondsSinceEpoch + maxMs;
+    while (DateTime.now().millisecondsSinceEpoch < deadline) {
+      final id = _rtcUserID();
+      final tok = DataSp.chatToken?.trim() ?? '';
+      if (id.isNotEmpty && tok.isNotEmpty) return id;
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    }
+    return _rtcUserID();
+  }
+
   void _markCallKitAcceptClock(String? roomID) {
     final id = roomID?.trim() ?? '';
     if (id.isEmpty) return;
@@ -413,6 +433,8 @@ mixin OpenIMLive {
   String? _pickupRoomID;
   SignalingCertificate? _pickupCertCache;
   String? _pickupCertRoomID;
+  Future<void>? _prefetchTask;
+  String? _prefetchTaskRoomID;
 
   /// Millis when CallKit Answer was handled — ignore native End echo (~1.5s).
   final Map<String, int> _callKitAcceptAtMs = {};
@@ -619,6 +641,11 @@ mixin OpenIMLive {
     PackageBridge.onCallKitAudioActivated = _onCallKitAudioActivated;
     PackageBridge.onCallKitAudioDeactivated = _onCallKitAudioDeactivated;
     PackageBridge.connectedCallDurationSec = _connectedDurationSec;
+    // VoIP presented before this mixin was wired — start ICE immediately.
+    final pendingIncoming = VoipCallkitController.toOrNull?.incomingRoomID;
+    if (pendingIncoming != null && pendingIncoming.isNotEmpty) {
+      unawaited(_prefetchPickupToken(pendingIncoming));
+    }
     _signalingListener();
     _insertSignalingMessageListener();
     _bindLiveAlertButtons();
@@ -1186,7 +1213,15 @@ mixin OpenIMLive {
     }
 
     final client = OpenIMLiveClient();
-    if (client.hasMediaFor(roomID) && client.mediaCertificate != null) {
+    // Ringing prejoin / in-flight ICE is NOT an answered call — still must
+    // send callingAccept and publish the mic. Returning here left lock-screen
+    // answers silent until some later kickstart.
+    final alreadyInCall = client.hasMediaFor(roomID) &&
+        client.mediaCertificate != null &&
+        !client.hasRingingPrejoin &&
+        !client.isMediaConnecting &&
+        client.mediaRoom?.localParticipant != null;
+    if (alreadyInCall) {
       Logger.print('acceptIncomingCall: reuse media roomID=$roomID');
       CallAudioDebugLog.add('accept', 'reuse media roomID=$roomID');
       if (presentUiAfter && !client.hasOverlay) {
@@ -1397,19 +1432,36 @@ mixin OpenIMLive {
     // Token + accept signal in parallel with audio prep so ICE starts immediately.
     if (isCallKitAccept) {
       _ensureIosCallKitAudioGate();
-    }
-    final pickupFuture =
-        onTapPickup(signaling..userID = OpenIM.iMManager.userID);
-    if (isCallKitAccept) {
       unawaited(_waitForIosCallKitAudio(
           speakerOn: OpenIMLiveClient().userSpeakerPreference));
-      await _refreshHeadlessMicPending();
     } else if (Platform.isIOS) {
       CallAudioKeepAlive.instance.releaseCallKitSession();
       unawaited(_prewarmInAppCallAudio(force: true));
     }
 
-    final cert = await pickupFuture;
+    // Do not await permission_handler on lock screen — it stalls join and
+    // often reports denied, which used to publish no mic. CallKit already
+    // owns the mic. In-app already passed requestPermissions above.
+    final micGranted = true;
+    unawaited(_refreshHeadlessMicPending());
+
+    final pickupFuture =
+        onTapPickup(signaling..userID = _rtcUserID());
+
+    if (_prefetchTask != null && _prefetchTaskRoomID == roomID) {
+      await _prefetchTask;
+    }
+
+    final liveClient = OpenIMLiveClient();
+    final SignalingCertificate cert;
+    if (liveClient.mediaCertificate != null &&
+        (liveClient.hasMediaFor(roomID) || liveClient.isMediaConnecting)) {
+      cert = liveClient.mediaCertificate!;
+    } else if (_pickupCertRoomID == roomID && _pickupCertCache != null) {
+      cert = _pickupCertCache!;
+    } else {
+      cert = await pickupFuture;
+    }
     if (gen != _callSessionGen || _isRoomEnded(roomID)) {
       Logger.print('abort accept join after hangup roomID=$roomID');
       if (roomID != null && roomID.isNotEmpty) {
@@ -1427,7 +1479,6 @@ mixin OpenIMLive {
           'invalid rtc cert roomID=$roomID liveURL=$liveURL tokenLen=${token.length}');
     }
 
-    final micGranted = !isCallKitAccept || !_pendingHeadlessMicPermission;
     CallAudioDebugLog.add(
       'accept',
       'pre-connect micGranted=$micGranted pendingMic=$_pendingHeadlessMicPermission skipSession=$isCallKitAccept',
@@ -1444,7 +1495,8 @@ mixin OpenIMLive {
 
     var workingCert = cert;
     final prejoined = OpenIMLiveClient().hasMediaFor(roomID) &&
-        OpenIMLiveClient().mediaRoom?.localParticipant != null;
+        (OpenIMLiveClient().mediaRoom?.localParticipant != null ||
+            OpenIMLiveClient().isMediaConnecting);
     if (prejoined) {
       OpenIMLiveClient().endIncomingPrejoin();
       CallAudioDebugLog.add(
@@ -1573,7 +1625,7 @@ mixin OpenIMLive {
         try {
           workingCert = await Apis.getTokenForRTC(
             roomID,
-            OpenIM.iMManager.userID,
+            _rtcUserID(),
           );
           CallAudioDebugLog.add(
             'accept',
@@ -1611,7 +1663,7 @@ mixin OpenIMLive {
     if (isCallKitAccept) {
       unawaited(OpenIMLiveClient().kickstartIosCallKitMedia(
         speakerOn: OpenIMLiveClient().userSpeakerPreference,
-        unmuteMic: false,
+        unmuteMic: true,
       ));
     }
     Logger.print('accept joined roomID=${cert.roomID} type=$callType');
@@ -2697,36 +2749,49 @@ mixin OpenIMLive {
     final id = roomID?.trim() ?? '';
     if (id.isEmpty || _isRoomEnded(id)) return;
     if (_userHasAnsweredCall(id) || _isOutboundWaitingRoom(id)) return;
-    if (_pickupInFlight != null && _pickupRoomID == id) return;
+    if (_prefetchTask != null && _prefetchTaskRoomID == id) return;
+    if (_pickupInFlight != null && _pickupRoomID == id) {
+      unawaited(_pickupInFlight!.then((cert) {
+        if (!_isRoomEnded(id) && !_userHasAnsweredCall(id)) {
+          unawaited(_prejoinIncomingMedia(cert));
+        }
+      }));
+      return;
+    }
     if (OpenIMLiveClient().hasMediaFor(id) &&
-        OpenIMLiveClient().mediaRoom?.localParticipant != null) {
+        (OpenIMLiveClient().mediaRoom?.localParticipant != null ||
+            OpenIMLiveClient().isMediaConnecting)) {
       return;
     }
-    String userID = '';
-    for (var i = 0; i < 10; i++) {
-      try {
-        userID = OpenIM.iMManager.userID.trim();
-      } catch (_) {
-        userID = '';
+    _prefetchTaskRoomID = id;
+    final task = () async {
+      final userID = await _waitRtcUserID();
+      if (userID.isEmpty) {
+        Logger.print('prefetch skipped: no userID roomID=$id');
+        return;
       }
-      if (userID.isNotEmpty) break;
-      await Future<void>.delayed(const Duration(milliseconds: 300));
       if (_isRoomEnded(id) || _userHasAnsweredCall(id)) return;
-    }
-    if (userID.isEmpty) {
-      Logger.print('prefetch skipped: no IM userID roomID=$id');
-      return;
-    }
-    try {
-      if (_pickupCertRoomID != id || _pickupCertCache == null) {
-        final cert = await Apis.getTokenForRTC(id, userID);
-        _pickupCertCache = cert;
-        _pickupCertRoomID = id;
-        Logger.print('prefetch rtc token ok roomID=$id');
+      try {
+        if (_pickupCertRoomID != id || _pickupCertCache == null) {
+          final cert = await Apis.getTokenForRTC(id, userID);
+          _pickupCertCache = cert;
+          _pickupCertRoomID = id;
+          Logger.print('prefetch rtc token ok roomID=$id');
+        }
+        if (_isRoomEnded(id) || _userHasAnsweredCall(id)) return;
+        unawaited(_prejoinIncomingMedia(_pickupCertCache!));
+      } catch (e, s) {
+        Logger.print('prefetch rtc token failed roomID=$id: $e $s');
       }
-      unawaited(_prejoinIncomingMedia(_pickupCertCache!));
-    } catch (e, s) {
-      Logger.print('prefetch rtc token failed roomID=$id: $e $s');
+    }();
+    _prefetchTask = task;
+    try {
+      await task;
+    } finally {
+      if (_prefetchTaskRoomID == id) {
+        _prefetchTask = null;
+        _prefetchTaskRoomID = null;
+      }
     }
   }
 
@@ -2771,9 +2836,24 @@ mixin OpenIMLive {
           OpenIMLiveClient().endIncomingPrejoin();
         },
       );
-      if (_isRoomEnded(roomID) ||
-          _answeredRoomUntilMs.containsKey(roomID) ||
-          _isAcceptInProgressForRoom(roomID)) {
+      if (_isRoomEnded(roomID)) return;
+      // User answered while ICE was warming — publish immediately.
+      if (_answeredRoomUntilMs.containsKey(roomID) ||
+          _isAcceptInProgressForRoom(roomID) ||
+          _callKitAcceptHandledRoomID == roomID) {
+        CallAudioDebugLog.add(
+          'prejoin',
+          'answered during prejoin — publish mic roomID=$roomID',
+        );
+        await client.connectMedia(
+          certificate: cert,
+          callType: isVideo ? CallType.video : CallType.audio,
+          speakerOn: OpenIMLiveClient().userSpeakerPreference,
+          enableCamera: false,
+          enableMicrophone: true,
+          enableKeepAlive: true,
+          skipSessionActivation: true,
+        );
         return;
       }
       CallAudioDebugLog.add(
@@ -2822,6 +2902,8 @@ mixin OpenIMLive {
     _pickupRoomID = null;
     _pickupCertCache = null;
     _pickupCertRoomID = null;
+    _prefetchTask = null;
+    _prefetchTaskRoomID = null;
     _acceptJoinInFlight = null;
     _acceptJoinRoomID = null;
   }
@@ -2835,10 +2917,23 @@ mixin OpenIMLive {
     if (_pickupCertRoomID == roomID && _pickupCertCache != null) {
       return _pickupCertCache!;
     }
-    return Apis.getTokenForRTC(roomID, OpenIM.iMManager.userID);
+    var userID = _rtcUserID();
+    if (userID.isEmpty) {
+      userID = await _waitRtcUserID();
+    }
+    if (userID.isEmpty) {
+      throw StateError('pickup: empty userID roomID=$roomID');
+    }
+    return Apis.getTokenForRTC(roomID, userID);
   }
 
   Future<void> _sendCallingAccept(SignalingInfo signaling) async {
+    for (var i = 0; i < 10; i++) {
+      try {
+        if (OpenIM.iMManager.userID.trim().isNotEmpty) break;
+      } catch (_) {}
+      await Future<void>.delayed(const Duration(milliseconds: 400));
+    }
     try {
       final data = {
         'customType': CustomMessageType.callingAccept,

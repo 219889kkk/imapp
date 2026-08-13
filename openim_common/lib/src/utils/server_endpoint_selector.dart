@@ -18,11 +18,15 @@ class ServerEndpointSelector {
 
   static DateTime? _lastProbeAt;
   static String? _lastSelectedHost;
+  static Future<String>? _probeInFlight;
 
   static String get selectedHost =>
       DataSp.getServerConfig()?['serverIP']?.toString() ?? primaryHost;
 
   /// Probe all hosts in parallel and persist the fastest. Returns chosen host.
+  ///
+  /// Cold VoIP launch must not wait on a 4s probe — use the cached host and
+  /// re-probe in the background so CallKit prejoin can start immediately.
   static Future<String> ensureBestEndpoint({bool force = false}) async {
     final now = DateTime.now();
     if (!force &&
@@ -33,15 +37,28 @@ class ServerEndpointSelector {
     }
 
     final cachedHost = DataSp.getServerConfig()?['serverIP']?.toString();
-    if (!force &&
-        cachedHost != null &&
-        cachedHost.isNotEmpty &&
-        _lastProbeAt != null &&
-        now.difference(_lastProbeAt!) < _cacheTtl) {
+    if (!force && cachedHost != null && cachedHost.isNotEmpty) {
       _lastSelectedHost = cachedHost;
+      final stale = _lastProbeAt == null ||
+          now.difference(_lastProbeAt!) >= _cacheTtl;
+      if (stale) {
+        unawaited(_probeAndApply());
+      }
       return cachedHost;
     }
 
+    return _probeAndApply();
+  }
+
+  static Future<String> _probeAndApply() {
+    _probeInFlight ??= _probeAndApplyImpl().whenComplete(() {
+      _probeInFlight = null;
+    });
+    return _probeInFlight!;
+  }
+
+  static Future<String> _probeAndApplyImpl() async {
+    final cachedHost = DataSp.getServerConfig()?['serverIP']?.toString();
     final results = await Future.wait(allHosts.map(_probeHost));
     ServerProbeResult? best;
     for (final r in results) {
@@ -54,7 +71,7 @@ class ServerEndpointSelector {
     final host = best?.host ?? cachedHost ?? primaryHost;
     await applyHost(host);
     _lastSelectedHost = host;
-    _lastProbeAt = now;
+    _lastProbeAt = DateTime.now();
 
     if (best != null) {
       Logger.print(

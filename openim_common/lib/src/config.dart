@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -20,7 +21,9 @@ class Config {
       final path = (await getApplicationDocumentsDirectory()).path;
       cachePath = '$path/';
       await DataSp.init();
-      await ServerEndpointSelector.ensureBestEndpoint();
+      // Cached host is enough to start Dart; probing both CDNs can take ~4s
+      // and delayed CallKit prejoin until after the user already answered.
+      unawaited(ServerEndpointSelector.ensureBestEndpoint());
       await Hive.initFlutter(path);
       MediaKit.ensureInitialized();
       HttpUtil.init();

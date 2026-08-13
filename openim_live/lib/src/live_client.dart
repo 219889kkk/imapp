@@ -546,7 +546,8 @@ class OpenIMLiveClient implements RTCBridge {
       'livekit',
       'room.connect begin roomID=$roomID url=$liveURL tokenLen=${token.length} skipSession=$skipSessionActivation',
     );
-    // CallKit path: re-bridge immediately — do not stall ICE for settle delays.
+    // FastConnect publishes mic during join when the audio session is live.
+    // CallKit: if didActivate already ran, publish with join (no extra round).
     var callKitAudioOn = false;
     if (skipSessionActivation && Platform.isIOS) {
       await IosWebRtcAudio.bridgeCallKitSession();
