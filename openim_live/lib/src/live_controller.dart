@@ -420,6 +420,12 @@ mixin OpenIMLive {
     _cancelRingTimeout();
     _ringTimeoutExtendCount = 0;
     _markCallConnected();
+    final client = OpenIMLiveClient();
+    client.setUserMicPreference(true);
+    unawaited(client.onCallActive(
+      speakerOn: client.userSpeakerPreference,
+      unmuteMic: true,
+    ));
     OpenIMLiveClient().promoteCallingUi(markAccepted: true);
     final info = _activeCallSignaling;
     if (info != null) {
@@ -693,31 +699,29 @@ mixin OpenIMLive {
       'gate',
       'wait start activated=$_iosCallKitAudioActivated nativeDidActivate=$_iosCallKitDidActivateNative speaker=$speakerOn',
     );
-    if (_iosCallKitDidActivateNative) {
-      Logger.print('iOS CallKit audio already activated (native)');
-      CallAudioDebugLog.add('gate', 'wait skip — native didActivate');
+    // Bridge immediately so PeerConnection can start — never stall join for 12s.
+    await IosWebRtcAudio.bridgeCallKitSession();
+    if (_iosCallKitDidActivateNative || _iosCallKitAudioActivated) {
+      Logger.print('iOS CallKit audio already activated');
+      CallAudioDebugLog.add('gate', 'wait skip — already activated');
       return;
     }
     final gate = _iosCallKitAudioGate!;
     try {
-      // Prefer real didActivate. Poll only for native flag, not timeout-bridge.
       await Future.any([
         gate.future,
         _pollNativeCallKitDidActivate(),
-      ]).timeout(const Duration(seconds: 12));
+      ]).timeout(const Duration(milliseconds: 800));
       Logger.print('iOS CallKit audio session ready');
       CallAudioDebugLog.add(
         'gate',
         'wait ready nativeDidActivate=$_iosCallKitDidActivateNative',
       );
     } on TimeoutException {
-      // Proceed with soft bridge so LiveKit can join; real didActivate will kickstart later.
-      CallAudioDebugLog.add('gate', 'timeout — soft bridge then proceed');
-      await IosWebRtcAudio.bridgeCallKitSession();
       _iosCallKitAudioActivated = true;
-      final g = _iosCallKitAudioGate;
-      if (g != null && !g.isCompleted) g.complete();
-      Logger.print('iOS CallKit audio timeout — soft bridge, await late didActivate');
+      CallAudioDebugLog.add(
+          'gate', 'short wait — join now, late didActivate will kickstart');
+      Logger.print('iOS CallKit audio: proceed without didActivate');
     }
   }
 
@@ -1218,20 +1222,22 @@ mixin OpenIMLive {
       'accept',
       'join start roomID=$roomID callKit=$isCallKitAccept requestPerm=$requestPermissions',
     );
-    // All headless/CallKit accepts (CallKit / notification / live-alert) —
-    // create gate before pickup so early didActivate is never lost.
+    // Token + accept signal in parallel with audio prep so ICE starts immediately.
     if (isCallKitAccept) {
       _ensureIosCallKitAudioGate();
+    }
+    final pickupFuture =
+        onTapPickup(signaling..userID = OpenIM.iMManager.userID);
+    if (isCallKitAccept) {
+      unawaited(_waitForIosCallKitAudio(
+          speakerOn: OpenIMLiveClient().userSpeakerPreference));
       await _refreshHeadlessMicPending();
     } else if (Platform.isIOS) {
-      // In-app accept: take the session now so PeerConnection starts on a live
-      // VoIP route (avoids muddy audio while AEC re-converges after late enable).
       CallAudioKeepAlive.instance.releaseCallKitSession();
-      await _prewarmInAppCallAudio(force: true);
+      unawaited(_prewarmInAppCallAudio(force: true));
     }
 
-    final cert =
-        await onTapPickup(signaling..userID = OpenIM.iMManager.userID);
+    final cert = await pickupFuture;
     if (gen != _callSessionGen || _isRoomEnded(roomID)) {
       Logger.print('abort accept join after hangup roomID=$roomID');
       if (roomID != null && roomID.isNotEmpty) {
@@ -1249,11 +1255,6 @@ mixin OpenIMLive {
           'invalid rtc cert roomID=$roomID liveURL=$liveURL tokenLen=${token.length}');
     }
 
-    // Lock-screen: join LiveKit only after CallKit activates WebRTC audio.
-    if (isCallKitAccept) {
-      await _waitForIosCallKitAudio(speakerOn: OpenIMLiveClient().userSpeakerPreference);
-    }
-
     final micGranted = !isCallKitAccept || !_pendingHeadlessMicPermission;
     CallAudioDebugLog.add(
       'accept',
@@ -1261,12 +1262,12 @@ mixin OpenIMLive {
     );
 
     if (roomID != null && roomID.isNotEmpty) {
-      await CallAudioKeepAlive.instance.start(
+      unawaited(CallAudioKeepAlive.instance.start(
         roomID: roomID,
         isVideo: isVideo,
         speakerOn: OpenIMLiveClient().userSpeakerPreference,
         skipSessionActivation: isCallKitAccept,
-      );
+      ));
     }
 
     var workingCert = cert;
@@ -1370,20 +1371,18 @@ mixin OpenIMLive {
     }
 
     _markRoomAnswered(roomID);
-    // One unmute/subscribe path after join — no second kickstart (mic flicker).
-    await OpenIMLiveClient().onCallActive(
+    unawaited(OpenIMLiveClient().onCallActive(
       speakerOn: OpenIMLiveClient().userSpeakerPreference,
       unmuteMic: micGranted,
-    );
+    ));
     if (isVideo && micGranted) {
       unawaited(OpenIMLiveClient().enableCameraWhenReady());
     }
     if (isCallKitAccept) {
-      await Future<void>.delayed(const Duration(milliseconds: 200));
-      await OpenIMLiveClient().kickstartIosCallKitMedia(
+      unawaited(OpenIMLiveClient().kickstartIosCallKitMedia(
         speakerOn: OpenIMLiveClient().userSpeakerPreference,
-        unmuteMic: false, // already handled by onCallActive
-      );
+        unmuteMic: false,
+      ));
     }
     Logger.print('accept joined roomID=${cert.roomID} type=$callType');
     CallAudioDebugLog.add(
@@ -2227,6 +2226,8 @@ mixin OpenIMLive {
       throw StateError('dial aborted after invite: room cancelled $roomID');
     }
     final isVideo = invitation.mediaType == 'video';
+    final tokenFuture =
+        Apis.getTokenForRTC(invitation.roomID!, OpenIM.iMManager.userID);
     // Await invite IM + VoIP so a quick cancel cannot outrun a late invite push
     // (home/lock CallKit zombie ring).
     try {
@@ -2254,8 +2255,7 @@ mixin OpenIMLive {
       throw StateError('dial aborted after invite voip: room cancelled $roomID');
     }
     try {
-      final certificate = await Apis.getTokenForRTC(
-          invitation.roomID!, OpenIM.iMManager.userID);
+      final certificate = await tokenFuture;
       if (_isRoomEnded(roomID)) {
         throw StateError('dial aborted after token: room cancelled $roomID');
       }
@@ -2381,6 +2381,7 @@ mixin OpenIMLive {
       _pickupCertCache = cert;
       _pickupCertRoomID = id;
       Logger.print('prefetch rtc token ok roomID=$id');
+      unawaited(OpenIMLiveClient().warmConnection(cert));
     } catch (e, s) {
       Logger.print('prefetch rtc token failed roomID=$id: $e $s');
     }
@@ -2388,12 +2389,7 @@ mixin OpenIMLive {
 
   Future<SignalingCertificate> onTapPickup(SignalingInfo signaling) async {
     final roomID = signaling.invitation?.roomID;
-    if (roomID != null &&
-        roomID.isNotEmpty &&
-        _pickupCertRoomID == roomID &&
-        _pickupCertCache != null) {
-      return _pickupCertCache!;
-    }
+    // Never skip _doPickup on a cached token — that used to skip callingAccept.
     if (roomID != null &&
         roomID.isNotEmpty &&
         _pickupInFlight != null &&
@@ -2433,35 +2429,39 @@ mixin OpenIMLive {
   Future<SignalingCertificate> _doPickup(SignalingInfo signaling) async {
     _beCalledEvent = null; // ios bug
     _stopSound();
-    final data = {
-      'customType': CustomMessageType.callingAccept,
-      'data': signaling.invitation!.toJson()
-    };
-    final message = await OpenIM.iMManager.messageManager.createCustomMessage(
-        data: jsonEncode(data), extension: '', description: '');
-    // Deliver accept reliably — online-only can be dropped on some iOS/WS paths.
-    await OpenIM.iMManager.messageManager.sendMessage(
-        message: message,
-        offlinePushInfo: OfflinePushInfo(),
-        userID: signaling.invitation!.inviterUserID,
-        isOnlineOnly: false);
-    // VoIP push so caller cancels ring timeout even if IM is slow.
-    final inviter = signaling.invitation!.inviterUserID?.trim() ?? '';
-    if (inviter.isNotEmpty) {
-      try {
-        await _triggerVoipPush(
+    final roomID = signaling.invitation!.roomID!;
+    // Accept signal must still go out even when RTC token was prefetched.
+    unawaited(_sendCallingAccept(signaling));
+    if (_pickupCertRoomID == roomID && _pickupCertCache != null) {
+      return _pickupCertCache!;
+    }
+    return Apis.getTokenForRTC(roomID, OpenIM.iMManager.userID);
+  }
+
+  Future<void> _sendCallingAccept(SignalingInfo signaling) async {
+    try {
+      final data = {
+        'customType': CustomMessageType.callingAccept,
+        'data': signaling.invitation!.toJson()
+      };
+      final message = await OpenIM.iMManager.messageManager.createCustomMessage(
+          data: jsonEncode(data), extension: '', description: '');
+      await OpenIM.iMManager.messageManager.sendMessage(
+          message: message,
+          offlinePushInfo: OfflinePushInfo(),
+          userID: signaling.invitation!.inviterUserID,
+          isOnlineOnly: false);
+      final inviter = signaling.invitation!.inviterUserID?.trim() ?? '';
+      if (inviter.isNotEmpty) {
+        unawaited(_triggerVoipPush(
           signaling,
           action: 'accept',
           toUserIDs: [inviter],
-        );
-      } catch (e, s) {
-        Logger.print('accept VoIP push failed: $e $s');
+        ));
       }
+    } catch (e, s) {
+      Logger.print('send callingAccept failed: $e $s');
     }
-    final certificate = await Apis.getTokenForRTC(
-        signaling.invitation!.roomID!, OpenIM.iMManager.userID);
-
-    return certificate;
   }
 
   onTapReject(SignalingInfo signaling) async {

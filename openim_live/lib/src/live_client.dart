@@ -115,6 +115,29 @@ class OpenIMLiveClient implements RTCBridge {
 
   bool get hasOverlay => _holder != null;
 
+  /// Warm DNS/TLS for the LiveKit URL while the callee is still ringing.
+  Future<void> warmConnection(SignalingCertificate certificate) async {
+    final liveURL = certificate.liveURL?.trim() ?? '';
+    final token = certificate.token?.trim() ?? '';
+    if (liveURL.isEmpty || token.isEmpty) return;
+    final room = Room();
+    try {
+      await room
+          .prepareConnection(liveURL, token)
+          .timeout(const Duration(seconds: 2));
+      CallAudioDebugLog.add(
+        'livekit',
+        'warmConnection ok url=$liveURL',
+      );
+    } catch (e) {
+      CallAudioDebugLog.add('livekit', 'warmConnection skip err=$e');
+    } finally {
+      try {
+        await room.dispose();
+      } catch (_) {}
+    }
+  }
+
   bool hasMediaFor(String? roomID) {
     if (roomID == null || roomID.isEmpty) return _mediaRoom != null;
     return _mediaRoom != null && currentRoomID == roomID;
@@ -252,11 +275,11 @@ class OpenIMLiveClient implements RTCBridge {
 
   void _noopRoomListener() {}
 
-  /// Low-latency VoIP RoomOptions: speech bitrate + RED, lighter video under cellular.
+  /// Low-latency 1:1 VoIP: skip dynacast/adaptive (those delay first audio).
   RoomOptions _roomOptionsForCall({required bool speakerOn}) {
     return RoomOptions(
-      dynacast: true,
-      adaptiveStream: true,
+      dynacast: false,
+      adaptiveStream: false,
       defaultAudioCaptureOptions: const AudioCaptureOptions(
         echoCancellation: true,
         noiseSuppression: true,
@@ -445,7 +468,7 @@ class OpenIMLiveClient implements RTCBridge {
       return;
     }
 
-    final room = Room();
+    final room = Room(roomOptions: _roomOptionsForCall(speakerOn: speakerOn));
     final listener = room.createListener();
     _mediaRoom = room;
     _mediaListener = listener;
@@ -481,26 +504,32 @@ class OpenIMLiveClient implements RTCBridge {
       'livekit',
       'room.connect begin roomID=$roomID url=$liveURL tokenLen=${token.length} skipSession=$skipSessionActivation',
     );
-    // CallKit path: re-bridge + brief settle so PeerConnection starts on a live session.
+    // CallKit path: re-bridge immediately — do not stall ICE for settle delays.
     if (skipSessionActivation && Platform.isIOS) {
       await IosWebRtcAudio.bridgeCallKitSession();
-      await Future<void>.delayed(const Duration(milliseconds: 120));
       CallAudioDebugLog.add(
         'livekit',
         'pre-connect audio enabled=${await IosWebRtcAudio.isEnabled()}',
       );
     }
-    // Warm DNS/TLS/ICE while we still can — cuts first-media delay after answer.
+    // Warm DNS/TLS — cap so a slow HEAD cannot delay join.
     try {
-      await room.prepareConnection(liveURL, token);
+      await room
+          .prepareConnection(liveURL, token)
+          .timeout(const Duration(milliseconds: 400));
     } catch (e) {
       CallAudioDebugLog.add('livekit', 'prepareConnection skip err=$e');
     }
     _connectAbort = Completer<void>();
     final abortFuture = _connectAbort!.future;
     try {
-      // Publish mic AFTER connect — FastConnect under CallKit caused early
-      // clientInitiated disconnects before ICE finished.
+      // FastConnect publishes mic during join (in-app). CallKit still publishes
+      // after connect — FastConnect there caused clientInitiated disconnects.
+      final fastConnect = enableMicrophone && !skipSessionActivation
+          ? FastConnectOptions(
+              microphone: const TrackOption<bool, LocalAudioTrack>(enabled: true),
+            )
+          : null;
       await Future.any<void>([
         room
             .connect(
@@ -510,13 +539,14 @@ class OpenIMLiveClient implements RTCBridge {
             autoSubscribe: true,
             timeouts: Timeouts(
               connection: Duration(seconds: 30),
-              debounce: Duration(milliseconds: 100),
+              debounce: Duration(milliseconds: 50),
               publish: Duration(seconds: 15),
               peerConnection: Duration(seconds: 30),
               iceRestart: Duration(seconds: 15),
             ),
           ),
           roomOptions: _roomOptionsForCall(speakerOn: speakerOn),
+          fastConnectOptions: fastConnect,
         )
             .timeout(const Duration(seconds: 35)),
         abortFuture,
@@ -604,7 +634,11 @@ class OpenIMLiveClient implements RTCBridge {
     }
 
     final now = DateTime.now();
-    if (_lastCallActiveAt != null &&
+    final micOff =
+        _mediaRoom?.localParticipant?.isMicrophoneEnabled() != true;
+    // First unmute must not wait — debounce only coalesces later route tweaks.
+    if (!micOff &&
+        _lastCallActiveAt != null &&
         now.difference(_lastCallActiveAt!) < const Duration(milliseconds: 400)) {
       await Future<void>.delayed(
         Duration(
@@ -1035,6 +1069,14 @@ class OpenIMLiveClient implements RTCBridge {
         _uiOnRemotePresent?.call();
         PackageBridge.markOutboundPeerPresent?.call(currentRoomID);
         unawaited(_subscribeRemoteTracks());
+        if (_userMicPreference != false) {
+          unawaited(_ensurePublished(
+            callType: _mediaCallType ?? CallType.audio,
+            speakerOn: _userSpeakerPreference ?? false,
+            enableCamera: false,
+            enableMicrophone: true,
+          ));
+        }
       })
       ..on<ParticipantDisconnectedEvent>((_) {
         _uiOnRemoteLeft?.call();

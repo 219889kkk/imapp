@@ -258,7 +258,16 @@ class _SingleRoomViewState extends SignalState<SingleRoomView> {
   }
 
   Future<void> _publish() async {
-    await _applySpeakerRoute();
+    // Do not mute→wait→unmute on first publish — that delays first audio.
+    try {
+      if (Platform.isIOS) {
+        await IosWebRtcAudio.setSpeakerRoute(enabledSpeaker);
+      }
+      await Hardware.instance.setSpeakerphoneOn(enabledSpeaker);
+      await _room?.setSpeakerOn(enabledSpeaker);
+    } catch (error, stackTrace) {
+      Logger.print('could not set speaker: $error $stackTrace');
+    }
     try {
       final enabled = widget.callType == CallType.video && !_deferMicrophone;
       await _room?.localParticipant?.setCameraEnabled(enabled);
