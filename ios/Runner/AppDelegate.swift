@@ -260,6 +260,13 @@ import flutter_callkit_incoming
     func onEnd(_ call: Call, _ action: CXEndCallAction) {
         NSLog("HangXun CallKit: onEnd room=%@", call.data.uuid)
         action.fulfill()
+        // User (or system) actually ended the CXCall — Dart must hang up.
+        // Programmatic endCall is ignored via uiDismiss on the Dart side.
+        DispatchQueue.main.async {
+            self.voipChannel?.invokeMethod("onCallKitUserEnd", arguments: [
+                "roomID": call.data.uuid,
+            ])
+        }
     }
 
     func onTimeOut(_ call: Call) {

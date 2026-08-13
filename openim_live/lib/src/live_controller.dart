@@ -296,6 +296,7 @@ mixin OpenIMLive {
     if (id.isEmpty) {
       return client.isBusy || _acceptJoinInFlight != null;
     }
+    if (_isRoomEnded(id)) return false;
     return _answeredRoomUntilMs.containsKey(id) ||
         _isAcceptInProgressForRoom(id) ||
         _callKitAcceptHandledRoomID == id ||
@@ -501,6 +502,9 @@ mixin OpenIMLive {
     if (identical(PackageBridge.onCallKitEnded, _onCallKitEnded)) {
       PackageBridge.onCallKitEnded = null;
     }
+    if (identical(PackageBridge.onCallKitUserHangup, _onCallKitUserHangup)) {
+      PackageBridge.onCallKitUserHangup = null;
+    }
     if (identical(PackageBridge.onCallKitTimeout, _onCallKitTimeout)) {
       PackageBridge.onCallKitTimeout = null;
     }
@@ -544,6 +548,7 @@ mixin OpenIMLive {
     PackageBridge.onCallKitAccept = _onCallKitAccept;
     PackageBridge.onCallKitDecline = _onCallKitDecline;
     PackageBridge.onCallKitEnded = _onCallKitEnded;
+    PackageBridge.onCallKitUserHangup = _onCallKitUserHangup;
     PackageBridge.onCallKitTimeout = _onCallKitTimeout;
     PackageBridge.onVoipRemoteEnd = _onVoipRemoteEnd;
     PackageBridge.suppressCallKitEnded = _suppressCallKitEnded;
@@ -886,12 +891,18 @@ mixin OpenIMLive {
   /// Safari/browser accept does not tear down the audio session.
   Future<void> _onIosForegroundResume() async {
     if (!Platform.isIOS) return;
+    final endedRoom = _activeCallSignaling?.invitation?.roomID?.trim() ??
+        OpenIMLiveClient().currentRoomID?.trim() ??
+        '';
+    if (endedRoom.isNotEmpty && _isRoomEnded(endedRoom)) {
+      _activeCallSignaling = null;
+      _beCalledEvent = null;
+      CallAudioDebugLog.add('fg', 'skip restore — room ended $endedRoom');
+      return;
+    }
     final keepCallKit = _shouldKeepCallKitAudio();
     if (keepCallKit) {
       unawaited(_refreshHeadlessMicPending());
-      final keepRoom = _activeCallSignaling?.invitation?.roomID ??
-          OpenIMLiveClient().currentRoomID;
-      _armCallKitAcceptSettle(keepRoom, duration: const Duration(seconds: 4));
       final client = OpenIMLiveClient();
       if (client.mediaRoom != null) {
         unawaited(client.kickstartIosCallKitMedia(
@@ -926,9 +937,6 @@ mixin OpenIMLive {
         (client.hasMediaFor(activeRoom) ||
             client.isBusy && client.currentRoomID == activeRoom)) {
       _beCalledEvent = null;
-      // Unlock after lock-screen answer: plugin often emits Ended. Ignore it.
-      _armCallKitAcceptSettle(activeRoom,
-          duration: const Duration(seconds: 4));
       if (!client.hasOverlay) {
         Logger.print('iOS fg: attach call UI roomID=$activeRoom');
         _presentCallUi(active, fromHeadless: true);
@@ -1772,6 +1780,43 @@ mixin OpenIMLive {
     _terminateCallUi(roomID.isEmpty ? null : roomID);
   }
 
+  /// Native CXEndCallAction — lock-screen red button after answer. Never ignore.
+  void _onCallKitUserHangup(String? roomID) {
+    final id = roomID?.trim() ?? '';
+    if (_isCallKitUiDismissArmed(id) || _isRoomEnded(id)) {
+      CallAudioDebugLog.add(
+          'callkit', 'native user end ignored uiDismiss/ended roomID=$id');
+      return;
+    }
+    final info = _resolveIncomingSignaling(_activeCallSignaling) ??
+        _activeCallSignaling;
+    final infoRoom = info?.invitation?.roomID?.trim() ?? '';
+    final matched = info != null && (infoRoom.isEmpty || infoRoom == id || id.isEmpty);
+    CallAudioDebugLog.add(
+      'callkit',
+      'native user end hangup roomID=$id matched=$matched',
+    );
+    Logger.print('CallKit native user end → hangup roomID=$id');
+    final answered = id.isNotEmpty &&
+        (_answeredRoomUntilMs.containsKey(id) ||
+            _callKitAcceptHandledRoomID == id ||
+            _isAcceptInProgressForRoom(id) ||
+            OpenIMLiveClient().hasMediaFor(id) ||
+            OpenIMLiveClient().isBusy);
+    if (!answered) {
+      CallAudioDebugLog.add(
+          'callkit', 'native end while ringing — local miss roomID=$id');
+      _terminateCallUi(id.isEmpty ? null : id);
+      return;
+    }
+    if (matched) {
+      unawaited(onTapHangup(
+          info!..userID = OpenIM.iMManager.userID, _connectedDurationSec(), true));
+      return;
+    }
+    _terminateCallUi(id.isEmpty ? null : id);
+  }
+
   /// Lock-screen / system UI End — classify before reject/hangup.
   void _onCallKitEnded(SignalingInfo? signaling) {
     _stopSound();
@@ -1811,8 +1856,34 @@ mixin OpenIMLive {
       'ended roomID=$roomKey inCall=$inCall acceptSent=$acceptSent joining=$joining settle=${_isCallKitAcceptSettleArmed(roomID)}',
     );
 
-    // 2) Accept→active / unlock: plugin emits Ended after fulfill, and again
-    // when the user unlocks. That used to hang up a call the callee just answered.
+    final life = WidgetsBinding.instance.lifecycleState;
+    final lockedOrBackground = _isRunningBackground ||
+        life == AppLifecycleState.paused ||
+        life == AppLifecycleState.hidden ||
+        life == AppLifecycleState.detached;
+
+    // Lock-screen red button after answer: always hang up. The 4s settle
+    // used to swallow this — caller kept timing, unlock restored the UI.
+    if ((inCall || acceptSent) && lockedOrBackground) {
+      Logger.print(
+          'CallKit ended while locked/bg after accept → hangup roomID=$roomKey');
+      CallAudioDebugLog.add(
+          'callkit', 'ended locked/bg after accept → hangup roomID=$roomKey');
+      _beCalledEvent = null;
+      _autoPickup = false;
+      _acceptJoinInFlight = null;
+      _acceptJoinRoomID = null;
+      _callSessionGen++;
+      if (info != null) {
+        unawaited(onTapHangup(
+            info..userID = OpenIM.iMManager.userID, _connectedDurationSec(), true));
+      } else {
+        _terminateCallUi(roomKey.isEmpty ? null : roomKey);
+      }
+      return;
+    }
+
+    // Foreground only: plugin noise while LiveKit is still joining (Safari).
     if (acceptSent && joining && !inCall) {
       Logger.print(
           'CallKit ended ignored — still joining after accept roomID=$roomKey');
@@ -1821,13 +1892,15 @@ mixin OpenIMLive {
       return;
     }
 
-    // Ignore plugin Ended during the accept/unlock window even after media is up.
-    // Real lock-screen hangup still works after this settle expires.
-    if (acceptSent && _isCallKitAcceptSettleArmed(roomID)) {
+    // Foreground only, and only before media is up. Never ignore inCall Ended
+    // (that is the lock-screen hangup after a fast join).
+    if (acceptSent &&
+        !inCall &&
+        _isCallKitAcceptSettleArmed(roomID)) {
       Logger.print(
-          'CallKit ended ignored — accept/unlock settle roomID=$roomKey inCall=$inCall');
+          'CallKit ended ignored — accept settle roomID=$roomKey');
       CallAudioDebugLog.add(
-          'callkit', 'ended ignored acceptSettle roomID=$roomKey inCall=$inCall');
+          'callkit', 'ended ignored acceptSettle roomID=$roomKey');
       return;
     }
 
@@ -2719,6 +2792,10 @@ mixin OpenIMLive {
 
   onTapHangup(SignalingInfo signaling, int duration, bool isPositive) async {
     final roomID = signaling.invitation?.roomID;
+    if (_isRoomEnded(roomID)) {
+      Logger.print('onTapHangup skip — already ended $roomID');
+      return;
+    }
     // UI timer can reset after CallKit/unlock — take the longer of UI vs wall-clock.
     final wall = _connectedDurationSec();
     final sec = duration > wall ? duration : wall;

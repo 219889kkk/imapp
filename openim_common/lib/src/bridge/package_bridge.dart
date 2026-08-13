@@ -27,6 +27,9 @@ class PackageBridge {
   /// Ringing timeout is [onCallKitTimeout] — do not treat as reject.
   static void Function(SignalingInfo? signaling)? onCallKitEnded;
 
+  /// Native CXEndCallAction — user tapped End on CallKit. Must hang up.
+  static void Function(String? roomID)? onCallKitUserHangup;
+
   /// CallKit ring timed out (missed) — local cleanup only, never send reject.
   static void Function(SignalingInfo? signaling)? onCallKitTimeout;
 

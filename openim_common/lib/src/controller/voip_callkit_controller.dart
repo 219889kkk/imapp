@@ -357,6 +357,19 @@ class VoipCallkitController extends GetxService {
         noteIncomingPresented(roomID);
         return;
       }
+      if (call.method == 'onCallKitUserEnd') {
+        final args = call.arguments;
+        String? roomID;
+        if (args is Map) {
+          roomID = args['roomID']?.toString();
+        } else if (args != null) {
+          roomID = args.toString();
+        }
+        Logger.print('CallKit native user end roomID=$roomID');
+        CallAudioDebugLog.add('native', 'onCallKitUserEnd roomID=$roomID');
+        PackageBridge.onCallKitUserHangup?.call(roomID);
+        return;
+      }
       if (call.method == 'onCallKitAudioActivated') {
         Logger.print('CallKit audio session activated (native)');
         CallAudioDebugLog.add('native', 'onCallKitAudioActivated');
