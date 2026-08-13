@@ -433,7 +433,7 @@ import flutter_callkit_incoming
         NSLog("HangXun VoIP: PKPushRegistry registered")
     }
 
-    func hangxunDidUpdateVoipToken(_ token: Data) {
+    func hangxunDidUpdateVoipToken(_ token: Foundation.Data) {
         let deviceToken = token.map { String(format: "%02x", $0) }.joined()
         NSLog("HangXun VoIP token: %@", deviceToken)
 
