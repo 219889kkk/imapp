@@ -78,6 +78,14 @@ mixin OpenIMLive {
           Logger.print('ignore invite: room ended $roomID');
           return;
         }
+        // Callee pre-joined LiveKit while ringing — keep incoming UI, do not
+        // promote to in-call (that would unmute and start the timer).
+        if (OpenIMLiveClient().hasRingingPrejoin &&
+            !_answeredRoomUntilMs.containsKey(roomID) &&
+            !_isAcceptInProgressForRoom(roomID)) {
+          Logger.print('ignore invite: ringing prejoin roomID=$roomID');
+          return;
+        }
         // Same room — attach in-call UI only (never beCalled).
         if (!OpenIMLiveClient().hasOverlay) {
           _presentCallUi(info, fromHeadless: true);
@@ -397,11 +405,10 @@ mixin OpenIMLive {
     if (!isExtension) _ringTimeoutExtendCount = 0;
     _ringTimeoutTimer = Timer(Duration(seconds: seconds), () {
       if (_isRoomEnded(roomID)) return;
-      // Already answered (signal or LiveKit remote) — never auto-hang as "ring timeout".
+      // Already answered (signal) — never auto-hang as "ring timeout".
+      // Remote in LiveKit is not enough: callee pre-joins while still ringing.
       if (_peerAcceptedRooms.contains(roomID) ||
-          OpenIMLiveClient().peerAcceptedForUi ||
-          (OpenIMLiveClient().mediaRoom?.remoteParticipants.isNotEmpty ??
-              false)) {
+          OpenIMLiveClient().peerAcceptedForUi) {
         Logger.print('call ring timeout ignored: already in-call roomID=$roomID');
         CallAudioDebugLog.add('ring', 'timeout ignored — already answered roomID=$roomID');
         _cancelRingTimeout();
@@ -417,8 +424,7 @@ mixin OpenIMLive {
           client.currentRoomID == roomID &&
           (_peerAcceptedRooms.contains(roomID) ||
               client.peerAcceptedForUi ||
-              client.isMediaConnecting ||
-              (client.mediaRoom?.remoteParticipants.isNotEmpty ?? false))) {
+              client.isMediaConnecting)) {
         _ringTimeoutExtendCount++;
         Logger.print(
             'call ring timeout extended #$_ringTimeoutExtendCount roomID=$roomID');
@@ -435,10 +441,19 @@ mixin OpenIMLive {
     });
   }
 
-  /// Caller: remote joined LiveKit ⇒ treat as answered (cancel ring timeout).
+  /// Caller: remote published audio after we already dialed. Fallback if
+  /// `callingAccept` is delayed — never fire for the callee's ringing prejoin.
   void markOutboundPeerPresent(String? roomID) {
     final id = roomID?.trim() ?? '';
     if (id.isEmpty || _isRoomEnded(id)) return;
+    final self = OpenIM.iMManager.userID.trim();
+    final inviter =
+        _activeCallSignaling?.invitation?.inviterUserID?.trim() ?? '';
+    if (self.isEmpty || inviter != self) return;
+    if (_peerAcceptedRooms.contains(id)) {
+      OpenIMLiveClient().promoteCallingUi(markAccepted: true);
+      return;
+    }
     _peerAcceptedRooms.add(id);
     _cancelRingTimeout();
     _ringTimeoutExtendCount = 0;
@@ -590,8 +605,7 @@ mixin OpenIMLive {
         return;
       }
       if (_callKitAcceptHandledRoomID == roomID ||
-          _isAcceptInProgressForRoom(roomID) ||
-          OpenIMLiveClient().hasMediaFor(roomID)) {
+          _isAcceptInProgressForRoom(roomID)) {
         CallAudioDebugLog.add('callkit', 'accept ignored duplicate roomID=$roomID');
         return;
       }
@@ -802,6 +816,18 @@ mixin OpenIMLive {
     if (!client.isBusy || client.mediaRoom == null) {
       CallAudioDebugLog.add(
           'callkit', 'didActivate — media not ready yet (kickstart deferred)');
+      return;
+    }
+    final roomID = _activeCallSignaling?.invitation?.roomID?.trim() ??
+        client.currentRoomID?.trim() ??
+        '';
+    final answered = roomID.isNotEmpty &&
+        (_answeredRoomUntilMs.containsKey(roomID) ||
+            _isAcceptInProgressForRoom(roomID) ||
+            _callKitAcceptHandledRoomID == roomID);
+    if (!answered) {
+      CallAudioDebugLog.add(
+          'callkit', 'didActivate during ring — keep mic unpublished');
       return;
     }
     final isVideo = _activeCallSignaling?.invitation?.mediaType == 'video';
@@ -1308,10 +1334,9 @@ mixin OpenIMLive {
     }
     final pickupFuture =
         onTapPickup(signaling..userID = OpenIM.iMManager.userID);
-    Future<void>? audioReady;
     if (isCallKitAccept) {
-      audioReady = _waitForIosCallKitAudio(
-          speakerOn: OpenIMLiveClient().userSpeakerPreference);
+      unawaited(_waitForIosCallKitAudio(
+          speakerOn: OpenIMLiveClient().userSpeakerPreference));
       await _refreshHeadlessMicPending();
     } else if (Platform.isIOS) {
       CallAudioKeepAlive.instance.releaseCallKitSession();
@@ -1319,9 +1344,6 @@ mixin OpenIMLive {
     }
 
     final cert = await pickupFuture;
-    if (audioReady != null) {
-      await audioReady;
-    }
     if (gen != _callSessionGen || _isRoomEnded(roomID)) {
       Logger.print('abort accept join after hangup roomID=$roomID');
       if (roomID != null && roomID.isNotEmpty) {
@@ -1355,6 +1377,64 @@ mixin OpenIMLive {
     }
 
     var workingCert = cert;
+    final prejoined = OpenIMLiveClient().hasMediaFor(roomID) &&
+        OpenIMLiveClient().mediaRoom?.localParticipant != null;
+    if (prejoined) {
+      OpenIMLiveClient().endIncomingPrejoin();
+      CallAudioDebugLog.add(
+        'accept',
+        'prejoin hit — publish mic only roomID=$roomID',
+      );
+      if (isCallKitAccept) {
+        await IosWebRtcAudio.bridgeCallKitSession();
+      }
+      await OpenIMLiveClient().connectMedia(
+        certificate: workingCert,
+        callType: callType,
+        speakerOn: OpenIMLiveClient().userSpeakerPreference,
+        enableCamera: false,
+        enableMicrophone: micGranted,
+        enableKeepAlive: true,
+        skipSessionActivation: isCallKitAccept,
+        onDisconnected: () {
+          final id = signaling.invitation?.roomID;
+          if (_isRoomEnded(id)) return;
+          if (_isAcceptInProgressForRoom(id) ||
+              OpenIMLiveClient().isMediaConnecting) {
+            return;
+          }
+          if (!OpenIMLiveClient().isConnectedMedia(id) ||
+              (OpenIMLiveClient().mediaRoom?.remoteParticipants.isEmpty ??
+                  true)) {
+            _terminateCallUi(id);
+          }
+        },
+      );
+      if (gen != _callSessionGen || _isRoomEnded(roomID)) {
+        throw StateError('accept aborted after prejoin publish');
+      }
+      _markRoomAnswered(roomID);
+      unawaited(OpenIMLiveClient().onCallActive(
+        speakerOn: OpenIMLiveClient().userSpeakerPreference,
+        unmuteMic: micGranted,
+      ));
+      if (isVideo && micGranted) {
+        unawaited(OpenIMLiveClient().enableCameraWhenReady());
+      }
+      if (isCallKitAccept) {
+        unawaited(OpenIMLiveClient().kickstartIosCallKitMedia(
+          speakerOn: OpenIMLiveClient().userSpeakerPreference,
+          unmuteMic: micGranted,
+        ));
+      }
+      Logger.print('accept prejoin published roomID=${cert.roomID}');
+      CallAudioDebugLog.add(
+        'accept',
+        'prejoin published roomID=${cert.roomID} remotes=${OpenIMLiveClient().mediaRoom?.remoteParticipants.length ?? 0}',
+      );
+      return cert;
+    }
+
     // Audio-first: camera after LiveKit connect so video pickup isn't blocked on capture.
     Future<void> joinOnce() => OpenIMLiveClient().connectMedia(
           certificate: workingCert,
@@ -2540,16 +2620,74 @@ mixin OpenIMLive {
   Future<void> _prefetchPickupToken(String? roomID) async {
     final id = roomID?.trim() ?? '';
     if (id.isEmpty) return;
-    if (_pickupCertRoomID == id && _pickupCertCache != null) return;
     if (_pickupInFlight != null && _pickupRoomID == id) return;
     try {
-      final cert = await Apis.getTokenForRTC(id, OpenIM.iMManager.userID);
-      _pickupCertCache = cert;
-      _pickupCertRoomID = id;
-      Logger.print('prefetch rtc token ok roomID=$id');
-      unawaited(OpenIMLiveClient().warmConnection(cert));
+      if (_pickupCertRoomID != id || _pickupCertCache == null) {
+        final cert = await Apis.getTokenForRTC(id, OpenIM.iMManager.userID);
+        _pickupCertCache = cert;
+        _pickupCertRoomID = id;
+        Logger.print('prefetch rtc token ok roomID=$id');
+      }
+      unawaited(_prejoinIncomingMedia(_pickupCertCache!));
     } catch (e, s) {
       Logger.print('prefetch rtc token failed roomID=$id: $e $s');
+    }
+  }
+
+  /// Join LiveKit while still ringing so ICE finishes before the user answers.
+  /// Mic stays unpublished until accept.
+  Future<void> _prejoinIncomingMedia(SignalingCertificate cert) async {
+    final roomID = cert.roomID?.trim() ?? '';
+    if (roomID.isEmpty || _isRoomEnded(roomID)) return;
+    if (_answeredRoomUntilMs.containsKey(roomID) ||
+        _isAcceptInProgressForRoom(roomID) ||
+        _callKitAcceptHandledRoomID == roomID) {
+      return;
+    }
+    final client = OpenIMLiveClient();
+    if (client.hasMediaFor(roomID) &&
+        client.mediaRoom?.localParticipant != null) {
+      return;
+    }
+    final isVideo = (_activeCallSignaling ?? _beCalledEvent?.data)
+            ?.invitation
+            ?.mediaType ==
+        'video';
+    client.beginIncomingPrejoin(roomID);
+    CallAudioDebugLog.add('prejoin', 'start roomID=$roomID video=$isVideo');
+    try {
+      await client.connectMedia(
+        certificate: cert,
+        callType: isVideo ? CallType.video : CallType.audio,
+        speakerOn: false,
+        enableCamera: false,
+        enableMicrophone: false,
+        enableKeepAlive: false,
+        skipSessionActivation: true,
+        onDisconnected: () {
+          if (_isRoomEnded(roomID)) return;
+          if (_answeredRoomUntilMs.containsKey(roomID) ||
+              _isAcceptInProgressForRoom(roomID)) {
+            return;
+          }
+          CallAudioDebugLog.add(
+              'prejoin', 'disconnected while ringing roomID=$roomID');
+          OpenIMLiveClient().endIncomingPrejoin();
+        },
+      );
+      if (_isRoomEnded(roomID) ||
+          _answeredRoomUntilMs.containsKey(roomID) ||
+          _isAcceptInProgressForRoom(roomID)) {
+        return;
+      }
+      CallAudioDebugLog.add(
+        'prejoin',
+        'ready roomID=$roomID remotes=${client.mediaRoom?.remoteParticipants.length ?? 0}',
+      );
+    } catch (e, s) {
+      client.endIncomingPrejoin();
+      Logger.print('incoming prejoin failed roomID=$roomID: $e $s');
+      CallAudioDebugLog.add('prejoin', 'failed roomID=$roomID err=$e');
     }
   }
 

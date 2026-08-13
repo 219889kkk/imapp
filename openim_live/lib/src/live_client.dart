@@ -86,9 +86,27 @@ class OpenIMLiveClient implements RTCBridge {
   VoidCallback? _onMediaDisconnected;
   /// True while we are disposing the room ourselves — ignore disconnect side-effects.
   bool _suppressDisconnectSideEffects = false;
+  /// Callee joined LiveKit while still ringing (ICE warm, mic unpublished).
+  String? _ringingPrejoinRoomID;
 
   /// True while [connectMedia] / LiveKit join is still in flight.
   bool get isMediaConnecting => _mediaConnectInFlight != null;
+
+  /// Callee is in the LiveKit room but has not answered yet.
+  bool get hasRingingPrejoin {
+    final id = _ringingPrejoinRoomID?.trim() ?? '';
+    return id.isNotEmpty && currentRoomID == id && _mediaRoom != null;
+  }
+
+  void beginIncomingPrejoin(String roomID) {
+    final id = roomID.trim();
+    if (id.isEmpty) return;
+    _ringingPrejoinRoomID = id;
+  }
+
+  void endIncomingPrejoin() {
+    _ringingPrejoinRoomID = null;
+  }
   /// Last speaker choice from the in-call button (wins over delayed reinforce).
   bool? _userSpeakerPreference;
   String? _uiBoundRoomID;
@@ -232,6 +250,7 @@ class OpenIMLiveClient implements RTCBridge {
     _promoteCallingUi = null;
     _peerAcceptedForUi = false;
     _userMicPreference = null;
+    _ringingPrejoinRoomID = null;
     unawaited(_disposeMedia());
     isBusy = false;
     currentRoomID = null;
@@ -505,11 +524,13 @@ class OpenIMLiveClient implements RTCBridge {
       'room.connect begin roomID=$roomID url=$liveURL tokenLen=${token.length} skipSession=$skipSessionActivation',
     );
     // CallKit path: re-bridge immediately — do not stall ICE for settle delays.
+    var callKitAudioOn = false;
     if (skipSessionActivation && Platform.isIOS) {
       await IosWebRtcAudio.bridgeCallKitSession();
+      callKitAudioOn = await IosWebRtcAudio.isEnabled();
       CallAudioDebugLog.add(
         'livekit',
-        'pre-connect audio enabled=${await IosWebRtcAudio.isEnabled()}',
+        'pre-connect audio enabled=$callKitAudioOn',
       );
     }
     // Warm DNS/TLS — cap so a slow HEAD cannot delay join.
@@ -523,9 +544,10 @@ class OpenIMLiveClient implements RTCBridge {
     _connectAbort = Completer<void>();
     final abortFuture = _connectAbort!.future;
     try {
-      // FastConnect publishes mic during join (in-app). CallKit still publishes
-      // after connect — FastConnect there caused clientInitiated disconnects.
-      final fastConnect = enableMicrophone && !skipSessionActivation
+      // FastConnect publishes mic during join when the audio session is live.
+      // CallKit without didActivate still publishes after connect.
+      final fastConnect = enableMicrophone &&
+              (!skipSessionActivation || callKitAudioOn)
           ? FastConnectOptions(
               microphone: const TrackOption<bool, LocalAudioTrack>(enabled: true),
             )
@@ -1006,6 +1028,7 @@ class OpenIMLiveClient implements RTCBridge {
     }
     try {
       await room.localParticipant?.setMicrophoneEnabled(enableMicrophone);
+      if (enableMicrophone) endIncomingPrejoin();
     } catch (e, s) {
       Logger.print('connectMedia mic failed: $e $s');
     }
@@ -1066,17 +1089,9 @@ class OpenIMLiveClient implements RTCBridge {
           'livekit',
           'remote joined identity=${event.participant.identity} remotes=${room.remoteParticipants.length}',
         );
-        _uiOnRemotePresent?.call();
-        PackageBridge.markOutboundPeerPresent?.call(currentRoomID);
+        // Callee may pre-join while still ringing (no tracks). Do not unmute
+        // or treat that as answered — wait for audio or callingAccept.
         unawaited(_subscribeRemoteTracks());
-        if (_userMicPreference != false) {
-          unawaited(_ensurePublished(
-            callType: _mediaCallType ?? CallType.audio,
-            speakerOn: _userSpeakerPreference ?? false,
-            enableCamera: false,
-            enableMicrophone: true,
-          ));
-        }
       })
       ..on<ParticipantDisconnectedEvent>((_) {
         _uiOnRemoteLeft?.call();
@@ -1086,6 +1101,19 @@ class OpenIMLiveClient implements RTCBridge {
         _uiOnRoom?.call(room);
         if (event.track is AudioTrack || event.track is VideoTrack) {
           unawaited(_subscribeRemoteTracks());
+        }
+        // Remote published audio ⇒ they answered. Unmute caller if still waiting.
+        if (event.track is RemoteAudioTrack && !event.track.muted) {
+          _uiOnRemotePresent?.call();
+          PackageBridge.markOutboundPeerPresent?.call(currentRoomID);
+          if (_peerAcceptedForUi && _userMicPreference != false) {
+            unawaited(_ensurePublished(
+              callType: _mediaCallType ?? CallType.audio,
+              speakerOn: _userSpeakerPreference ?? false,
+              enableCamera: false,
+              enableMicrophone: true,
+            ));
+          }
         }
       })
       ..on<TrackUnsubscribedEvent>((_) => _uiOnRoom?.call(room));

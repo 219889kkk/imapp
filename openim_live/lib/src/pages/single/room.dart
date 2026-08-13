@@ -75,17 +75,17 @@ class _SingleRoomViewState extends SignalState<SingleRoomView> {
     }
 
     final speakerOn = enabledSpeaker;
-    // Caller waiting for answer: join room but skip CallKit/keepalive so
-    // ringback isn't ducked and no lock-screen "ongoing call" is created.
-    final waitingForPeer = widget.initState == CallState.call;
+    // Caller waiting / callee still ringing: join (or attach prejoin) with mic off.
+    final ringing = widget.initState == CallState.call ||
+        widget.initState == CallState.beCalled;
+    final deferMic = ringing && callState != CallState.calling;
     await client.connectMedia(
       certificate: certificate,
       callType: widget.callType,
       speakerOn: speakerOn,
-      enableCamera: widget.callType == CallType.video && !waitingForPeer,
-      // Waiting caller: mute mic so ringback doesn't feedback.
-      enableMicrophone: !waitingForPeer,
-      enableKeepAlive: !waitingForPeer,
+      enableCamera: widget.callType == CallType.video && !deferMic,
+      enableMicrophone: !deferMic,
+      enableKeepAlive: !deferMic,
       onDisconnected: _onLiveKitDisconnected,
     );
     await _attachSharedMedia(client);
@@ -222,9 +222,11 @@ class _SingleRoomViewState extends SignalState<SingleRoomView> {
     if (room != null) roomDidUpdateSubject.add(room);
   }
 
-  /// Caller still waiting for answer: keep mic off while ring plays.
+  /// Caller still waiting, or incoming still ringing: keep mic off.
   bool get _deferMicrophone =>
-      widget.initState == CallState.call && callState != CallState.calling;
+      (widget.initState == CallState.call ||
+          widget.initState == CallState.beCalled) &&
+      callState != CallState.calling;
 
   Future<void> _applySpeakerRoute() async {
     final speakerOn = enabledSpeaker;
@@ -289,15 +291,14 @@ class _SingleRoomViewState extends SignalState<SingleRoomView> {
   void onParticipantConnected() {
     _remoteLeaveTimer?.cancel();
     _disconnectCloseTimer?.cancel();
-    // Caller waiting: remote in LiveKit means answered — cancel 30s ring timeout.
+    // Callee may pre-join while ringing (no audio track yet). Do not promote
+    // or cancel the ring timeout until they publish / callingAccept arrives.
+    if (_deferMicrophone) {
+      super.onParticipantConnected();
+      return;
+    }
     if (widget.initState == CallState.call) {
       PackageBridge.markOutboundPeerPresent?.call(roomID ?? widget.roomID);
-    }
-    if (_deferMicrophone) {
-      // Clear deferred mute before promote → publish / restore audio.
-      OpenIMLiveClient().setUserMicPreference(true);
-      enabledMicrophone = true;
-      promoteInCallUi(reason: 'remote-joined-livekit');
     }
     super.onParticipantConnected();
     if (widget.callType == CallType.video) {
