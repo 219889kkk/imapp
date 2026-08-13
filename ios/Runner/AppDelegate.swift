@@ -122,8 +122,10 @@ import flutter_callkit_incoming
         // PushKit must be registered early so VoIP wakes can report CallKit before completion.
         self.registerVoipPush()
 
-        // Clear stale home-screen badge before Flutter boots (logged-out / reinstall).
-        // Logged-in unread is restored by Dart after IM sync.
+        // Overlay IPA keeps UserDefaults. A leftover "logged in" hint would skip
+        // badge wipes while Flutter is still on the login page. Dart re-arms
+        // the hint only after IM login succeeds, then restores real unread.
+        UserDefaults.standard.set(false, forKey: "hangxun.hasLoginSession")
         self.clearIconBadge()
 
         return super.application(application, didFinishLaunchingWithOptions: launchOptions)
@@ -133,6 +135,18 @@ import flutter_callkit_incoming
     /// Never remove delivered/pending notifications — that cancels incoming-call
     /// banners / CallKit companions while a ring is in progress.
     private func clearIconBadge() {
+        applyZeroBadge()
+        // Permission / Getui / APNs can restore a stale number — clear again shortly.
+        for delay in [0.5, 2.0, 5.0] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                if !self.hasActiveLoginHint() {
+                    self.applyZeroBadge()
+                }
+            }
+        }
+    }
+
+    private func applyZeroBadge() {
         UIApplication.shared.applicationIconBadgeNumber = 0
         if #available(iOS 16.0, *) {
             UNUserNotificationCenter.current().setBadgeCount(0) { error in
@@ -141,22 +155,11 @@ import flutter_callkit_incoming
                 }
             }
         }
-        // Permission / push registration can restore a stale number — clear again shortly.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            if !self.hasActiveLoginHint() {
-                UIApplication.shared.applicationIconBadgeNumber = 0
-                if #available(iOS 16.0, *) {
-                    UNUserNotificationCenter.current().setBadgeCount(0, withCompletionHandler: { _ in })
-                }
-            }
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-            if !self.hasActiveLoginHint() {
-                UIApplication.shared.applicationIconBadgeNumber = 0
-                if #available(iOS 16.0, *) {
-                    UNUserNotificationCenter.current().setBadgeCount(0, withCompletionHandler: { _ in })
-                }
-            }
+    }
+
+    private func wipeBadgeIfLoggedOut() {
+        if !hasActiveLoginHint() {
+            clearIconBadge()
         }
     }
 
@@ -164,30 +167,50 @@ import flutter_callkit_incoming
         super.applicationDidBecomeActive(application)
         // Permission dialog / push wake can restore a stale badge before login.
         // Dart will re-apply the real unread count after IM login.
-        if !self.hasActiveLoginHint() {
-            clearIconBadge()
-        }
+        wipeBadgeIfLoggedOut()
     }
 
     override func applicationWillEnterForeground(_ application: UIApplication) {
         super.applicationWillEnterForeground(application)
-        if !hasActiveLoginHint() {
-            clearIconBadge()
-        }
+        wipeBadgeIfLoggedOut()
     }
 
-    /// Best-effort: UserDefaults flag written by Flutter when a session exists.
+    /// Best-effort: UserDefaults flag written by Flutter after IM login succeeds.
     private func hasActiveLoginHint() -> Bool {
         UserDefaults.standard.bool(forKey: "hangxun.hasLoginSession")
     }
 
-    /// Required empty hook so Getui can receive remote notifications when the app is backgrounded.
+    /// Required so Getui can receive remote notifications when the app is backgrounded.
+    /// APNs `badge` is applied by SpringBoard even before login — wipe it then.
     override func application(
         _ application: UIApplication,
         didReceiveRemoteNotification userInfo: [AnyHashable: Any],
         fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
     ) {
+        wipeBadgeIfLoggedOut()
         completionHandler(.newData)
+    }
+
+    override func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        if !hasActiveLoginHint() {
+            applyZeroBadge()
+            completionHandler([])
+            return
+        }
+        super.userNotificationCenter(center, willPresent: notification, withCompletionHandler: completionHandler)
+    }
+
+    override func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
+        wipeBadgeIfLoggedOut()
+        super.userNotificationCenter(center, didReceive: response, withCompletionHandler: completionHandler)
     }
 
     // MARK: - CallkitIncomingAppDelegate (required by flutter_callkit_incoming)

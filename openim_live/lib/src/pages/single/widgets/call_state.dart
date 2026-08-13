@@ -345,12 +345,8 @@ abstract class SignalState<T extends SignalView> extends State<T>
       }
 
       Logger.print('accept from UI roomID=$target');
-      callState = CallState.connecting;
-      callStateSubject.add(CallState.connecting);
-      // Unified pipeline: permissions + accept signal + token + LiveKit join.
+      promoteInCallUi(reason: 'pickup-tap', force: true);
       await widget.onTapPickup!.call();
-      // Media is live after accept — leave "connecting" even if UI attach is slow.
-      promoteInCallUi(reason: 'after-accept');
       try {
         await _adoptActiveCall();
       } catch (e, s) {

@@ -40,7 +40,8 @@ class PushController extends GetxService {
     super.onInit();
     if (_hasGetuiCredentials) {
       pushType = PushType.getui;
-      _ensureGetuiStarted();
+      // Do not start Getui until [login]. startSdk registers APNs and can
+      // stamp the home-screen badge from queued payloads before any account.
     } else {
       pushType = PushType.none;
       Logger.print(

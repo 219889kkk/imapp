@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_easyloading/flutter_easyloading.dart';
 import 'package:flutter_openim_sdk/flutter_openim_sdk.dart';
@@ -115,7 +117,9 @@ class LoginLogic extends GetxController {
     pwdCtrl.addListener(_onChanged);
     // Reinstall / logout can leave a SpringBoard badge until first paint.
     if (Get.isRegistered<AppController>()) {
-      Get.find<AppController>().clearBadgeForLoggedOut();
+      final app = Get.find<AppController>();
+      unawaited(app.syncNativeLoginHint(false));
+      app.clearBadgeForLoggedOut();
     }
     super.onInit();
   }

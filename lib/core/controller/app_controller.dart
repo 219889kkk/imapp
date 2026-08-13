@@ -140,6 +140,13 @@ class AppController extends GetxController
     WidgetsBinding.instance.addObserver(this);
     _syncStylesTheme();
     _initPlayer();
+
+    // Overlay IPA keeps DataSp tokens + UserDefaults. Disarm native badge
+    // immediately; splash/login re-arms only after IM login succeeds.
+    SessionGuard.markLoggedOut();
+    unawaited(syncNativeLoginHint(false));
+    clearBadgeForLoggedOut();
+
     final initializationSettings = InitializationSettings(
       android: initializationSettingsAndroid,
       iOS: initializationSettingsDarwin,
@@ -152,18 +159,9 @@ class AppController extends GetxController
     _listenConnectivity();
     PackageBridge.clearCallNotification = cancelCallNotification;
 
-    // Reinstall / cold start on login screen must not keep a stale icon badge.
-    if (!_hasLoginSession) {
-      SessionGuard.markLoggedOut();
-      await syncNativeLoginHint(false);
-      clearBadgeForLoggedOut();
-    } else {
-      await syncNativeLoginHint(true);
-    }
-
-    // Request permission AFTER badge wipe; clear again once the dialog returns.
+    // Request permission AFTER badge wipe; Allow Notifications can restore a stale number.
     await _requestNotificationPermissions();
-    if (!_hasLoginSession) {
+    if (!_imLoggedIn) {
       clearBadgeForLoggedOut();
     }
 

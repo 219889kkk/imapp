@@ -45,16 +45,13 @@ class SplashLogic extends GetxController {
   }
 
   Future<void> _boot() async {
-    // No session → wipe stale icon badge immediately (reinstall / logged-out).
+    // Overlay reinstall can still have tokens. Keep native badge disarmed
+    // until IM login succeeds — leftover UserDefaults must not skip wipes.
+    SessionGuard.markLoggedOut();
+    await appLogic.syncNativeLoginHint(false);
+    appLogic.clearBadgeForLoggedOut();
     final hasSession = (userID?.trim().isNotEmpty ?? false) &&
         (token?.trim().isNotEmpty ?? false);
-    if (!hasSession) {
-      SessionGuard.markLoggedOut();
-      await appLogic.syncNativeLoginHint(false);
-      appLogic.clearBadgeForLoggedOut();
-    } else {
-      await appLogic.syncNativeLoginHint(true);
-    }
 
     // No artificial countdown — leave as soon as SDK init finishes (or times out).
     final sdkOk = await _sdkReady.future;

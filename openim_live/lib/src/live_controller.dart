@@ -609,11 +609,10 @@ mixin OpenIMLive {
     PackageBridge.clearCallNotification?.call();
     if (roomID.isNotEmpty) {
       _markRoomAnswered(roomID);
-      // Only cover CallKit incoming→active transition noise (~2.5s).
-      // Long suppress was swallowing real lock-screen hangups (Bug1).
+      _markCallConnected();
       _armCallKitAcceptSettle(roomID);
-      // Do NOT setConnected here — wait until LiveKit join succeeds (avoids audio flap).
     }
+    signalingSubject.add(CallEvent(CallState.calling, resolved));
     CallAudioDebugLog.add('callkit', 'accept join roomID=$roomID');
     unawaited(_callKitAcceptAndJoin(resolved));
   }
@@ -1114,6 +1113,9 @@ mixin OpenIMLive {
 
     final gen = _callSessionGen;
     _activeCallSignaling = signaling;
+    _markRoomAnswered(roomID);
+    _markCallConnected();
+    signalingSubject.add(CallEvent(CallState.calling, signaling));
     OpenIMLiveClient().onTapHangup = (duration, isPositive) => onTapHangup(
           signaling..userID = OpenIM.iMManager.userID,
           duration,
@@ -1631,9 +1633,8 @@ mixin OpenIMLive {
       unawaited(_stopRingSound());
       _activeCallSignaling = merged;
       Logger.print('caller peer accepted roomID=$roomID');
-      CallAudioDebugLog.add('ring', 'peer accepted — cancel timeout roomID=$roomID');
+      CallAudioDebugLog.add('ring', 'peer accepted — start timer roomID=$roomID');
       final client = OpenIMLiveClient();
-      // Waiting dial keeps mic off — clear preference so answer can unmute.
       client.setUserMicPreference(true);
       client.markPeerAcceptedForUi();
       unawaited(client.onCallActive(
@@ -1642,17 +1643,10 @@ mixin OpenIMLive {
       ));
     }
 
-    // Start the in-call timer only when the peer is actually in LiveKit —
-    // otherwise the caller clock runs while the callee is still joining.
-    final hasRemote =
-        OpenIMLiveClient().mediaRoom?.remoteParticipants.isNotEmpty ?? false;
-    if (hasRemote) {
-      _markCallConnected();
-      signalingSubject.add(CallEvent(CallState.calling, merged));
-      OpenIMLiveClient().promoteCallingUi(markAccepted: true);
-    } else {
-      signalingSubject.add(CallEvent(CallState.connecting, merged));
-    }
+    // Same clock as callee: start at accept, not when LiveKit remote arrives.
+    _markCallConnected();
+    signalingSubject.add(CallEvent(CallState.calling, merged));
+    OpenIMLiveClient().promoteCallingUi(markAccepted: true);
   }
 
   /// Accept payload may omit fields — always merge with active outbound session.
@@ -1982,10 +1976,12 @@ mixin OpenIMLive {
       if (roomID.isNotEmpty) {
         _callKitAcceptHandledRoomID = roomID;
         _markRoomAnswered(roomID);
+        _markCallConnected();
         _armCallKitAcceptSettle(roomID);
       }
       _beCalledEvent = null;
       if (signaling != null) {
+        signalingSubject.add(CallEvent(CallState.calling, signaling));
         unawaited(_acceptIncomingCall(signaling, requestPermissions: false));
       } else {
         Logger.print('notification accept: no signaling context');
@@ -2015,9 +2011,11 @@ mixin OpenIMLive {
         if (roomID.isNotEmpty) {
           _callKitAcceptHandledRoomID = roomID;
           _markRoomAnswered(roomID);
+          _markCallConnected();
           _armCallKitAcceptSettle(roomID);
         }
         if (signaling != null) {
+          signalingSubject.add(CallEvent(CallState.calling, signaling));
           unawaited(_acceptIncomingCall(signaling, requestPermissions: false));
         }
       },
@@ -2305,6 +2303,7 @@ mixin OpenIMLive {
       onBusyLine: onBusyLine,
       onStartCalling: () {
         unawaited(_stopRingSound());
+        _markCallConnected();
       },
       onError: onError,
       onRoomDisconnected: () => onRoomDisconnected(signal),

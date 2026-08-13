@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:openim_common/openim_common.dart';
 
+import '../../core/controller/app_controller.dart';
 import '../../core/controller/im_controller.dart';
 import '../../routes/app_navigator.dart';
 
@@ -82,6 +83,10 @@ class RegisterLogic extends GetxController {
       });
       DataSp.putLoginType(2);
       await imLogic.login(data.userID, data.imToken);
+      SessionGuard.markLoggedIn();
+      if (Get.isRegistered<AppController>()) {
+        await Get.find<AppController>().syncNativeLoginHint(true);
+      }
       PushController.login(data.userID);
       VoipCallkitController.login(data.userID);
     });

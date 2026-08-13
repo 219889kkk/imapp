@@ -122,6 +122,11 @@ class IMController extends GetxController with IMCallback, OpenIMLive {
           },
           onConnectSuccess: () {
             imSdkStatus(IMSdkStatus.connectionSucceeded);
+            var loggedIn = false;
+            try {
+              loggedIn = OpenIM.iMManager.isLogined;
+            } catch (_) {}
+            if (!loggedIn) return;
             // Re-arm call alerts after reconnect (suppress/login-hint races).
             SessionGuard.markLoggedIn();
             if (Get.isRegistered<AppController>()) {

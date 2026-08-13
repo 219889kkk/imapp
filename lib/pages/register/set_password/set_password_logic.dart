@@ -3,6 +3,7 @@ import 'package:get/get.dart';
 import 'package:openim/pages/login/login_logic.dart';
 import 'package:openim_common/openim_common.dart';
 
+import '../../../core/controller/app_controller.dart';
 import '../../../core/controller/im_controller.dart';
 import '../../../routes/app_navigator.dart';
 
@@ -89,6 +90,10 @@ class SetPasswordLogic extends GetxController {
       DataSp.putLoginType(email != null ? 1 : 0);
       await imLogic.login(data.userID, data.imToken);
       Logger.print('---------im login success-------');
+      SessionGuard.markLoggedIn();
+      if (Get.isRegistered<AppController>()) {
+        await Get.find<AppController>().syncNativeLoginHint(true);
+      }
       PushController.login(data.userID);
       VoipCallkitController.login(data.userID);
       Logger.print('---------jpush login success----');
