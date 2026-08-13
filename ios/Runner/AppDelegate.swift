@@ -9,13 +9,14 @@ import WebRTC
 import flutter_callkit_incoming
 
 @main
-@objc class AppDelegate: FlutterAppDelegate, PKPushRegistryDelegate, CallkitIncomingAppDelegate {
+@objc class AppDelegate: FlutterAppDelegate, CallkitIncomingAppDelegate, HangXunVoipPushHandling {
 
     var replayKitChannel: FlutterMethodChannel! = nil
     var voipChannel: FlutterMethodChannel! = nil
     var observeTimer: Timer?
     var hasEmittedFirstSample = false
     private var voipRegistry: PKPushRegistry?
+    private var voipPushDelegate: HangXunVoipPushDelegate?
     /// roomID → endedAt (ignore late PushKit invites that re-show CallKit).
     private var endedVoipRooms: [String: Date] = [:]
     private let endedVoipRoomTTL: TimeInterval = 120
@@ -25,6 +26,9 @@ import flutter_callkit_incoming
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
     ) -> Bool {
         guard let controller = window?.rootViewController as? FlutterViewController else {
+            NSLog("HangXun: no FlutterViewController at launch — PushKit still registered")
+            GeneratedPluginRegistrant.register(with: self)
+            self.registerVoipPush()
             return super.application(application, didFinishLaunchingWithOptions: launchOptions)
         }
 
@@ -124,7 +128,7 @@ import flutter_callkit_incoming
         // CallKit owns activation on lock-screen answer — AppDelegate bridges to WebRTC.
         GeneratedPluginRegistrant.register(with: self)
 
-        // PushKit must be registered early so VoIP wakes can report CallKit before completion.
+        // After CallKit plugin is up: every VoIP wake can report incoming before completion.
         self.registerVoipPush()
 
         // Overlay IPA keeps UserDefaults. A leftover "logged in" hint would skip
@@ -415,20 +419,25 @@ import flutter_callkit_incoming
     // MARK: - PushKit (VoIP)
 
     private func registerVoipPush() {
+        if voipRegistry != nil {
+            return
+        }
         loadEndedVoipRoomsIfNeeded()
+        let pushDelegate = HangXunVoipPushDelegate()
+        pushDelegate.handler = self
+        self.voipPushDelegate = pushDelegate
         let registry = PKPushRegistry(queue: DispatchQueue.main)
-        registry.delegate = self
+        registry.delegate = pushDelegate
         registry.desiredPushTypes = [.voIP]
         self.voipRegistry = registry
         NSLog("HangXun VoIP: PKPushRegistry registered")
     }
 
-    func pushRegistry(_ registry: PKPushRegistry, didUpdate credentials: PKPushCredentials, for type: PKPushType) {
-        guard type == .voIP else { return }
-        let deviceToken = credentials.token.map { String(format: "%02x", $0) }.joined()
+    func hangxunDidUpdateVoipToken(_ token: Data) {
+        let deviceToken = token.map { String(format: "%02x", $0) }.joined()
         NSLog("HangXun VoIP token: %@", deviceToken)
 
-        HangXunGetuiVoip.registerPushKitToken(credentials.token)
+        HangXunGetuiVoip.registerPushKitToken(token)
 
         UserDefaults.standard.set(deviceToken, forKey: "DevicePushTokenVoIP")
         SwiftFlutterCallkitIncomingPlugin.sharedInstance?.setDevicePushTokenVoIP(deviceToken)
@@ -438,7 +447,7 @@ import flutter_callkit_incoming
         }
     }
 
-    func pushRegistry(_ registry: PKPushRegistry, didInvalidatePushTokenFor type: PKPushType) {
+    func hangxunDidInvalidateVoipToken() {
         NSLog("HangXun VoIP: token invalidated")
         UserDefaults.standard.set("", forKey: "DevicePushTokenVoIP")
         SwiftFlutterCallkitIncomingPlugin.sharedInstance?.setDevicePushTokenVoIP("")
@@ -611,20 +620,15 @@ import flutter_callkit_incoming
         }
     }
 
-    /// iOS 13+: MUST report CallKit incoming call before invoking completion.
-    func pushRegistry(
-        _ registry: PKPushRegistry,
-        didReceiveIncomingPushWith payload: PKPushPayload,
-        for type: PKPushType,
+    /// iOS 13+: report-required VoIP must CallKit-report before `completion`.
+    /// iOS 26.4+: `mustReport` comes from PKVoIPPushMetadata.
+    func hangxunDidReceiveVoipPayload(
+        _ payload: PKPushPayload,
+        mustReport: Bool,
         completion: @escaping () -> Void
     ) {
-        guard type == .voIP else {
-            completion()
-            return
-        }
-
         let dict = flattenVoipPayload(payload.dictionaryPayload)
-        NSLog("HangXun VoIP payload (flat): %@", dict)
+        NSLog("HangXun VoIP payload (flat) mustReport=%@ %@", mustReport ? "1" : "0", dict)
 
         HangXunGetuiVoip.handlePushKitPayload(dict)
 
@@ -637,54 +641,56 @@ import flutter_callkit_incoming
         if action == "cancel" || action == "end" || action == "hungup" || action == "reject" {
             NSLog("HangXun VoIP remote end action=%@ room=%@", action, roomID)
             markVoipRoomEnded(roomID)
-            endCallKitCalls(roomID: roomID)
             notifyDartVoipRemoteEnd(roomID: roomID, action: action)
-            DispatchQueue.main.async { completion() }
+            fulfillVoipEndAction(roomID: roomID, dict: dict, mustReport: mustReport, completion: completion)
             return
         }
 
-        // Callee answered — notify caller Dart to cancel ring timeout (no CallKit UI).
         if action == "accept" || action == "answered" {
             NSLog("HangXun VoIP peer accept room=%@", roomID)
             notifyDartVoipRemoteEnd(roomID: roomID, action: "accept")
-            DispatchQueue.main.async { completion() }
+            // Caller-side push: never attach an incoming CXCall to the room UUID.
+            if mustReport {
+                fulfillVoipGhost(completion: completion)
+            } else {
+                completion()
+            }
             return
         }
 
         if isVoipRoomEnded(roomID) {
-            NSLog("HangXun VoIP: skip CallKit (room ended, room=%@)", roomID)
-            endCallKitCalls(roomID: roomID)
-            DispatchQueue.main.async { completion() }
+            NSLog("HangXun VoIP: room already ended %@", roomID)
+            fulfillVoipEndAction(roomID: roomID, dict: dict, mustReport: mustReport, completion: completion)
             return
         }
 
-        // Prefer ringing over silence: only skip CallKit when we *know* this
-        // phone has no session (logout/kick). Hint is refreshed on IM connect.
         if !hasActiveLoginHint() {
-            // Cold VoIP before Flutter sets hint — still ring once; Dart will
-            // no-op if truly logged out. Skipping here caused "no prompt".
             NSLog("HangXun VoIP: login hint false — still show CallKit room=%@", roomID)
         }
 
-        // Always report CallKit before completion (Apple VoIP requirement).
-        // Foreground: Dart dismisses CallKit and shows in-app overlay.
-        // Never skip report when .active — that kills future VoIP wakes.
+        if !mustReport {
+            NSLog("HangXun VoIP: mustReport=0 invite room=%@ — notify Dart only", roomID)
+            notifyDartVoipCallKitPresented(roomID: roomID)
+            completion()
+            return
+        }
+
+        reportIncomingCallKit(roomID: roomID, dict: dict, notifyDart: true, completion: completion)
+    }
+
+    private func incomingCallKitData(roomID: String, dict: [String: Any]) -> flutter_callkit_incoming.Data {
         let mediaType = (dict["mediaType"] as? String) ?? "audio"
         let isVideo = mediaType == "video"
         let nameCaller = (dict["nickname"] as? String)
             ?? (dict["inviterNickname"] as? String)
             ?? (dict["nameCaller"] as? String)
             ?? "来电"
-        let handle = (dict["inviterUserID"] as? String)
+        var handle = (dict["inviterUserID"] as? String)
             ?? (dict["handle"] as? String)
-            ?? ""
-
-        var info: [String: Any?] = [:]
-        info["id"] = roomID
-        info["nameCaller"] = nameCaller
-        info["appName"] = "航讯"
-        info["handle"] = handle
-        info["type"] = isVideo ? 1 : 0
+            ?? "hangxun"
+        if handle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            handle = "hangxun"
+        }
         var timeoutSec = 60
         if let t = dict["timeout"] as? Int {
             timeoutSec = t
@@ -693,23 +699,78 @@ import flutter_callkit_incoming
         } else if let t = dict["timeout"] as? Double {
             timeoutSec = Int(t)
         }
-        // Tiny/zero timeout makes CallKit fire Timeout immediately → false miss/reject.
         if timeoutSec < 30 { timeoutSec = 60 }
+        var info: [String: Any?] = [:]
+        info["id"] = roomID
+        info["nameCaller"] = nameCaller
+        info["appName"] = "航讯"
+        info["handle"] = handle
+        info["type"] = isVideo ? 1 : 0
         info["duration"] = timeoutSec * 1000
         info["extra"] = dict
-
         let data = flutter_callkit_incoming.Data(args: info)
-        // Let CallKit activate session; WebRTC bridges in didActivateAudioSession.
         data.configureAudioSession = false
         data.audioSessionActive = false
+        return data
+    }
+
+    private func reportIncomingCallKit(
+        roomID: String,
+        dict: [String: Any],
+        notifyDart: Bool,
+        completion: @escaping () -> Void
+    ) {
+        let data = incomingCallKitData(roomID: roomID, dict: dict)
         let appState = UIApplication.shared.applicationState
         NSLog("HangXun VoIP: report CallKit room=%@ state=%ld", roomID, appState.rawValue)
         SwiftFlutterCallkitIncomingPlugin.sharedInstance?.showCallkitIncoming(data, fromPushKit: true)
-        notifyDartVoipCallKitPresented(roomID: roomID)
+        if notifyDart {
+            notifyDartVoipCallKitPresented(roomID: roomID)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45, execute: completion)
+    }
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+    private func callKitHasUUID(_ roomID: String) -> Bool {
+        let target = roomID.lowercased()
+        return CXCallObserver().calls.contains { $0.uuid.uuidString.lowercased() == target }
+    }
+
+    /// Cancel / stale: end an existing CXCall, or report-then-end if none exists.
+    private func fulfillVoipEndAction(
+        roomID: String,
+        dict: [String: Any],
+        mustReport: Bool,
+        completion: @escaping () -> Void
+    ) {
+        if callKitHasUUID(roomID) {
+            endCallKitCalls(roomID: roomID)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: completion)
+            return
+        }
+        if mustReport {
+            fulfillVoipThenEnd(roomID: roomID, dict: dict, completion: completion)
+        } else {
             completion()
         }
+    }
+
+    /// Report then end so cancel/stale pushes still satisfy iOS 13+/26 VoIP rules.
+    private func fulfillVoipThenEnd(
+        roomID: String,
+        dict: [String: Any],
+        completion: @escaping () -> Void
+    ) {
+        let data = incomingCallKitData(roomID: roomID, dict: dict)
+        let plugin = SwiftFlutterCallkitIncomingPlugin.sharedInstance
+        plugin?.showCallkitIncoming(data, fromPushKit: true)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            plugin?.endCall(data)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: completion)
+    }
+
+    private func fulfillVoipGhost(completion: @escaping () -> Void) {
+        fulfillVoipThenEnd(roomID: UUID().uuidString, dict: [:], completion: completion)
     }
 
     func handleReplayKitFromFlutter(result: FlutterResult, call: FlutterMethodCall) {
