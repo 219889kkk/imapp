@@ -260,7 +260,7 @@ mixin OpenIMLive {
   }
 
   void _armCallKitAcceptSettle(String? roomID,
-      {Duration duration = const Duration(milliseconds: 2500)}) {
+      {Duration duration = const Duration(seconds: 4)}) {
     final id = roomID?.trim() ?? '';
     if (id.isEmpty) return;
     final until =
@@ -281,6 +281,28 @@ mixin OpenIMLive {
     if (id.isEmpty) return false;
     final until = _callKitAcceptSettleUntilMs[id];
     return until != null && DateTime.now().millisecondsSinceEpoch < until;
+  }
+
+  /// Answered / joining CallKit call — keep the system call UI and its audio
+  /// session. Dismissing it (unlock / leave Safari) kills AVAudioSession and
+  /// looks like an instant hangup while the caller keeps timing.
+  bool _shouldKeepCallKitAudio([String? roomID]) {
+    final id = (roomID ??
+            _activeCallSignaling?.invitation?.roomID ??
+            OpenIMLiveClient().currentRoomID)
+        ?.trim() ??
+        '';
+    final client = OpenIMLiveClient();
+    if (id.isEmpty) {
+      return client.isBusy || _acceptJoinInFlight != null;
+    }
+    return _answeredRoomUntilMs.containsKey(id) ||
+        _isAcceptInProgressForRoom(id) ||
+        _callKitAcceptHandledRoomID == id ||
+        client.hasMediaFor(id) ||
+        (client.isBusy &&
+            (client.currentRoomID == id ||
+                (client.currentRoomID?.isEmpty ?? true)));
   }
 
   /// Bridge for PackageBridge / plugin — always means "we dismissed CallKit".
@@ -699,11 +721,15 @@ mixin OpenIMLive {
       'gate',
       'wait start activated=$_iosCallKitAudioActivated nativeDidActivate=$_iosCallKitDidActivateNative speaker=$speakerOn',
     );
-    // Bridge immediately so PeerConnection can start — never stall join for 12s.
+    // Bridge immediately. Join as soon as WebRTC audio is actually enabled —
+    // do not wait 12s, and do not start PeerConnection on a dead session.
     await IosWebRtcAudio.bridgeCallKitSession();
-    if (_iosCallKitDidActivateNative || _iosCallKitAudioActivated) {
+    if (_iosCallKitDidActivateNative ||
+        _iosCallKitAudioActivated ||
+        await IosWebRtcAudio.isEnabled()) {
+      _iosCallKitAudioActivated = true;
       Logger.print('iOS CallKit audio already activated');
-      CallAudioDebugLog.add('gate', 'wait skip — already activated');
+      CallAudioDebugLog.add('gate', 'wait skip — already enabled');
       return;
     }
     final gate = _iosCallKitAudioGate!;
@@ -711,7 +737,8 @@ mixin OpenIMLive {
       await Future.any([
         gate.future,
         _pollNativeCallKitDidActivate(),
-      ]).timeout(const Duration(milliseconds: 800));
+        _pollWebRtcAudioEnabled(),
+      ]).timeout(const Duration(milliseconds: 400));
       Logger.print('iOS CallKit audio session ready');
       CallAudioDebugLog.add(
         'gate',
@@ -722,6 +749,15 @@ mixin OpenIMLive {
       CallAudioDebugLog.add(
           'gate', 'short wait — join now, late didActivate will kickstart');
       Logger.print('iOS CallKit audio: proceed without didActivate');
+    }
+  }
+
+  Future<void> _pollWebRtcAudioEnabled() async {
+    final gen = _callSessionGen;
+    final deadline = DateTime.now().add(const Duration(seconds: 2));
+    while (gen == _callSessionGen && DateTime.now().isBefore(deadline)) {
+      if (await IosWebRtcAudio.isEnabled()) return;
+      await Future<void>.delayed(const Duration(milliseconds: 40));
     }
   }
 
@@ -846,10 +882,26 @@ mixin OpenIMLive {
     }
   }
 
-  /// Foreground: attach in-app UI; dismiss CallKit without treating as hangup.
+  /// Foreground: attach in-app UI. Keep CallKit while joining/in-call so
+  /// Safari/browser accept does not tear down the audio session.
   Future<void> _onIosForegroundResume() async {
     if (!Platform.isIOS) return;
-    await _ensureMicPermissionAfterHeadlessAccept();
+    final keepCallKit = _shouldKeepCallKitAudio();
+    if (keepCallKit) {
+      unawaited(_refreshHeadlessMicPending());
+      final keepRoom = _activeCallSignaling?.invitation?.roomID ??
+          OpenIMLiveClient().currentRoomID;
+      _armCallKitAcceptSettle(keepRoom, duration: const Duration(seconds: 4));
+      final client = OpenIMLiveClient();
+      if (client.mediaRoom != null) {
+        unawaited(client.kickstartIosCallKitMedia(
+          speakerOn: OpenIMLiveClient().userSpeakerPreference,
+          unmuteMic: true,
+        ));
+      }
+    } else {
+      await _ensureMicPermissionAfterHeadlessAccept();
+    }
     FlutterOpenimLiveAlert.closeLiveAlert();
     PackageBridge.clearCallNotification?.call();
 
@@ -874,6 +926,9 @@ mixin OpenIMLive {
         (client.hasMediaFor(activeRoom) ||
             client.isBusy && client.currentRoomID == activeRoom)) {
       _beCalledEvent = null;
+      // Unlock after lock-screen answer: plugin often emits Ended. Ignore it.
+      _armCallKitAcceptSettle(activeRoom,
+          duration: const Duration(seconds: 4));
       if (!client.hasOverlay) {
         Logger.print('iOS fg: attach call UI roomID=$activeRoom');
         _presentCallUi(active, fromHeadless: true);
@@ -895,10 +950,11 @@ mixin OpenIMLive {
         Logger.print(
             'iOS fg: answered/joining from banner roomID=$pendingRoom');
         CallAudioDebugLog.add(
-            'fg', 'answered banner — attach UI roomID=$pendingRoom');
+            'fg', 'answered banner — keep CallKit, attach UI roomID=$pendingRoom');
         _armCallKitAcceptSettle(pendingRoom);
         _activeCallSignaling = pending.data;
-        await _dismissCallKitIncoming(pendingRoom);
+        // Do NOT endCall here — that deactivated audio and looked like a hangup
+        // while the caller had already received accept and kept timing.
         final inFlight = _acceptJoinInFlight;
         if (inFlight != null) {
           unawaited(inFlight.then((_) {
@@ -1122,16 +1178,22 @@ mixin OpenIMLive {
         _pendingHeadlessMicPermission = false;
       }
     }
-    // Unlock / open chat: always ensure WebRTC audio is live (CallKit may have
-    // deactivated with a stale owns flag, or setSpeakerRoute left a dead session).
     final owns = CallAudioKeepAlive.instance.callKitOwnsSession;
     final speaker = OpenIMLiveClient().userSpeakerPreference ?? false;
     CallAudioDebugLog.add(
       'fg',
       'mic restore owns=$owns nativeDidActivate=$_iosCallKitDidActivateNative connecting=${client.isMediaConnecting}',
     );
-    if (owns && !_iosCallKitDidActivateNative) {
-      CallAudioKeepAlive.instance.releaseCallKitSession();
+    // CallKit still owns the session — only bridge. setActive here races
+    // didDeactivate and drops first audio for ~10s / can end the call.
+    if (owns || _iosCallKitDidActivateNative) {
+      await IosWebRtcAudio.bridgeCallKitSession();
+      if (client.isMediaConnecting) return;
+      await client.kickstartIosCallKitMedia(
+        speakerOn: speaker,
+        unmuteMic: true,
+      );
+      return;
     }
     await IosWebRtcAudio.ensureEnabled(speakerOn: speaker, force: true);
     if (client.isMediaConnecting) {
@@ -1162,10 +1224,18 @@ mixin OpenIMLive {
       'fg',
       'restore owns=$owns nativeDidActivate=$_iosCallKitDidActivateNative connecting=${client.isMediaConnecting}',
     );
-    if (owns && !_iosCallKitDidActivateNative) {
-      CallAudioKeepAlive.instance.releaseCallKitSession();
+    if (owns || _iosCallKitDidActivateNative) {
+      await IosWebRtcAudio.bridgeCallKitSession();
+      if (client.isMediaConnecting) {
+        CallAudioDebugLog.add('fg', 'skip audio restore — connect in flight');
+        return;
+      }
+      await client.kickstartIosCallKitMedia(
+        speakerOn: speaker,
+        unmuteMic: true,
+      );
+      return;
     }
-    // Always ensure — covers chat-page navigation after lock-screen answer.
     await IosWebRtcAudio.ensureEnabled(speakerOn: speaker, force: true);
     await CallAudioKeepAlive.instance.prepareForRtc(speakerOn: speaker);
     if (client.isMediaConnecting) {
@@ -1228,9 +1298,10 @@ mixin OpenIMLive {
     }
     final pickupFuture =
         onTapPickup(signaling..userID = OpenIM.iMManager.userID);
+    Future<void>? audioReady;
     if (isCallKitAccept) {
-      unawaited(_waitForIosCallKitAudio(
-          speakerOn: OpenIMLiveClient().userSpeakerPreference));
+      audioReady = _waitForIosCallKitAudio(
+          speakerOn: OpenIMLiveClient().userSpeakerPreference);
       await _refreshHeadlessMicPending();
     } else if (Platform.isIOS) {
       CallAudioKeepAlive.instance.releaseCallKitSession();
@@ -1238,6 +1309,9 @@ mixin OpenIMLive {
     }
 
     final cert = await pickupFuture;
+    if (audioReady != null) {
+      await audioReady;
+    }
     if (gen != _callSessionGen || _isRoomEnded(roomID)) {
       Logger.print('abort accept join after hangup roomID=$roomID');
       if (roomID != null && roomID.isNotEmpty) {
@@ -1542,29 +1616,35 @@ mixin OpenIMLive {
       return;
     }
 
-    final isVideo = merged.invitation?.mediaType == 'video';
     if (!_peerAcceptedRooms.contains(roomID)) {
       _peerAcceptedRooms.add(roomID);
       _cancelRingTimeout();
       _ringTimeoutExtendCount = 0;
       unawaited(_stopRingSound());
       _activeCallSignaling = merged;
-      _markCallConnected();
       Logger.print('caller peer accepted roomID=$roomID');
       CallAudioDebugLog.add('ring', 'peer accepted — cancel timeout roomID=$roomID');
       final client = OpenIMLiveClient();
       // Waiting dial keeps mic off — clear preference so answer can unmute.
       client.setUserMicPreference(true);
+      client.markPeerAcceptedForUi();
       unawaited(client.onCallActive(
         speakerOn: OpenIMLiveClient().userSpeakerPreference,
         unmuteMic: true,
       ));
-    } else {
-      _markCallConnected();
     }
 
-    signalingSubject.add(CallEvent(CallState.calling, merged));
-    OpenIMLiveClient().promoteCallingUi(markAccepted: true);
+    // Start the in-call timer only when the peer is actually in LiveKit —
+    // otherwise the caller clock runs while the callee is still joining.
+    final hasRemote =
+        OpenIMLiveClient().mediaRoom?.remoteParticipants.isNotEmpty ?? false;
+    if (hasRemote) {
+      _markCallConnected();
+      signalingSubject.add(CallEvent(CallState.calling, merged));
+      OpenIMLiveClient().promoteCallingUi(markAccepted: true);
+    } else {
+      signalingSubject.add(CallEvent(CallState.connecting, merged));
+    }
   }
 
   /// Accept payload may omit fields — always merge with active outbound session.
@@ -1731,15 +1811,23 @@ mixin OpenIMLive {
       'ended roomID=$roomKey inCall=$inCall acceptSent=$acceptSent joining=$joining settle=${_isCallKitAcceptSettleArmed(roomID)}',
     );
 
-    // 2) Accept→active transition noise (short settle only, while not yet in media).
-    if (acceptSent &&
-        !inCall &&
-        joining &&
-        _isCallKitAcceptSettleArmed(roomID)) {
+    // 2) Accept→active / unlock: plugin emits Ended after fulfill, and again
+    // when the user unlocks. That used to hang up a call the callee just answered.
+    if (acceptSent && joining && !inCall) {
       Logger.print(
-          'CallKit ended ignored — accept settle joining roomID=$roomKey');
+          'CallKit ended ignored — still joining after accept roomID=$roomKey');
       CallAudioDebugLog.add(
-          'callkit', 'ended ignored acceptSettle roomID=$roomKey');
+          'callkit', 'ended ignored joining roomID=$roomKey');
+      return;
+    }
+
+    // Ignore plugin Ended during the accept/unlock window even after media is up.
+    // Real lock-screen hangup still works after this settle expires.
+    if (acceptSent && _isCallKitAcceptSettleArmed(roomID)) {
+      Logger.print(
+          'CallKit ended ignored — accept/unlock settle roomID=$roomKey inCall=$inCall');
+      CallAudioDebugLog.add(
+          'callkit', 'ended ignored acceptSettle roomID=$roomKey inCall=$inCall');
       return;
     }
 
@@ -1992,18 +2080,24 @@ mixin OpenIMLive {
               });
               return;
             }
-            // Foreground in-app: overlay primary, dismiss duplicate CallKit.
+            // Foreground in-app: overlay primary. Don't wait on CallKit dismiss
+            // when there is no system incoming UI — that delayed in-app answer.
             PackageBridge.clearCallNotification?.call();
             FlutterOpenimLiveAlert.closeLiveAlert();
             _presentCallUi(event.data, fromHeadless: _autoPickup);
             _autoPickup = false;
-            // Dismiss first, then prewarm — never setActive under live CallKit.
-            unawaited(_dismissCallKitIncoming(roomID).then((_) {
-              return _prewarmInAppCallAudio(
-                force: true,
-                afterDismissRoomID: roomID,
-              );
-            }));
+            unawaited(() async {
+              final voip = VoipCallkitController.toOrNull;
+              if (voip?.ownsIncomingUi == true) {
+                await _dismissCallKitIncoming(roomID);
+                await _prewarmInAppCallAudio(
+                  force: true,
+                  afterDismissRoomID: roomID,
+                );
+              } else {
+                await _prewarmInAppCallAudio(force: true);
+              }
+            }());
           } else if (event.state == CallState.beRejected) {
             insertSignalingMessageSubject.add(event);
             _terminateCallUi(roomID);

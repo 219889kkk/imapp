@@ -155,7 +155,9 @@ class Permissions {
     var granted = true;
     var msg = '';
     for (final permission in permissions) {
-      final state = await permission.request();
+      final current = await permission.status;
+      // Already granted — skip request(); iOS request() can stall in-app answer.
+      final state = current.isGranted ? current : await permission.request();
       if (!state.isGranted) {
         granted = false;
         msg += '${permission.title}、';
