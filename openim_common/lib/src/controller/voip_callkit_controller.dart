@@ -81,6 +81,10 @@ class VoipCallkitController extends GetxService {
   void noteIncomingPresented(String? roomID) {
     final id = roomID?.trim() ?? '';
     if (id.isEmpty) return;
+    if (PackageBridge.isCallRoomEnded?.call(id) == true) {
+      Logger.print('CallKit presented ignored — room ended $id');
+      return;
+    }
     _incomingRoomID = id;
     callKitActive.value = true;
     _incomingPresentedAtMs.putIfAbsent(
@@ -94,11 +98,11 @@ class VoipCallkitController extends GetxService {
   Future<bool> recoverSpuriousIncoming(SignalingInfo info) async {
     final id = info.invitation?.roomID?.trim() ?? '';
     if (id.isEmpty) return false;
+    if (PackageBridge.isCallRoomEnded?.call(id) == true) return false;
     if (_spuriousRecoveredRooms.contains(id)) {
       Logger.print('CallKit recover skipped — already tried roomID=$id');
       return false;
     }
-    if (PackageBridge.isCallRoomEnded?.call(id) == true) return false;
     _spuriousRecoveredRooms.add(id);
     callKitActive.value = false;
     _incomingRoomID = null;

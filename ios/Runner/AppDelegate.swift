@@ -627,11 +627,17 @@ import flutter_callkit_incoming
         SwiftFlutterCallkitIncomingPlugin.sharedInstance?.endCall(endData)
     }
 
+    private func pluginEndAllCalls() {
+        SwiftFlutterCallkitIncomingPlugin.sharedInstance?.endAllCalls()
+    }
+
     private func endAllActiveCallKitCalls() {
+        pluginEndAllCalls()
         for call in CXCallObserver().calls where !call.hasEnded {
             requestEndCall(call.uuid)
             pluginEndCall(id: call.uuid.uuidString)
         }
+        pluginEndAllCalls()
     }
 
     private func shouldForceEndAllCallKit(for roomID: String) -> Bool {
@@ -739,7 +745,7 @@ import flutter_callkit_incoming
 
         HangXunGetuiVoip.handlePushKitPayload(dict)
 
-        let action = ((dict["action"] as? String) ?? "").lowercased()
+        let action = voipEndAction(from: dict)
         let roomID = (dict["roomID"] as? String)
             ?? (dict["callUUID"] as? String)
             ?? (dict["id"] as? String)
@@ -775,6 +781,16 @@ import flutter_callkit_incoming
             NSLog("HangXun VoIP: mustReport=0 invite room=%@ — notify Dart only", roomID)
             notifyDartVoipCallKitPresented(roomID: roomID)
             completion()
+            return
+        }
+
+        // App already in foreground: IM shows the full-page invite. Do not
+        // leave a CallKit banner (second answer UI → timer + no audio).
+        // Throwaway CXCall satisfies mustReport without the real roomID.
+        let appState = UIApplication.shared.applicationState
+        if appState == .active {
+            NSLog("HangXun VoIP: foreground invite — dummy CallKit fulfill room=%@", roomID)
+            fulfillVoipWithoutIncomingUi(mustReport: mustReport, completion: completion)
             return
         }
 
@@ -843,23 +859,57 @@ import flutter_callkit_incoming
         return CXCallObserver().calls.contains { $0.uuid.uuidString.lowercased() == target }
     }
 
-    /// Cancel / stale: end an existing CXCall. Never show a new incoming banner.
+    /// Cancel / hungup / reject: always tear down ringing CallKit.
+    /// Dummy fulfill without endAll left lock-screen / home / top-banner ringing.
     private func fulfillVoipEndAction(
         roomID: String,
         dict: [String: Any],
         mustReport: Bool,
         completion: @escaping () -> Void
     ) {
-        let forceEndAll = shouldForceEndAllCallKit(for: roomID)
         if pendingIncomingRoomID() == roomID {
             clearPendingIncomingRoom()
         }
-        endCallKitCalls(roomID: roomID, forceEndAll: forceEndAll)
-        if forceEndAll || callKitHasUUID(roomID) {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: completion)
+        let hadCall = !CXCallObserver().calls.filter { !$0.hasEnded }.isEmpty
+        endCallKitCalls(roomID: roomID, forceEndAll: true)
+        pluginEndAllCalls()
+        if hadCall || !mustReport {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
+                self?.endAllActiveCallKitCalls()
+                completion()
+            }
             return
         }
         fulfillVoipWithoutIncomingUi(mustReport: mustReport, completion: completion)
+    }
+
+    /// Invite vs end: `action` may be missing; customType / body still say "ended".
+    private func voipEndAction(from dict: [String: Any]) -> String {
+        var action = ((dict["action"] as? String) ?? "").lowercased()
+        if action.isEmpty {
+            var customType = 0
+            if let n = dict["customType"] as? Int {
+                customType = n
+            } else if let n = dict["customType"] as? NSNumber {
+                customType = n.intValue
+            } else if let s = dict["customType"] as? String, let n = Int(s) {
+                customType = n
+            }
+            switch customType {
+            case 201: action = "accept"
+            case 202: action = "reject"
+            case 203: action = "cancel"
+            case 204: action = "hungup"
+            default: break
+            }
+        }
+        if action.isEmpty {
+            let body = ((dict["body"] as? String) ?? "")
+            if body.contains("已结束") || body.lowercased().contains("ended") {
+                action = "cancel"
+            }
+        }
+        return action
     }
 
     /// iOS 13+/26 require a CallKit report for some VoIP wakes. Do it without
@@ -868,12 +918,12 @@ import flutter_callkit_incoming
         mustReport: Bool,
         completion: @escaping () -> Void
     ) {
-        let state = UIApplication.shared.applicationState
-        if !mustReport || state == .active || state == .inactive {
-            NSLog("HangXun VoIP: skip incoming UI fulfill mustReport=%@ state=%ld", mustReport ? "1" : "0", state.rawValue)
+        if !mustReport {
+            NSLog("HangXun VoIP: skip incoming UI fulfill mustReport=0")
             completion()
             return
         }
+        // Throwaway CXCall — never the real roomID (that would be a second invite UI).
         let uuid = UUID()
         let update = CXCallUpdate()
         update.remoteHandle = CXHandle(type: .generic, value: "hangxun")
@@ -887,6 +937,7 @@ import flutter_callkit_incoming
             voipFulfillProvider = CXProvider(configuration: config)
         }
         let provider = voipFulfillProvider!
+        NSLog("HangXun VoIP: dummy CallKit fulfill uuid=%@", uuid.uuidString)
         provider.reportNewIncomingCall(with: uuid, update: update) { _ in
             provider.reportCall(with: uuid, endedAt: Date(), reason: .declinedElsewhere)
             DispatchQueue.main.async(execute: completion)

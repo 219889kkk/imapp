@@ -649,8 +649,7 @@ class IMController extends GetxController with IMCallback, OpenIMLive {
           invitationCancelled(signaling);
           _clearCallNotification();
           unawaited(
-              VoipCallkitController.toOrNull?.endCall(
-                      signaling.invitation?.roomID) ??
+              VoipCallkitController.toOrNull?.endAllCalls() ??
                   Future.value());
           break;
         case CustomMessageType.callingHungup:
