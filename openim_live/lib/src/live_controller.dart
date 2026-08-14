@@ -144,7 +144,8 @@ mixin OpenIMLive {
     final id = roomID?.trim() ?? '';
     if (id.isEmpty) return false;
     _pruneEndedRooms();
-    return _endedRoomUntilMs.containsKey(id);
+    if (_endedRoomUntilMs.containsKey(id)) return true;
+    return VoipCallkitController.toOrNull?.isNativelyEnded(id) == true;
   }
 
   bool _sameCallRoom(String a, String b) {
@@ -267,6 +268,9 @@ mixin OpenIMLive {
   final backgroundSubject = PublishSubject<bool>();
 
   final insertSignalingMessageSubject = PublishSubject<CallEvent>();
+
+  /// One chat-record / one cancel-to-caller per missed room.
+  final Set<String> _missNotifiedRooms = {};
 
   /// One chat call-record bubble per room (hangup + beHangup echo used to double).
   final Set<String> _hangupRecordInsertedRooms = {};
@@ -1933,6 +1937,16 @@ mixin OpenIMLive {
       Logger.print('ignore accept: not outbound dial roomID=$roomID');
       return;
     }
+    // Caller already left 邀请中 (cancel/timeout). A late accept must not
+    // resurrect an incoming/connecting UI on the caller's phone.
+    final activeRoom =
+        _activeCallSignaling?.invitation?.roomID?.trim() ?? '';
+    final client = OpenIMLiveClient();
+    if (activeRoom != roomID && !client.isBusy && !client.hasOverlay) {
+      Logger.print('ignore accept: no active outbound session roomID=$roomID');
+      _markRoomEnded(roomID);
+      return;
+    }
 
     if (!_peerAcceptedRooms.contains(roomID)) {
       _peerAcceptedRooms.add(roomID);
@@ -2312,11 +2326,19 @@ mixin OpenIMLive {
           'callkit', 'recover skipped — ended/answered roomID=$roomID');
       return;
     }
-    // In HangXun (state 3): CallKit ended is the silent mustReport dummy, not
-    // the real invite. Re-showing CallKit is the hangup bounce.
-    if (!_iosShouldUseCallKitForRing(roomID)) {
+    // In-app full-page invite: CallKit ended is the silent dummy — do not
+    // re-show CallKit and do not treat it as a missed call.
+    if (!_iosShouldUseCallKitForRing(roomID) &&
+        OpenIMLiveClient().hasOverlay) {
       CallAudioDebugLog.add(
-          'callkit', 'recover skipped — in-app, ignore dummy end roomID=$roomID');
+          'callkit', 'recover skipped — in-app overlay roomID=$roomID');
+      return;
+    }
+    if (!_iosShouldUseCallKitForRing(roomID)) {
+      // Home/lock CallKit died while Flutter looked "resumed". Tell caller.
+      CallAudioDebugLog.add(
+          'callkit', 'CallKit gone while ringing — notify caller roomID=$roomID');
+      await _dropIncomingAndNotifyCaller(info, roomID);
       return;
     }
     final voip = VoipCallkitController.toOrNull;
@@ -2339,15 +2361,22 @@ mixin OpenIMLive {
     String? roomID,
   ) async {
     final id = roomID?.trim() ?? info?.invitation?.roomID?.trim() ?? '';
-    if (id.isNotEmpty && _isRoomEnded(id)) return;
     if (_userHasAnsweredCall(id)) return;
+    // Still tell the caller even if we already cleared local UI (Dart timeout
+    // used to mark ended first, then CallKit timeout skipped the cancel).
     unawaited(_notifyCallerInviteStopped(info));
+    if (id.isNotEmpty && _isRoomEnded(id)) return;
     _terminateCallUi(id.isEmpty ? null : id);
   }
 
   Future<void> _notifyCallerInviteStopped(SignalingInfo? info) async {
     if (info?.invitation == null) return;
-    final peers = _peerUserIDs(info!);
+    final id = info!.invitation?.roomID?.trim() ?? '';
+    if (id.isNotEmpty && !_missNotifiedRooms.add(id)) {
+      CallAudioDebugLog.add('ring', 'miss notify skipped — already sent $id');
+      return;
+    }
+    final peers = _peerUserIDs(info);
     if (peers.isEmpty) return;
     try {
       await _triggerVoipPush(info, action: 'cancel', toUserIDs: peers);
@@ -2632,14 +2661,14 @@ mixin OpenIMLive {
               unawaited(onTapHangup(
                   data..userID = OpenIM.iMManager.userID, _connectedDurationSec(), true));
             } else {
-              _terminateCallUi(roomID.isEmpty ? null : roomID);
+              // Missed ring: caller AND callee must send cancel so the other
+              // side does not stay on 邀请中 / replay a stale invite later.
               if (isCaller) {
                 unawaited(onTimeoutCancelled(data));
               } else {
-                // Callee miss — local cleanup only. Reject would show "对方已拒绝".
-                CallAudioDebugLog.add(
-                    'ring', 'callee timeout — local end only roomID=$roomID');
+                unawaited(_notifyCallerInviteStopped(data));
               }
+              _terminateCallUi(roomID.isEmpty ? null : roomID);
             }
           }
         },
@@ -3252,6 +3281,8 @@ mixin OpenIMLive {
   }
 
   onTimeoutCancelled(SignalingInfo signaling) async {
+    final roomID = signaling.invitation?.roomID?.trim() ?? '';
+    if (roomID.isNotEmpty) _missNotifiedRooms.add(roomID);
     _markRoomEnded(signaling.invitation?.roomID);
     final recvUserIDList = _recvUserIDList(signaling);
     try {

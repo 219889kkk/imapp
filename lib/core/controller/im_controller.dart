@@ -441,9 +441,15 @@ class IMController extends GetxController with IMCallback, OpenIMLive {
       if (_isActiveCallInProgress()) return;
       if (pending.isEmpty) return;
 
+      final voip = VoipCallkitController.toOrNull;
+      await voip?.refreshEndedRoomsFromNative();
+
       SignalingInfo? latest;
       var latestTime = 0;
       for (final entry in pending.entries) {
+        if (endedRooms.contains(entry.key)) continue;
+        if (voip?.isNativelyEnded(entry.key) == true) continue;
+        if (PackageBridge.isCallRoomEnded?.call(entry.key) == true) continue;
         if (entry.value.sendTime >= latestTime) {
           latestTime = entry.value.sendTime;
           latest = entry.value.signaling;

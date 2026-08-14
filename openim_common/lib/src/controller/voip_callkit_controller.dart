@@ -125,6 +125,7 @@ class VoipCallkitController extends GetxService {
       _listenNativeVoipChannel();
       _refreshVoipToken();
       unawaited(_pullPendingIncomingRoom());
+      unawaited(refreshEndedRoomsFromNative());
       Future<void>.delayed(const Duration(milliseconds: 800), () {
         unawaited(_pullPendingIncomingRoom());
       });
@@ -874,10 +875,37 @@ class VoipCallkitController extends GetxService {
     }
   }
 
+  /// Native UserDefaults ended rooms — survives Flutter isolate death.
+  final Set<String> _nativeEndedRooms = {};
+
+  bool isNativelyEnded(String? roomID) {
+    final id = roomID?.trim() ?? '';
+    if (id.isEmpty) return false;
+    if (_nativeEndedRooms.contains(id)) return true;
+    final compact = id.toLowerCase().replaceAll('-', '');
+    return _nativeEndedRooms.any(
+        (e) => e.toLowerCase().replaceAll('-', '') == compact);
+  }
+
+  Future<void> refreshEndedRoomsFromNative() async {
+    if (!Platform.isIOS) return;
+    try {
+      final raw = await _nativeChannel.invokeMethod('getEndedRooms');
+      if (raw is List) {
+        _nativeEndedRooms
+          ..clear()
+          ..addAll(raw.map((e) => '$e'.trim()).where((e) => e.isNotEmpty));
+      }
+    } catch (e) {
+      Logger.print('getEndedRooms native failed: $e');
+    }
+  }
+
   /// Tell native PushKit to ignore late invites for this room (zombie CallKit).
   Future<void> markRoomEndedNative(String? roomID) async {
     final id = roomID?.trim() ?? '';
     if (id.isEmpty) return;
+    _nativeEndedRooms.add(id);
     _setConnectedAtMs.remove(id);
     _incomingPresentedAtMs.remove(id);
     _spuriousRecoveredRooms.remove(id);

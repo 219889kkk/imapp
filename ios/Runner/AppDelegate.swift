@@ -109,6 +109,14 @@ import flutter_callkit_incoming
                     NSLog("HangXun VoIP: markRoomEnded %@", roomID)
                 }
                 result(true)
+            case "isRoomEnded":
+                let args = call.arguments as? [String: Any]
+                let roomID = (args?["roomID"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                result(!roomID.isEmpty && self.isVoipRoomEnded(roomID))
+            case "getEndedRooms":
+                self.loadEndedVoipRoomsIfNeeded()
+                self.pruneEndedVoipRooms()
+                result(Array(self.endedVoipRooms.keys))
             case "endAllCallKit":
                 let args = call.arguments as? [String: Any]
                 let roomID = (args?["roomID"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
