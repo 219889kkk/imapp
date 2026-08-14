@@ -226,7 +226,7 @@ import flutter_callkit_incoming
 
     override func application(
         _ application: UIApplication,
-        didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
+        didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Foundation.Data
     ) {
         let hex = deviceToken.map { String(format: "%02x", $0) }.joined()
         UserDefaults.standard.set(hex, forKey: "DevicePushTokenAPNs")
