@@ -120,8 +120,8 @@ class CallAudioKeepAlive with WidgetsBindingObserver {
   }
 
   Future<void> stop() async {
-    if (!_active && _roomID == null) return;
     final wasCallKit = _callKitOwnsSession;
+    final wasActive = _active || _roomID != null;
     _active = false;
     _callKitOwnsSession = false;
     _roomID = null;
@@ -139,15 +139,14 @@ class CallAudioKeepAlive with WidgetsBindingObserver {
         Logger.print('CallAudioKeepAlive disable FGS failed: $e $s');
       }
     } else if (Platform.isIOS) {
-      // Always reset manual-audio flag so the next call can enable cleanly.
-      // Brief delay when CallKit is tearing down avoids setActive races.
-      if (wasCallKit) {
-        await Future<void>.delayed(const Duration(milliseconds: 150));
-      }
+      // Drop the system mic indicator immediately. Do not wait for CallKit —
+      // that delay left playAndRecord active until the user killed the app.
       await IosWebRtcAudio.disable();
     }
-    Logger.print('CallAudioKeepAlive stop');
-    CallAudioDebugLog.add('keepalive', 'stop wasCallKit=$wasCallKit');
+    if (wasActive) {
+      Logger.print('CallAudioKeepAlive stop');
+      CallAudioDebugLog.add('keepalive', 'stop wasCallKit=$wasCallKit');
+    }
   }
 
   @override

@@ -3212,43 +3212,15 @@ mixin OpenIMLive {
       'hangup',
       'local roomID=$roomID positive=$isPositive duration=$sec (ui=$duration)',
     );
-    if (isPositive) {
-      final data = {
-        'customType': CustomMessageType.callingHungup,
-        'data': {
-          ...signaling.invitation!.toJson(),
-          'duration': sec,
-        },
-      };
-      final message = await OpenIM.iMManager.messageManager.createCustomMessage(
-          data: jsonEncode(data), extension: '', description: '');
-      final recvUserIDList = _recvUserIDList(signaling);
-      for (final userID in recvUserIDList) {
-        try {
-          await OpenIM.iMManager.messageManager.sendMessage(
-              message: message,
-              offlinePushInfo: OfflinePushInfo(),
-              userID: userID,
-              isOnlineOnly: false);
-        } catch (e, s) {
-          Logger.print('hungup IM send failed user=$userID: $e $s');
-        }
-      }
-      // End peer CallKit even if IM is slow / app backgrounded.
-      try {
-        await _triggerVoipPush(
-          signaling,
-          action: 'hungup',
-          toUserIDs: recvUserIDList,
-        );
-      } catch (e, s) {
-        Logger.print('voip hungup push failed: $e $s');
-      }
-    }
+    // Drop LiveKit + mic + AVAudioSession BEFORE IM/VoIP. Waiting on send
+    // left the peer in-call for ~1s and kept the system mic bar until kill.
     _stopSound();
     PackageBridge.clearCallNotification?.call();
     FlutterOpenimLiveAlert.closeLiveAlert();
     unawaited(CallAudioKeepAlive.instance.stop());
+    if (Platform.isIOS) {
+      unawaited(IosWebRtcAudio.disable());
+    }
     unawaited(
         VoipCallkitController.toOrNull?.endCall(roomID) ?? Future.value());
     if (roomID != null && roomID.isNotEmpty) {
@@ -3262,6 +3234,38 @@ mixin OpenIMLive {
       signaling,
       fields: sec,
     ));
+
+    if (!isPositive) return;
+    final data = {
+      'customType': CustomMessageType.callingHungup,
+      'data': {
+        ...signaling.invitation!.toJson(),
+        'duration': sec,
+      },
+    };
+    final message = await OpenIM.iMManager.messageManager.createCustomMessage(
+        data: jsonEncode(data), extension: '', description: '');
+    final recvUserIDList = _recvUserIDList(signaling);
+    for (final userID in recvUserIDList) {
+      try {
+        await OpenIM.iMManager.messageManager.sendMessage(
+            message: message,
+            offlinePushInfo: OfflinePushInfo(),
+            userID: userID,
+            isOnlineOnly: false);
+      } catch (e, s) {
+        Logger.print('hungup IM send failed user=$userID: $e $s');
+      }
+    }
+    try {
+      await _triggerVoipPush(
+        signaling,
+        action: 'hungup',
+        toUserIDs: recvUserIDList,
+      );
+    } catch (e, s) {
+      Logger.print('voip hungup push failed: $e $s');
+    }
   }
   onBusyLine() {
     _stopSound();

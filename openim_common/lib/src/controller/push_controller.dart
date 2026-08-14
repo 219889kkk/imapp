@@ -3,6 +3,8 @@ import 'dart:io';
 
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_openim_sdk/flutter_openim_sdk.dart';
 import 'package:get/get.dart';
 import 'package:getuiflut/getuiflut.dart';
 import 'package:google_api_availability/google_api_availability.dart';
@@ -10,11 +12,10 @@ import 'package:openim_common/openim_common.dart';
 
 import 'firebase_options.dart';
 
-enum PushType { getui, FCM, none }
+enum PushType { getui, FCM, apns, none }
 
-/// Getui credentials (iOS Bundle ID: top.hangxun.app; Android package: io.openim.flutter.demo).
-/// Replace placeholders with values from the Getui console; when filled,
-/// [PushController] enables [PushType.getui] on both iOS and Android.
+/// Getui credentials (Android package: io.openim.flutter.demo).
+/// iOS lock-screen banners use direct APNs (see [PushType.apns]), not Getui.
 const appID = 'gy41yoFqNV8bdYKPBDYwc7';
 const appKey = 'UveVgAb1Id8vAfz7RdCkA6';
 const appSecret = 'yIcrJFzeUd6MynyvYNZ251';
@@ -26,6 +27,9 @@ bool get _hasGetuiCredentials =>
     appID != 'your-app-id' &&
     appKey != 'your-app-key' &&
     appSecret != 'your-app-secret';
+
+/// Redis TTL for the iOS APNs device token stored via [OpenIM.iMManager.updateFcmToken].
+const _apnsTokenExpireSeconds = 90 * 24 * 3600;
 
 class PushController extends GetxService {
   PushType pushType = PushType.none;
@@ -39,13 +43,12 @@ class PushController extends GetxService {
   @override
   void onInit() {
     super.onInit();
-    if (_hasGetuiCredentials) {
+    if (Platform.isIOS) {
+      // Alert (text) push is direct APNs. Starting Getui on iOS would
+      // double-notify and stamp login-screen badges via CID.
+      pushType = PushType.apns;
+    } else if (_hasGetuiCredentials) {
       pushType = PushType.getui;
-      // Do NOT startSdk here. Overlay-install keeps the previous Getui CID;
-      // registering APNs on the login screen lets queued payloads stamp the
-      // SpringBoard badge (未登录图标未读数). Start only in [login] after IM
-      // session succeeds. Native willPresent / hasLoginSession still wipe
-      // leftover badges if a push slips through.
     } else {
       pushType = PushType.none;
       Logger.print(
@@ -57,7 +60,8 @@ class PushController extends GetxService {
 
   /// Logs in the user with the specified alias to the push notification service.
   ///
-  /// Getui: binds [alias] (OpenIM userID) so the server can push by alias.
+  /// Getui (Android): binds [alias] (OpenIM userID) so the server can push by alias.
+  /// APNs (iOS): registers for remote notifications and uploads the device token.
   /// FCM: refreshes token via [onTokenRefresh].
   static void login(
     String alias, {
@@ -70,6 +74,9 @@ class PushController extends GetxService {
     switch (ctrl.pushType) {
       case PushType.getui:
         GetuiPushController()._login(alias);
+        break;
+      case PushType.apns:
+        ApnsPushController()._login(alias);
         break;
       case PushType.FCM:
         assert(onTokenRefresh != null);
@@ -94,6 +101,9 @@ class PushController extends GetxService {
     switch (ctrl.pushType) {
       case PushType.getui:
         await GetuiPushController()._logoutAsync();
+        break;
+      case PushType.apns:
+        await ApnsPushController()._logoutAsync();
         break;
       case PushType.FCM:
         await FCMPushController()._deleteToken();
@@ -166,9 +176,8 @@ class PushController extends GetxService {
         _getuiInited = true;
         Logger.print('Getui SDK init requested (Android)');
       } else if (Platform.isIOS) {
-        gt.startSdk(appId: appID, appKey: appKey, appSecret: appSecret);
-        _getuiInited = true;
-        Logger.print('Getui SDK start requested (iOS)');
+        // iOS text push is direct APNs. Never start Getui here.
+        Logger.print('Getui SDK skipped on iOS (APNs alert path)');
       }
     } catch (e, s) {
       Logger.print('Getui SDK start failed: $e $s');
@@ -311,3 +320,135 @@ class FCMPushController {
     });
   }
 }
+
+class ApnsPushController {
+  static final ApnsPushController _instance = ApnsPushController._internal();
+  factory ApnsPushController() => _instance;
+  ApnsPushController._internal();
+
+  static const _channel = MethodChannel('top.hangxun.app/apns');
+
+  String? _boundUserID;
+  String? _token;
+  String? _lastUploaded;
+  bool _uploading = false;
+  bool _handlerAttached = false;
+  Timer? _retryTimer;
+  int _retryCount = 0;
+
+  void _login(String userID) {
+    _boundUserID = userID;
+    _lastUploaded = null;
+    _attachHandler();
+    unawaited(_start());
+  }
+
+  Future<void> _logoutAsync() async {
+    _retryTimer?.cancel();
+    _retryTimer = null;
+    _boundUserID = null;
+    _lastUploaded = null;
+    try {
+      await OpenIM.iMManager.updateFcmToken(
+        fcmToken: '',
+        expireTime: 1,
+      );
+      Logger.print('APNs token cleared on logout');
+    } catch (e, s) {
+      Logger.print('APNs token clear failed: $e $s');
+    }
+  }
+
+  void _attachHandler() {
+    if (_handlerAttached) return;
+    _handlerAttached = true;
+    _channel.setMethodCallHandler((call) async {
+      if (call.method == 'onApnsToken') {
+        final token = '${call.arguments ?? ''}'.trim();
+        if (token.isEmpty) return;
+        _token = token;
+        Logger.print('APNs token from native len=${token.length}');
+        await _uploadIfNeeded();
+      }
+    });
+  }
+
+  Future<void> _start() async {
+    try {
+      await Permissions.notification();
+    } catch (e, s) {
+      Logger.print('APNs notification permission: $e $s');
+    }
+    try {
+      await _channel.invokeMethod('registerForRemoteNotifications');
+    } catch (e, s) {
+      Logger.print('registerForRemoteNotifications failed: $e $s');
+    }
+    await _refreshCachedToken(upload: true);
+    _scheduleRetries();
+  }
+
+  void _scheduleRetries() {
+    _retryTimer?.cancel();
+    _retryCount = 0;
+    _retryTimer = Timer.periodic(const Duration(seconds: 2), (timer) async {
+      _retryCount++;
+      await _refreshCachedToken(upload: true);
+      if (_isPlausible(_token) && _lastUploaded == _token) {
+        timer.cancel();
+        return;
+      }
+      if (_retryCount >= 30) {
+        Logger.print(
+            'APNs token upload gave up after retries; last=$_token uploaded=$_lastUploaded');
+        timer.cancel();
+      }
+    });
+  }
+
+  Future<void> _refreshCachedToken({required bool upload}) async {
+    try {
+      final cached =
+          await _channel.invokeMethod<String>('getCachedApnsToken');
+      final raw = (cached ?? '').trim();
+      if (raw.isNotEmpty) {
+        _token = raw;
+        if (upload) await _uploadIfNeeded();
+      }
+    } catch (e, s) {
+      Logger.print('getCachedApnsToken failed: $e $s');
+    }
+  }
+
+  Future<void> _uploadIfNeeded() async {
+    final userID = _boundUserID;
+    final token = _token;
+    if (userID == null || userID.isEmpty) return;
+    if (!_isPlausible(token)) return;
+    if (token == _lastUploaded) return;
+    if (_uploading) return;
+    _uploading = true;
+    final prefix = token!.length <= 8 ? token : token.substring(0, 8);
+    Logger.print(
+        'APNs token upload start userID=$userID len=${token.length} prefix=$prefix');
+    try {
+      await OpenIM.iMManager.updateFcmToken(
+        fcmToken: token,
+        expireTime: _apnsTokenExpireSeconds,
+      );
+      _lastUploaded = token;
+      Logger.print('APNs token upload success userID=$userID');
+    } catch (e, s) {
+      Logger.print('APNs token upload error (will retry): $e $s');
+    } finally {
+      _uploading = false;
+    }
+  }
+
+  bool _isPlausible(String? token) {
+    final t = token?.trim() ?? '';
+    if (t.length < 32 || t.length > 200 || t.length.isOdd) return false;
+    return RegExp(r'^[0-9a-fA-F]+$').hasMatch(t);
+  }
+}
+

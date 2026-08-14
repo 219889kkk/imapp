@@ -278,8 +278,18 @@ class OpenIMLiveClient implements RTCBridge {
     _mediaConnectInFlight = null;
     _mediaConnectRoomID = null;
     _connectAbort = null;
-    unawaited(CallAudioKeepAlive.instance.stop());
     _suppressDisconnectSideEffects = true;
+    // Mute + drop AVAudioSession before LiveKit disconnect / IM hangup.
+    // Waiting on signaling left the orange mic bar on until the app was killed.
+    final local = room?.localParticipant;
+    if (local != null) {
+      unawaited(local.setMicrophoneEnabled(false));
+      unawaited(local.setCameraEnabled(false));
+    }
+    unawaited(CallAudioKeepAlive.instance.stop());
+    if (Platform.isIOS) {
+      unawaited(IosWebRtcAudio.disable());
+    }
     try {
       room?.removeListener(_noopRoomListener);
       await listener?.dispose();

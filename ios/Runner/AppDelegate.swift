@@ -13,6 +13,7 @@ import flutter_callkit_incoming
 
     var replayKitChannel: FlutterMethodChannel! = nil
     var voipChannel: FlutterMethodChannel! = nil
+    var apnsChannel: FlutterMethodChannel! = nil
     var observeTimer: Timer?
     var hasEmittedFirstSample = false
     private var voipRegistry: PKPushRegistry?
@@ -39,6 +40,26 @@ import flutter_callkit_incoming
 
         replayKitChannel = FlutterMethodChannel(name: "io.livekit.example.flutter/replaykit-channel", binaryMessenger: controller.binaryMessenger)
         voipChannel = FlutterMethodChannel(name: "top.hangxun.app/voip", binaryMessenger: controller.binaryMessenger)
+        apnsChannel = FlutterMethodChannel(name: "top.hangxun.app/apns", binaryMessenger: controller.binaryMessenger)
+
+        apnsChannel.setMethodCallHandler { [weak self] call, result in
+            guard let self = self else {
+                result(FlutterMethodNotImplemented)
+                return
+            }
+            switch call.method {
+            case "registerForRemoteNotifications":
+                DispatchQueue.main.async {
+                    UIApplication.shared.registerForRemoteNotifications()
+                    NSLog("HangXun APNs: registerForRemoteNotifications")
+                }
+                result(true)
+            case "getCachedApnsToken":
+                result(UserDefaults.standard.string(forKey: "DevicePushTokenAPNs") ?? "")
+            default:
+                result(FlutterMethodNotImplemented)
+            }
+        }
 
         voipChannel.setMethodCallHandler { [weak self] call, result in
             guard let self = self else {
@@ -192,7 +213,7 @@ import flutter_callkit_incoming
         UserDefaults.standard.bool(forKey: "hangxun.hasLoginSession")
     }
 
-    /// Required so Getui can receive remote notifications when the app is backgrounded.
+    /// Required so APNs can wake the app when backgrounded.
     /// APNs `badge` is applied by SpringBoard even before login — wipe it then.
     override func application(
         _ application: UIApplication,
@@ -201,6 +222,25 @@ import flutter_callkit_incoming
     ) {
         wipeBadgeIfLoggedOut()
         completionHandler(.newData)
+    }
+
+    override func application(
+        _ application: UIApplication,
+        didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
+    ) {
+        let hex = deviceToken.map { String(format: "%02x", $0) }.joined()
+        UserDefaults.standard.set(hex, forKey: "DevicePushTokenAPNs")
+        NSLog("HangXun APNs token: %@", hex)
+        apnsChannel?.invokeMethod("onApnsToken", arguments: hex)
+        super.application(application, didRegisterForRemoteNotificationsWithDeviceToken: deviceToken)
+    }
+
+    override func application(
+        _ application: UIApplication,
+        didFailToRegisterForRemoteNotificationsWithError error: Error
+    ) {
+        NSLog("HangXun APNs register failed: %@", error.localizedDescription)
+        super.application(application, didFailToRegisterForRemoteNotificationsWithError: error)
     }
 
     override func userNotificationCenter(
@@ -397,10 +437,15 @@ import flutter_callkit_incoming
         let session = AVAudioSession.sharedInstance()
         let rtc = RTCAudioSession.sharedInstance()
         rtc.lockForConfiguration()
-        rtc.audioSessionDidDeactivate(session)
         rtc.isAudioEnabled = false
+        rtc.audioSessionDidDeactivate(session)
         rtc.unlockForConfiguration()
-        emitAudioDebug("in-app audio disabled")
+        do {
+            try session.setActive(false, options: .notifyOthersOnDeactivation)
+            emitAudioDebug("in-app audio disabled + session deactivated")
+        } catch {
+            emitAudioDebug("session setActive(false) failed \(error.localizedDescription)")
+        }
         result(true)
     }
 
