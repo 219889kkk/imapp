@@ -18,8 +18,10 @@ import flutter_callkit_incoming
     var hasEmittedFirstSample = false
     private var voipRegistry: PKPushRegistry?
     private var voipPushDelegate: HangXunVoipPushDelegate?
-    /// Fulfill non-invite VoIP without going through the plugin (no fake incoming UI).
-    private var voipFulfillProvider: CXProvider?
+    /// True only if HangXun was already in the foreground before this VoIP.
+    /// PushKit wake can look `.active` for a moment — that must still use CallKit.
+    private var hangxunInForeground = false
+    private var lastBecomeActiveAt: TimeInterval = 0
     private let callKitEndController = CXCallController()
     private var lastCallKitAcceptAt: TimeInterval = 0
     /// roomID → endedAt (ignore late PushKit invites that re-show CallKit).
@@ -207,9 +209,16 @@ import flutter_callkit_incoming
 
     override func applicationDidBecomeActive(_ application: UIApplication) {
         super.applicationDidBecomeActive(application)
+        hangxunInForeground = true
+        lastBecomeActiveAt = Date().timeIntervalSince1970
         // Permission dialog / push wake can restore a stale badge before login.
         // Dart will re-apply the real unread count after IM login.
         wipeBadgeIfLoggedOut()
+    }
+
+    override func applicationDidEnterBackground(_ application: UIApplication) {
+        hangxunInForeground = false
+        super.applicationDidEnterBackground(application)
     }
 
     override func applicationWillEnterForeground(_ application: UIApplication) {
@@ -346,6 +355,16 @@ import flutter_callkit_incoming
     func onEnd(_ call: Call, _ action: CXEndCallAction) {
         NSLog("HangXun CallKit: onEnd room=%@", call.data.uuid)
         action.fulfill()
+        if let extra = call.data.extra as? NSDictionary {
+            let silentRaw = extra["silentFulfill"]
+            let silent = (silentRaw as? Bool) == true
+                || "\(silentRaw ?? "")" == "true"
+                || extra["action"] as? String == "silent"
+            if silent {
+                NSLog("HangXun CallKit: onEnd ignored silent fulfill %@", call.data.uuid)
+                return
+            }
+        }
         // User (or system) actually ended the CXCall — Dart must hang up.
         // Programmatic endCall is ignored via uiDismiss on the Dart side.
         DispatchQueue.main.async {
@@ -735,6 +754,12 @@ import flutter_callkit_incoming
         }
     }
 
+    private func alreadyInHangXunForeground() -> Bool {
+        guard hangxunInForeground else { return false }
+        guard UIApplication.shared.applicationState == .active else { return false }
+        return Date().timeIntervalSince1970 - lastBecomeActiveAt > 0.8
+    }
+
     private func notifyDartVoipCallKitPresented(roomID: String) {
         persistPendingIncomingRoom(roomID)
         let fire: () -> Void = { [weak self] in
@@ -805,12 +830,9 @@ import flutter_callkit_incoming
             return
         }
 
-        // 状态 3：应用内全屏邀请。仍必须 CallKit-report，否则系统停掉 VoIP。
-        // 用一次性假 UUID，不要真实 roomID（否则顶栏+全屏两套 UI）。
-        let appState = UIApplication.shared.applicationState
-        if appState == .active {
+        // 只有进航讯之前就已经在前台，才走应用内邀请。VoIP 唤醒瞬间的 .active 仍报真实 CallKit。
+        if alreadyInHangXunForeground() {
             NSLog("HangXun VoIP: in-app invite — mustReport dummy room=%@", roomID)
-            notifyDartVoipCallKitPresented(roomID: roomID)
             fulfillVoipWithoutIncomingUi(mustReport: mustReport, completion: completion)
             return
         }
@@ -919,7 +941,6 @@ import flutter_callkit_incoming
             if uuidMatchesRoom(call.uuid, roomID: roomID) || wipeAll {
                 requestEndCall(call.uuid)
                 pluginEndCall(id: call.uuid.uuidString)
-                voipFulfillProvider?.reportCall(with: call.uuid, endedAt: Date(), reason: .remoteEnded)
             }
         }
         if wipeAll {
@@ -943,6 +964,7 @@ import flutter_callkit_incoming
                 customType = n
             }
             switch customType {
+            case 200: action = "invite"
             case 201: action = "accept"
             case 202: action = "reject"
             case 203: action = "cancel"
@@ -952,7 +974,9 @@ import flutter_callkit_incoming
         }
         if action.isEmpty {
             let body = ((dict["body"] as? String) ?? "")
-            if body.contains("已结束") || body.lowercased().contains("ended") {
+            let looksLikeInvite = (dict["mediaType"] as? String) != nil
+                && ((dict["inviterUserID"] as? String)?.isEmpty == false)
+            if !looksLikeInvite && (body.contains("已结束") || body.lowercased().contains("ended")) {
                 action = "cancel"
             }
         }
@@ -960,7 +984,8 @@ import flutter_callkit_incoming
     }
 
     /// iOS 13+/26 require reportNewIncomingCall before VoIP completion.
-    /// Throwaway UUID, ended in the same callback so it does not become a timer page.
+    /// Use the plugin's CXProvider (a second provider with no delegate crashes iOS 18).
+    /// Dummy UUID is ended in the same callback so it does not become a timer page.
     private func fulfillVoipWithoutIncomingUi(
         mustReport: Bool,
         completion: @escaping () -> Void
@@ -970,23 +995,24 @@ import flutter_callkit_incoming
             completion()
             return
         }
-        let uuid = UUID()
-        let update = CXCallUpdate()
-        update.remoteHandle = CXHandle(type: .generic, value: "hangxun")
-        update.localizedCallerName = " "
-        update.hasVideo = false
-        if voipFulfillProvider == nil {
-            let config = CXProviderConfiguration()
-            config.supportedHandleTypes = [.generic]
-            config.maximumCallGroups = 1
-            config.maximumCallsPerCallGroup = 1
-            voipFulfillProvider = CXProvider(configuration: config)
+        let uuid = UUID().uuidString
+        var info: [String: Any?] = [:]
+        info["id"] = uuid
+        info["nameCaller"] = " "
+        info["appName"] = "航讯"
+        info["handle"] = "hangxun"
+        info["type"] = 0
+        info["extra"] = ["silentFulfill": true, "action": "silent"]
+        let data = flutter_callkit_incoming.Data(args: info)
+        data.configureAudioSession = false
+        data.audioSessionActive = false
+        NSLog("HangXun VoIP: dummy CallKit fulfill uuid=%@", uuid)
+        guard let plugin = SwiftFlutterCallkitIncomingPlugin.sharedInstance else {
+            completion()
+            return
         }
-        let provider = voipFulfillProvider!
-        NSLog("HangXun VoIP: dummy CallKit fulfill uuid=%@", uuid.uuidString)
-        provider.reportNewIncomingCall(with: uuid, update: update) { [weak self] _ in
-            provider.reportCall(with: uuid, endedAt: Date(), reason: .answeredElsewhere)
-            self?.requestEndCall(uuid)
+        plugin.showCallkitIncoming(data, fromPushKit: true) {
+            plugin.endCall(data)
             DispatchQueue.main.async(execute: completion)
         }
     }

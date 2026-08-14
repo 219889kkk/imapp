@@ -530,17 +530,15 @@ class VoipCallkitController extends GetxService {
           if (PackageBridge.rtcBridge?.hasCallOverlay == true) {
             final life = WidgetsBinding.instance.lifecycleState;
             final inForeground = life == AppLifecycleState.resumed;
-            final roomID = incoming?.invitation?.roomID;
-            if (inForeground) {
-              unawaited(endCall(roomID));
-              callKitActive.value = false;
-              _incomingRoomID = null;
-            } else {
+            if (!inForeground) {
               Logger.print(
                   'CallKit incoming: keep system ring (overlay stale, bg)');
               CallAudioDebugLog.add(
                   'callkit', 'incoming keep CallKit bg overlay roomID=$incomingRoom');
             }
+            // Foreground overlay is dismissed by live_controller beCalled.
+            // Never endCall here — VoIP wake looks resumed and was killing
+            // the lock/home CallKit banner.
           }
           break;
         case Event.actionCallAccept:
@@ -564,6 +562,9 @@ class VoipCallkitController extends GetxService {
           _onTimeout(event.body);
           break;
         case Event.actionCallEnded:
+          if (_isNonInviteVoipFulfill(event.body)) {
+            break;
+          }
           callKitActive.value = false;
           _incomingRoomID = null;
           _onEnded(event.body);

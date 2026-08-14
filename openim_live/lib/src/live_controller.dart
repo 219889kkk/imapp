@@ -365,10 +365,16 @@ mixin OpenIMLive {
   }
 
   /// 状态 1/2 用 CallKit；状态 3 用应用内全屏。
+  /// Native 已经弹出系统来电时，即使 Flutter 被 VoIP 唤醒成 resumed 也要保住 CallKit。
   bool _iosShouldUseCallKitForRing(String? roomID) {
     if (!Platform.isIOS) return false;
     if (roomID != null && _isRoomEnded(roomID)) return false;
     if (_autoPickup || _isAcceptInProgressForRoom(roomID)) return false;
+    final voip = VoipCallkitController.toOrNull;
+    final incoming = voip?.incomingRoomID?.trim() ?? '';
+    final id = roomID?.trim() ?? '';
+    if (voip?.ownsIncomingUi == true) return true;
+    if (id.isNotEmpty && incoming == id) return true;
     return !_iosCalleeIsInHangXun();
   }
 
@@ -1152,18 +1158,11 @@ mixin OpenIMLive {
         return;
       }
 
-      // Unanswered ring — in-app UI primary, silently drop CallKit.
-      await _dismissCallKitIncoming(pendingRoom);
-      final ctx = Get.overlayContext;
-      if (ctx != null) {
-        _presentCallUi(pending.data);
-        unawaited(_prewarmInAppCallAudio(
-          force: true,
-          afterDismissRoomID: pendingRoom,
-        ));
-      } else {
-        _beCalledEvent = pending;
-      }
+      // VoIP / CallKit wake also looks like "foreground". Keep the system
+      // incoming UI — dropping it is the home-screen banner that auto-ends.
+      CallAudioDebugLog.add(
+          'fg', 'unanswered ringing — keep CallKit roomID=$pendingRoom');
+      _beCalledEvent = pending;
       return;
     }
 
@@ -1191,13 +1190,10 @@ mixin OpenIMLive {
         await _restoreLiveCallAudio(active);
         return;
       }
-      // Unanswered leftover with CallKit still up — dismiss only, no Flutter invite.
-      await _dismissCallKitIncoming(activeRoom);
-      Logger.print(
-          'iOS fg: skip present stale UI roomID=$activeRoom');
-      CallAudioDebugLog.add('fg', 'skip present stale UI roomID=$activeRoom');
-      _activeCallSignaling = null;
-      _beCalledEvent = null;
+      // Unanswered leftover: VoIP wake looks like foreground. Keep CallKit.
+      CallAudioDebugLog.add(
+          'fg', 'unanswered leftover — keep CallKit roomID=$activeRoom');
+      return;
     }
   }
 
@@ -2103,6 +2099,7 @@ mixin OpenIMLive {
 
   /// Native CXEndCallAction — lock-screen red button after the user answered.
   /// Plugin UUID swap on Answer also fires this; ignore that echo (~1.5s).
+  /// After Answer the connected CXCall UUID is often not roomID — still hang up.
   void _onCallKitUserHangup(String? roomID) {
     final id = roomID?.trim() ?? '';
     if (_isCallKitUiDismissArmed(id) || _isRoomEnded(id)) {
@@ -2110,34 +2107,49 @@ mixin OpenIMLive {
           'callkit', 'native user end ignored uiDismiss/ended roomID=$id');
       return;
     }
-    if (id.isNotEmpty && !_isKnownActiveCallRoom(id)) {
-      CallAudioDebugLog.add(
-          'callkit', 'native user end ignored unknown roomID=$id');
-      return;
-    }
     final info = _resolveIncomingSignaling(_activeCallSignaling) ??
         _activeCallSignaling;
     final infoRoom = info?.invitation?.roomID?.trim() ?? '';
-    final matched = info != null && (infoRoom.isEmpty || infoRoom == id || id.isEmpty);
+    final answeredActive = infoRoom.isNotEmpty && _userHasAnsweredCall(infoRoom);
+    final known = _isKnownActiveCallRoom(id) ||
+        (id.isEmpty && answeredActive) ||
+        (answeredActive && !_isNativeAnswerEndEcho(infoRoom));
+
+    if (id.isNotEmpty && !known) {
+      if (answeredActive &&
+          (_isNativeAnswerEndEcho(id) ||
+              _isNativeAnswerEndEcho(_callKitAcceptHandledRoomID))) {
+        CallAudioDebugLog.add(
+            'callkit', 'native end ignored — Answer UUID-swap echo uuid=$id');
+        return;
+      }
+      if (!answeredActive) {
+        CallAudioDebugLog.add(
+            'callkit', 'native user end ignored unknown roomID=$id');
+        return;
+      }
+    }
+
     CallAudioDebugLog.add(
       'callkit',
-      'native user end roomID=$id matched=$matched answered=${_userHasAnsweredCall(id)} echo=${_isNativeAnswerEndEcho(id)} prejoin=${_isRingingPrejoinOnly(id)}',
+      'native user end roomID=$id active=$infoRoom answered=${_userHasAnsweredCall(id)} echo=${_isNativeAnswerEndEcho(id)} prejoin=${_isRingingPrejoinOnly(id)}',
     );
 
-    if (_isNativeAnswerEndEcho(id)) {
+    if (_isNativeAnswerEndEcho(id) ||
+        (answeredActive && _isNativeAnswerEndEcho(infoRoom) && !_isKnownActiveCallRoom(id))) {
       CallAudioDebugLog.add(
           'callkit', 'native end ignored — Answer UUID-swap echo roomID=$id');
       return;
     }
 
-    if (_userHasAnsweredCall(id)) {
-      Logger.print('CallKit native user end → hangup roomID=$id');
-      if (matched) {
+    if (_userHasAnsweredCall(id) || answeredActive) {
+      Logger.print('CallKit native user end → hangup roomID=$id active=$infoRoom');
+      if (info != null) {
         unawaited(onTapHangup(
-            info!..userID = OpenIM.iMManager.userID, _connectedDurationSec(), true));
+            info..userID = OpenIM.iMManager.userID, _connectedDurationSec(), true));
         return;
       }
-      _terminateCallUi(id.isEmpty ? null : id);
+      _terminateCallUi(id.isEmpty ? null : (infoRoom.isNotEmpty ? infoRoom : id));
       return;
     }
 
@@ -2225,12 +2237,25 @@ mixin OpenIMLive {
     );
 
     // Plugin Ended after Answer is the incoming→active UUID swap, not the red
-    // button. Real lock-screen hangup is native CXEndCallAction.
+    // button. After the settle window, Ended on a connected call is hangup
+    // (iOS 18 sometimes skips native onEnd for the swapped UUID).
     if (acceptSent || joining || inCall) {
-      Logger.print(
-          'CallKit ended ignored — native hangup owns answered call roomID=$roomKey');
+      if (_isCallKitAcceptSettleArmed(roomID) || _isNativeAnswerEndEcho(roomKey)) {
+        Logger.print(
+            'CallKit ended ignored — Answer UUID-swap roomID=$roomKey');
+        CallAudioDebugLog.add(
+            'callkit', 'ended ignored answered swap roomID=$roomKey');
+        return;
+      }
+      Logger.print('CallKit ended after answer → hangup roomID=$roomKey');
       CallAudioDebugLog.add(
-          'callkit', 'ended ignored answered/joining (native owns hangup) roomID=$roomKey');
+          'callkit', 'ended connected → hangup roomID=$roomKey');
+      if (info != null) {
+        unawaited(onTapHangup(
+            info..userID = OpenIM.iMManager.userID, _connectedDurationSec(), true));
+      } else {
+        _terminateCallUi(roomKey.isEmpty ? null : roomKey);
+      }
       return;
     }
 
