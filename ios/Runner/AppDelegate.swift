@@ -22,7 +22,16 @@ import flutter_callkit_incoming
     /// PushKit wake can look `.active` for a moment — that must still use CallKit.
     private var hangxunInForeground = false
     private var lastBecomeActiveAt: TimeInterval = 0
-    private let callKitEndController = CXCallController()
+    private let silentCallKitDelegate = HangXunSilentCallKitDelegate()
+    private lazy var silentCallKitProvider: CXProvider = {
+        let config = CXProviderConfiguration()
+        config.supportedHandleTypes = [.generic]
+        config.maximumCallGroups = 1
+        config.maximumCallsPerCallGroup = 1
+        let provider = CXProvider(configuration: config)
+        provider.setDelegate(silentCallKitDelegate, queue: .main)
+        return provider
+    }()
     private var lastCallKitAcceptAt: TimeInterval = 0
     /// roomID → endedAt (ignore late PushKit invites that re-show CallKit).
     private var endedVoipRooms: [String: Date] = [:]
@@ -632,27 +641,36 @@ import flutter_callkit_incoming
         compactCallUUID(uuid.uuidString) == compactCallUUID(roomID)
     }
 
-    private func requestEndCall(_ uuid: UUID) {
-        let tx = CXTransaction(action: CXEndCallAction(call: uuid))
-        callKitEndController.request(tx) { error in
-            if let error = error {
-                NSLog("HangXun CallKit: CXEndCall %@ %@", uuid.uuidString, error.localizedDescription)
+    private func pluginCallKitProvider() -> CXProvider? {
+        guard let plugin = SwiftFlutterCallkitIncomingPlugin.sharedInstance else { return nil }
+        for child in Mirror(reflecting: plugin).children {
+            if let provider = child.value as? CXProvider {
+                return provider
             }
         }
+        return nil
+    }
+
+    /// Peer hangup / programmatic dismiss. CXEndCallAction is the "即将结束" UI that can hang forever.
+    private func reportRemoteEnded(_ uuid: UUID) {
+        pluginCallKitProvider()?.reportCall(with: uuid, endedAt: Date(), reason: .remoteEnded)
+        silentCallKitProvider.reportCall(with: uuid, endedAt: Date(), reason: .remoteEnded)
+    }
+
+    private func requestEndCall(_ uuid: UUID) {
+        reportRemoteEnded(uuid)
     }
 
     private func pluginEndCall(id: String) {
-        let endData = flutter_callkit_incoming.Data(args: [
-            "id": id,
-            "nameCaller": "",
-            "handle": "",
-            "type": 0,
-        ])
-        SwiftFlutterCallkitIncomingPlugin.sharedInstance?.endCall(endData)
+        if let uuid = UUID(uuidString: id) {
+            reportRemoteEnded(uuid)
+        }
     }
 
     private func pluginEndAllCalls() {
-        SwiftFlutterCallkitIncomingPlugin.sharedInstance?.endAllCalls()
+        for call in CXCallObserver().calls where !call.hasEnded {
+            reportRemoteEnded(call.uuid)
+        }
     }
 
     private func endAllActiveCallKitCalls() {
@@ -1022,8 +1040,8 @@ import flutter_callkit_incoming
     }
 
     /// iOS 13+/26 require reportNewIncomingCall before VoIP completion.
-    /// Use the plugin's CXProvider (a second provider with no delegate crashes iOS 18).
-    /// Dummy UUID is ended in the same callback so it does not become a timer page.
+    /// Do not go through the plugin UI — showCallkitIncoming + endCall is the
+    /// full-screen "航讯音频即将结束" that cannot be dismissed.
     private func fulfillVoipWithoutIncomingUi(
         mustReport: Bool,
         completion: @escaping () -> Void
@@ -1033,27 +1051,15 @@ import flutter_callkit_incoming
             completion()
             return
         }
-        let uuid = UUID().uuidString
-        var info: [String: Any?] = [:]
-        info["id"] = uuid
-        info["nameCaller"] = " "
-        info["appName"] = "航讯"
-        info["handle"] = "hangxun"
-        info["type"] = 0
-        info["extra"] = ["silentFulfill": true, "action": "silent"]
-        let data = flutter_callkit_incoming.Data(args: info)
-        data.configureAudioSession = false
-        data.audioSessionActive = false
-        NSLog("HangXun VoIP: dummy CallKit fulfill uuid=%@", uuid)
-        guard let plugin = SwiftFlutterCallkitIncomingPlugin.sharedInstance else {
-            completion()
-            return
-        }
-        plugin.showCallkitIncoming(data, fromPushKit: true) { [weak self] in
-            plugin.endCall(data)
-            if let dummy = UUID(uuidString: uuid) {
-                self?.requestEndCall(dummy)
-            }
+        let uuid = UUID()
+        let update = CXCallUpdate()
+        update.remoteHandle = CXHandle(type: .generic, value: "hangxun")
+        update.localizedCallerName = " "
+        update.hasVideo = false
+        let provider = pluginCallKitProvider() ?? silentCallKitProvider
+        NSLog("HangXun VoIP: silent CallKit fulfill uuid=%@", uuid.uuidString)
+        provider.reportNewIncomingCall(with: uuid, update: update) { _ in
+            provider.reportCall(with: uuid, endedAt: Date(), reason: .answeredElsewhere)
             DispatchQueue.main.async(execute: completion)
         }
     }
@@ -1095,5 +1101,23 @@ import flutter_callkit_incoming
                 }
             }
         }
+    }
+}
+
+/// Own CXProvider delegate so silent mustReport fulfill is not a crash (no-delegate)
+/// and not the plugin full-screen "即将结束" UI.
+final class HangXunSilentCallKitDelegate: NSObject, CXProviderDelegate {
+    func providerDidReset(_ provider: CXProvider) {}
+
+    func provider(_ provider: CXProvider, perform action: CXStartCallAction) {
+        action.fail()
+    }
+
+    func provider(_ provider: CXProvider, perform action: CXAnswerCallAction) {
+        action.fail()
+    }
+
+    func provider(_ provider: CXProvider, perform action: CXEndCallAction) {
+        action.fulfill()
     }
 }

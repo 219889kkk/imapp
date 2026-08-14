@@ -879,15 +879,23 @@ class VoipCallkitController extends GetxService {
     if (!Platform.isIOS && !Platform.isAndroid) return;
     try {
       if (roomID != null && roomID.isNotEmpty) {
-        // Only arm suppress when *we* programmatically dismiss CallKit.
         PackageBridge.suppressCallKitEnded?.call(roomID);
         _incomingPresentedAtMs.remove(roomID);
         _spuriousRecoveredRooms.remove(roomID);
+      } else {
+        _incomingPresentedAtMs.clear();
+        _spuriousRecoveredRooms.clear();
+      }
+      if (Platform.isIOS) {
+        // Native reportCall(.remoteEnded) — plugin endCall is CXEndCallAction
+        // ("即将结束") and can hang with no way to dismiss.
+        await _nativeChannel.invokeMethod('endAllCallKit', {
+          'roomID': roomID ?? '',
+        });
+      } else if (roomID != null && roomID.isNotEmpty) {
         await FlutterCallkitIncoming.endCall(roomID);
       } else {
         await FlutterCallkitIncoming.endAllCalls();
-        _incomingPresentedAtMs.clear();
-        _spuriousRecoveredRooms.clear();
       }
     } catch (e, s) {
       Logger.print('endCall failed: $e $s');
@@ -904,10 +912,12 @@ class VoipCallkitController extends GetxService {
     final keep = _incomingRoomID?.trim() ?? '';
     final keepNewer = keep.isNotEmpty && ended.isNotEmpty && keep != ended;
     try {
-      if (keepNewer) {
-        await FlutterCallkitIncoming.endCall(ended);
-      } else {
-        await FlutterCallkitIncoming.endAllCalls();
+      if (!Platform.isIOS) {
+        if (keepNewer) {
+          await FlutterCallkitIncoming.endCall(ended);
+        } else {
+          await FlutterCallkitIncoming.endAllCalls();
+        }
       }
     } catch (e, s) {
       Logger.print('endAllCalls failed: $e $s');
