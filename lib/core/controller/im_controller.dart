@@ -657,8 +657,7 @@ class IMController extends GetxController with IMCallback, OpenIMLive {
           if (msg.sendID == OpenIM.iMManager.userID) {
             _clearCallNotification();
             unawaited(
-                VoipCallkitController.toOrNull?.endCall(
-                        signaling.invitation?.roomID) ??
+                VoipCallkitController.toOrNull?.endAllCalls() ??
                     Future.value());
             break;
           }
@@ -676,8 +675,7 @@ class IMController extends GetxController with IMCallback, OpenIMLive {
           beHangup(signaling, durationSec: peerSec);
           _clearCallNotification();
           unawaited(
-              VoipCallkitController.toOrNull?.endCall(
-                      signaling.invitation?.roomID) ??
+              VoipCallkitController.toOrNull?.endAllCalls() ??
                   Future.value());
           // Connected then hung up — record stays, unread must not.
           unawaited(_markPeerConversationRead(signaling));

@@ -906,7 +906,9 @@ class VoipCallkitController extends GetxService {
     }
     if (Platform.isIOS) {
       try {
-        await _nativeChannel.invokeMethod('endAllCallKit');
+        await _nativeChannel.invokeMethod('endAllCallKit', {
+          'roomID': _incomingRoomID ?? '',
+        });
       } catch (e, s) {
         Logger.print('native endAllCallKit failed: $e $s');
       }

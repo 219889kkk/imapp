@@ -94,7 +94,12 @@ import flutter_callkit_incoming
                 }
                 result(true)
             case "endAllCallKit":
-                self.endAllActiveCallKitCalls()
+                let args = call.arguments as? [String: Any]
+                let roomID = (args?["roomID"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                self.killAllCallKit(roomID: roomID)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                    self?.killAllCallKit(roomID: roomID)
+                }
                 result(true)
             case "clearIconBadge":
                 self.clearIconBadge()
@@ -632,12 +637,7 @@ import flutter_callkit_incoming
     }
 
     private func endAllActiveCallKitCalls() {
-        pluginEndAllCalls()
-        for call in CXCallObserver().calls where !call.hasEnded {
-            requestEndCall(call.uuid)
-            pluginEndCall(id: call.uuid.uuidString)
-        }
-        pluginEndAllCalls()
+        killAllCallKit(roomID: pendingIncomingRoomID())
     }
 
     private func shouldForceEndAllCallKit(for roomID: String) -> Bool {
@@ -760,10 +760,9 @@ import flutter_callkit_incoming
         }
 
         if action == "accept" || action == "answered" {
-            NSLog("HangXun VoIP peer accept room=%@", roomID)
+            NSLog("HangXun VoIP peer accept room=%@ — never show incoming on caller", roomID)
             notifyDartVoipRemoteEnd(roomID: roomID, action: "accept")
-            // Caller already has outbound UI. Never show a second incoming banner.
-            fulfillVoipWithoutIncomingUi(mustReport: mustReport, completion: completion)
+            completion()
             return
         }
 
@@ -784,13 +783,11 @@ import flutter_callkit_incoming
             return
         }
 
-        // App already in foreground: IM shows the full-page invite. Do not
-        // leave a CallKit banner (second answer UI → timer + no audio).
-        // Throwaway CXCall satisfies mustReport without the real roomID.
+        // 被叫三态：前台(3)只用应用内邀请；锁屏(1)/不在航讯(2)才报 CallKit。
         let appState = UIApplication.shared.applicationState
         if appState == .active {
-            NSLog("HangXun VoIP: foreground invite — dummy CallKit fulfill room=%@", roomID)
-            fulfillVoipWithoutIncomingUi(mustReport: mustReport, completion: completion)
+            NSLog("HangXun VoIP: in-app invite — no CallKit room=%@", roomID)
+            completion()
             return
         }
 
@@ -859,8 +856,8 @@ import flutter_callkit_incoming
         return CXCallObserver().calls.contains { $0.uuid.uuidString.lowercased() == target }
     }
 
-    /// Cancel / hungup / reject: always tear down ringing CallKit.
-    /// Dummy fulfill without endAll left lock-screen / home / top-banner ringing.
+    /// Cancel / hungup / reject: kill every CallKit call (incoming AND connected).
+    /// Never report a new incoming — that left a lock-screen timer after hangup.
     private func fulfillVoipEndAction(
         roomID: String,
         dict: [String: Any],
@@ -870,17 +867,26 @@ import flutter_callkit_incoming
         if pendingIncomingRoomID() == roomID {
             clearPendingIncomingRoom()
         }
-        let hadCall = !CXCallObserver().calls.filter { !$0.hasEnded }.isEmpty
-        endCallKitCalls(roomID: roomID, forceEndAll: true)
-        pluginEndAllCalls()
-        if hadCall || !mustReport {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
-                self?.endAllActiveCallKitCalls()
-                completion()
-            }
-            return
+        killAllCallKit(roomID: roomID)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            self?.killAllCallKit(roomID: roomID)
         }
-        fulfillVoipWithoutIncomingUi(mustReport: mustReport, completion: completion)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) { [weak self] in
+            self?.killAllCallKit(roomID: roomID)
+            completion()
+        }
+    }
+
+    /// Incoming + connected (timer) CallKit. Answer swaps UUID; end roomID alone is not enough.
+    private func killAllCallKit(roomID: String) {
+        pluginEndCall(id: roomID)
+        pluginEndAllCalls()
+        for call in CXCallObserver().calls where !call.hasEnded {
+            requestEndCall(call.uuid)
+            pluginEndCall(id: call.uuid.uuidString)
+            voipFulfillProvider?.reportCall(with: call.uuid, endedAt: Date(), reason: .remoteEnded)
+        }
+        pluginEndAllCalls()
     }
 
     /// Invite vs end: `action` may be missing; customType / body still say "ended".
@@ -918,30 +924,8 @@ import flutter_callkit_incoming
         mustReport: Bool,
         completion: @escaping () -> Void
     ) {
-        if !mustReport {
-            NSLog("HangXun VoIP: skip incoming UI fulfill mustReport=0")
-            completion()
-            return
-        }
-        // Throwaway CXCall — never the real roomID (that would be a second invite UI).
-        let uuid = UUID()
-        let update = CXCallUpdate()
-        update.remoteHandle = CXHandle(type: .generic, value: "hangxun")
-        update.localizedCallerName = "航讯"
-        update.hasVideo = false
-        if voipFulfillProvider == nil {
-            let config = CXProviderConfiguration()
-            config.supportedHandleTypes = [.generic]
-            config.maximumCallGroups = 1
-            config.maximumCallsPerCallGroup = 1
-            voipFulfillProvider = CXProvider(configuration: config)
-        }
-        let provider = voipFulfillProvider!
-        NSLog("HangXun VoIP: dummy CallKit fulfill uuid=%@", uuid.uuidString)
-        provider.reportNewIncomingCall(with: uuid, update: update) { _ in
-            provider.reportCall(with: uuid, endedAt: Date(), reason: .declinedElsewhere)
-            DispatchQueue.main.async(execute: completion)
-        }
+        NSLog("HangXun VoIP: fulfill without incoming UI mustReport=%@", mustReport ? "1" : "0")
+        completion()
     }
 
     func handleReplayKitFromFlutter(result: FlutterResult, call: FlutterMethodCall) {

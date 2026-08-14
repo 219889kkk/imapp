@@ -271,26 +271,16 @@ mixin OpenIMLive {
   /// Short window after Accept for CallKit incoming→active noise only.
   final Map<String, int> _callKitAcceptSettleUntilMs = {};
 
-  // --- iOS call flow (single source of truth) ---
+  // --- iOS 被叫：三个状态 × 接听 / 终止 ---
   //
-  // RING (lock / background)
-  //   PushKit reports CallKit → Dart prefetches RTC token only.
-  //   Never create a PeerConnection / never setActive while ringing.
-  //   LiveKit during ring steals AVAudioSession → iOS ends CXCall after ~1 ring,
-  //   callee UI dies, caller stays on 邀请.
+  // 1. 锁屏被叫          → 只有系统 CallKit
+  // 2. 解锁但不在航讯     → 只有系统 CallKit（桌面 / Safari / 别的 App）
+  // 3. 双方都在航讯前台   → 只有应用内全屏邀请，不要 CallKit 顶栏
   //
-  // ANSWER
-  //   CXAnswer + didActivate → callingAccept + LiveKit join with cached token.
-  //   Publish mic. Plugin Ended after Answer is UUID swap (not hangup).
-  //
-  // DECLINE / TIMEOUT / RING END
-  //   Decline → callingReject.
-  //   Timeout / system End while still ringing → callingCancel to caller
-  //   (stop 邀请) — never callingReject ("对方已拒绝").
-  //   Native red End after answer → callingHungup.
-  //
-  // FOREGROUND
-  //   In-app overlay. Dismiss CallKit only for UI switch (uiDismiss armed).
+  // 接听：1/2 走 CallKit Answer（callingAccept + LiveKit，系统通话页保持到挂断）
+  //       3 走应用内接听（关掉任何 CallKit，应用内音频）
+  // 终止：本端或对端挂断 → 应用内页面关掉，同时 kill 全部 CallKit（响铃 UUID + 接通后的计时 UUID）
+  // 主叫：自己呼出不要来电横幅；不要给主叫发 VoIP accept。
 
   void _armCallKitUiDismiss(String? roomID,
       {Duration duration = const Duration(seconds: 3)}) {
@@ -367,20 +357,19 @@ mixin OpenIMLive {
     await voip?.endAllCalls();
   }
 
+  /// 状态 3：航讯在前台。锁屏 / 桌面 / 别的 App 都算不在 App。
+  bool _iosCalleeIsInHangXun() {
+    if (!Platform.isIOS) return true;
+    if (_isRunningBackground) return false;
+    return WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
+  }
+
+  /// 状态 1/2 用 CallKit；状态 3 用应用内全屏。
   bool _iosShouldUseCallKitForRing(String? roomID) {
     if (!Platform.isIOS) return false;
     if (roomID != null && _isRoomEnded(roomID)) return false;
     if (_autoPickup || _isAcceptInProgressForRoom(roomID)) return false;
-    // Debounced Flutter bg flag can lag 450ms — also use lifecycle so
-    // home/lock WS invites still take CallKit instead of a missing overlay.
-    final life = WidgetsBinding.instance.lifecycleState;
-    final notActive = _isRunningBackground ||
-        life == null ||
-        life == AppLifecycleState.inactive ||
-        life == AppLifecycleState.paused ||
-        life == AppLifecycleState.hidden ||
-        life == AppLifecycleState.detached;
-    return notActive;
+    return !_iosCalleeIsInHangXun();
   }
 
   /// Prefetch/prejoin occupies LiveKit while still ringing. That is not an answer.
@@ -1242,16 +1231,23 @@ mixin OpenIMLive {
       return;
     }
 
-    if (id.isNotEmpty && _isRoomEnded(id)) return;
-
     if (act != 'hungup' && act != 'end' && act != 'cancel' && act != 'reject') {
+      return;
+    }
+
+    // 终止必须先清 CallKit。IM 可能已经 mark-ended，这里再 return 会留下锁屏计时页。
+    unawaited(VoipCallkitController.toOrNull?.endAllCalls() ?? Future.value());
+
+    if (id.isNotEmpty && _isRoomEnded(id)) {
+      CallAudioDebugLog.add(
+          'voip', 'remote end — CallKit wipe, then terminate anyway $id');
+      _terminateCallUi(id);
       return;
     }
 
     if (act == 'hungup' || act == 'end') {
       final info = _activeCallSignaling;
       if (info != null) {
-        // Peer already hung up — local cleanup only.
         unawaited(onTapHangup(info..userID = OpenIM.iMManager.userID, _connectedDurationSec(), false));
       } else {
         _terminateCallUi(id.isEmpty ? null : id);
@@ -2432,7 +2428,7 @@ mixin OpenIMLive {
             final callType =
                 mediaType == 'audio' ? CallType.audio : CallType.video;
 
-            // Background / lock: CallKit rings; foreground uses overlay below.
+            // 状态 1/2：锁屏或解锁不在航讯 → 只响 CallKit。状态 3 走下面全屏邀请。
             if (_iosShouldUseCallKitForRing(roomID)) {
               // Never play in-app ring under CallKit — cancel may end CallKit
               // while Flutter ringtone keeps looping on home/lock.
@@ -2514,8 +2510,7 @@ mixin OpenIMLive {
               });
               return;
             }
-            // Foreground in-app: overlay primary. Don't wait on CallKit dismiss
-            // when there is no system incoming UI — that delayed in-app answer.
+            // 状态 3：双方都在航讯 — 只出全屏邀请，顺手清掉可能残留的 CallKit 顶栏。
             PackageBridge.clearCallNotification?.call();
             FlutterOpenimLiveAlert.closeLiveAlert();
             _presentCallUi(event.data, fromHeadless: _autoPickup);
@@ -3056,14 +3051,8 @@ mixin OpenIMLive {
           offlinePushInfo: OfflinePushInfo(),
           userID: signaling.invitation!.inviterUserID,
           isOnlineOnly: false);
-      final inviter = signaling.invitation!.inviterUserID?.trim() ?? '';
-      if (inviter.isNotEmpty) {
-        unawaited(_triggerVoipPush(
-          signaling,
-          action: 'accept',
-          toUserIDs: [inviter],
-        ));
-      }
+      // Do NOT VoIP-push accept to the caller. That PushKit wake was reported
+      // as a new incoming CallKit banner on the caller's phone.
     } catch (e, s) {
       Logger.print('send callingAccept failed: $e $s');
     }
