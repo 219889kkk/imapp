@@ -28,10 +28,15 @@ import flutter_callkit_incoming
         config.supportedHandleTypes = [.generic]
         config.maximumCallGroups = 1
         config.maximumCallsPerCallGroup = 1
+        if #available(iOS 11.0, *) {
+            config.includesCallsInRecents = false
+        }
         let provider = CXProvider(configuration: config)
         provider.setDelegate(silentCallKitDelegate, queue: .main)
         return provider
     }()
+    /// Last mustReport dummy UUID — never leave this CXCall ringing.
+    private var lastSilentFulfillUUID: UUID?
     private var lastCallKitAcceptAt: TimeInterval = 0
     /// roomID → endedAt (ignore late PushKit invites that re-show CallKit).
     private var endedVoipRooms: [String: Date] = [:]
@@ -818,8 +823,13 @@ import flutter_callkit_incoming
         if action == "cancel" || action == "end" || action == "hungup" || action == "reject" {
             NSLog("HangXun VoIP remote end action=%@ room=%@", action, roomID)
             markVoipRoomEnded(roomID)
-            notifyDartVoipRemoteEnd(roomID: roomID, action: action)
-            fulfillVoipEndAction(roomID: roomID, dict: dict, mustReport: mustReport, completion: completion)
+            // Finish silent mustReport BEFORE notifying Dart. WS hangup often
+            // already killed CallKit; dummy-then-Dart-kill was racing and the
+            // dummy incoming bounced back after the real call died.
+            fulfillVoipEndAction(roomID: roomID, dict: dict, mustReport: mustReport) {
+                self.notifyDartVoipRemoteEnd(roomID: roomID, action: action)
+                completion()
+            }
             return
         }
 
@@ -978,6 +988,10 @@ import flutter_callkit_incoming
 
     private func killCallKit(for roomID: String) {
         pluginEndCall(id: roomID)
+        if let dummy = lastSilentFulfillUUID {
+            reportRemoteEnded(dummy)
+            lastSilentFulfillUUID = nil
+        }
         let protect = protectedCallRooms(except: roomID)
         let pending = pendingIncomingRoomID()
         let tracked = trackedCallRoomID()
@@ -1040,8 +1054,8 @@ import flutter_callkit_incoming
     }
 
     /// iOS 13+/26 require reportNewIncomingCall before VoIP completion.
-    /// Do not go through the plugin UI — showCallkitIncoming + endCall is the
-    /// full-screen "航讯音频即将结束" that cannot be dismissed.
+    /// NEVER use the plugin CXProvider here — that is the full-screen
+    /// 「航讯音频」bounce after hangup (report incoming, then fail to dismiss).
     private func fulfillVoipWithoutIncomingUi(
         mustReport: Bool,
         completion: @escaping () -> Void
@@ -1052,15 +1066,39 @@ import flutter_callkit_incoming
             return
         }
         let uuid = UUID()
+        lastSilentFulfillUUID = uuid
         let update = CXCallUpdate()
-        update.remoteHandle = CXHandle(type: .generic, value: "hangxun")
+        update.remoteHandle = CXHandle(type: .generic, value: "hangxun-silent")
         update.localizedCallerName = " "
         update.hasVideo = false
-        let provider = pluginCallKitProvider() ?? silentCallKitProvider
+        update.supportsHolding = false
+        update.supportsGrouping = false
+        update.supportsUngrouping = false
+        update.supportsDTMF = false
+        let provider = silentCallKitProvider
         NSLog("HangXun VoIP: silent CallKit fulfill uuid=%@", uuid.uuidString)
-        provider.reportNewIncomingCall(with: uuid, update: update) { _ in
-            provider.reportCall(with: uuid, endedAt: Date(), reason: .answeredElsewhere)
+        provider.reportNewIncomingCall(with: uuid, update: update) { error in
+            if let error = error {
+                NSLog("HangXun VoIP: silent fulfill error %@", error.localizedDescription)
+            }
+            // Backdated .failed: no 即将结束, no recents, no lock-screen banner.
+            provider.reportCall(
+                with: uuid,
+                endedAt: Date().addingTimeInterval(-2),
+                reason: .failed
+            )
             DispatchQueue.main.async(execute: completion)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+                guard let self = self else { return }
+                self.silentCallKitProvider.reportCall(
+                    with: uuid,
+                    endedAt: Date().addingTimeInterval(-2),
+                    reason: .failed
+                )
+                if self.lastSilentFulfillUUID == uuid {
+                    self.lastSilentFulfillUUID = nil
+                }
+            }
         }
     }
 

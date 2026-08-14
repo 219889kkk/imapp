@@ -2312,6 +2312,13 @@ mixin OpenIMLive {
           'callkit', 'recover skipped — ended/answered roomID=$roomID');
       return;
     }
+    // In HangXun (state 3): CallKit ended is the silent mustReport dummy, not
+    // the real invite. Re-showing CallKit is the hangup bounce.
+    if (!_iosShouldUseCallKitForRing(roomID)) {
+      CallAudioDebugLog.add(
+          'callkit', 'recover skipped — in-app, ignore dummy end roomID=$roomID');
+      return;
+    }
     final voip = VoipCallkitController.toOrNull;
     final recovered = await voip?.recoverSpuriousIncoming(info) ?? false;
     if (recovered) {

@@ -99,6 +99,11 @@ class VoipCallkitController extends GetxService {
     final id = info.invitation?.roomID?.trim() ?? '';
     if (id.isEmpty) return false;
     if (PackageBridge.isCallRoomEnded?.call(id) == true) return false;
+    // In-app invite: never re-open CallKit after hangup dummy / UUID end.
+    if (PackageBridge.rtcBridge?.hasCallOverlay == true) {
+      Logger.print('CallKit recover skipped — in-app overlay roomID=$id');
+      return false;
+    }
     if (_spuriousRecoveredRooms.contains(id)) {
       Logger.print('CallKit recover skipped — already tried roomID=$id');
       return false;
@@ -609,8 +614,18 @@ class VoipCallkitController extends GetxService {
       case 'reject':
         return true;
       default:
-        return false;
+        break;
     }
+    // Native silent mustReport dummy — handle hangxun-silent, blank caller.
+    if (body is Map) {
+      final handle = '${body['handle'] ?? extra['handle'] ?? ''}'.trim().toLowerCase();
+      final name = '${body['nameCaller'] ?? extra['nameCaller'] ?? ''}'.trim();
+      if (handle == 'hangxun-silent' ||
+          (handle == 'hangxun' && name.isEmpty)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   Map<String, dynamic> _extraOf(dynamic body) {
