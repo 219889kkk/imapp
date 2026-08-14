@@ -128,8 +128,12 @@ import flutter_callkit_incoming
                 self.killCallKit(for: roomID)
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
                     guard let self = self else { return }
-                    let stillLive = !CXCallObserver().calls.filter { !$0.hasEnded }.isEmpty
-                    if stillLive {
+                    // Only retry if THIS room is still live. A new redial CXCall
+                    // is stillLive too — wiping it left lock-screen redial dead.
+                    let stillThisRoom = CXCallObserver().calls.contains {
+                        !$0.hasEnded && self.uuidMatchesRoom($0.uuid, roomID: roomID)
+                    }
+                    if stillThisRoom {
                         self.killCallKit(for: roomID)
                     }
                 }

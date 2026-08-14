@@ -182,12 +182,13 @@ class OpenIMLiveClient implements RTCBridge {
       close();
       return;
     }
-    // Reject/cancel roomID mismatch used to leave caller stuck on 请求中.
-    if (isBusy && hasOverlay) {
-      Logger.print(
-          'closeByRoomID mismatch current=$current event=$id — force close overlay');
+    // Stale cancel of room1 must not destroy room2 (hangup then immediate redial).
+    if (PackageBridge.isCallRoomEnded?.call(current) == true) {
       close();
+      return;
     }
+    Logger.print(
+        'closeByRoomID skip live current=$current event=$id');
   }
 
   /// Remove Flutter overlay only — keep LiveKit media (background → CallKit handoff).

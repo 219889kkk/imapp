@@ -957,8 +957,15 @@ class VoipCallkitController extends GetxService {
     } catch (e, s) {
       Logger.print('endCall failed: $e $s');
     }
-    callKitActive.value = false;
-    if (roomID != null && roomID.isNotEmpty && _incomingRoomID == roomID) {
+    final keepIncoming = _incomingRoomID?.trim() ?? '';
+    final ending = roomID?.trim() ?? '';
+    final keepOther = keepIncoming.isNotEmpty &&
+        ending.isNotEmpty &&
+        keepIncoming != ending;
+    if (!keepOther) {
+      callKitActive.value = false;
+    }
+    if (ending.isNotEmpty && _incomingRoomID == ending) {
       _incomingRoomID = null;
     }
   }

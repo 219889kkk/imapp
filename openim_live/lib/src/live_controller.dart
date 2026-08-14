@@ -96,9 +96,23 @@ mixin OpenIMLive {
         }
         return;
       }
-      Logger.print(
-          'ignore invite: busy current=$current incoming=$roomID');
-      return;
+      // Hangup then immediate redial: ringing prejoin still marks busy, so the
+      // second invite was dropped while the caller stayed on 邀请中.
+      final cur = current?.trim() ?? '';
+      final canReplace = cur.isEmpty ||
+          !_userHasAnsweredCall(cur) ||
+          _isRingingPrejoinOnly(cur);
+      if (!canReplace) {
+        Logger.print(
+            'ignore invite: busy current=$current incoming=$roomID');
+        return;
+      }
+      Logger.print('replace unanswered $cur with incoming $roomID');
+      if (cur.isNotEmpty) {
+        _releaseRoomKeepingOther(cur);
+      } else {
+        OpenIMLiveClient().close();
+      }
     }
     signalingSubject.add(CallEvent(CallState.beCalled, info));
   }
@@ -155,6 +169,52 @@ mixin OpenIMLive {
     return x.isNotEmpty && x == y;
   }
 
+  /// Room that must survive ending [endingId] (next redial / already-shown CallKit).
+  String? _otherLiveCallRoom(String endingId) {
+    final id = endingId.trim();
+    if (id.isEmpty) return null;
+    final active = _activeCallSignaling?.invitation?.roomID?.trim() ?? '';
+    if (active.isNotEmpty && !_sameCallRoom(id, active)) return active;
+    final incoming =
+        VoipCallkitController.toOrNull?.incomingRoomID?.trim() ?? '';
+    if (incoming.isNotEmpty && !_sameCallRoom(id, incoming)) return incoming;
+    final current = OpenIMLiveClient().currentRoomID?.trim() ?? '';
+    if (current.isNotEmpty &&
+        !_sameCallRoom(id, current) &&
+        (_userHasAnsweredCall(current) ||
+            OpenIMLiveClient().hasOverlay)) {
+      return current;
+    }
+    return null;
+  }
+
+  /// End one room without wiping the next CallKit / overlay.
+  void _releaseRoomKeepingOther(String roomID) {
+    final id = roomID.trim();
+    if (id.isEmpty) return;
+    CallAudioDebugLog.add(
+        'callkit', 'release keep-other id=$id keep=${_otherLiveCallRoom(id)}');
+    _markRoomEnded(id);
+    _peerAcceptedRooms.remove(id);
+    _callKitAcceptAtMs.remove(id);
+    if (_callKitAcceptHandledRoomID == id) {
+      _callKitAcceptHandledRoomID = null;
+    }
+    final active = _activeCallSignaling?.invitation?.roomID?.trim() ?? '';
+    if (active.isEmpty || _sameCallRoom(id, active)) {
+      _activeCallSignaling = null;
+      _beCalledEvent = null;
+      _callConnectedAtMs = null;
+      _stopSound();
+      FlutterOpenimLiveAlert.closeLiveAlert();
+      PackageBridge.clearCallNotification?.call();
+    }
+    _suppressCallKitEnded(id, duration: const Duration(seconds: 2));
+    unawaited(
+        VoipCallkitController.toOrNull?.endCall(id) ?? Future.value());
+    OpenIMLiveClient().closeByRoomID(id);
+  }
+
   /// Wall-clock from answer — UI timer alone often stays 0 on CallKit/headless.
   int? _callConnectedAtMs;
 
@@ -204,14 +264,10 @@ mixin OpenIMLive {
     final id = roomID?.trim() ?? '';
     final active = _activeCallSignaling?.invitation?.roomID?.trim() ?? '';
     // Stale end for a previous room must not kill the current ring / call.
-    // Only protecting "already answered" left lock-screen redial dead:
-    // cancel(room1) arrived after invite(room2) and wiped CallKit + overlay.
-    if (id.isNotEmpty && active.isNotEmpty && !_sameCallRoom(id, active)) {
-      CallAudioDebugLog.add(
-          'callkit', 'terminate stale only id=$id keep active=$active');
-      _markRoomEnded(id);
-      unawaited(
-          VoipCallkitController.toOrNull?.endCall(id) ?? Future.value());
+    // Empty active used to look like "same call" and wiped the next redial
+    // (lock/home CallKit already up, Dart overlay not yet assigned).
+    if (id.isNotEmpty && _otherLiveCallRoom(id) != null) {
+      _releaseRoomKeepingOther(id);
       return;
     }
     _markRoomEnded(id.isNotEmpty ? id : active);
@@ -1290,24 +1346,26 @@ mixin OpenIMLive {
       return;
     }
 
-    final active = _activeCallSignaling?.invitation?.roomID?.trim() ?? '';
-    final sameCall = id.isEmpty || active.isEmpty || active == id;
-    // Stale end for an old room must not kill the next incoming CallKit.
-    if (!sameCall && id.isNotEmpty) {
+    if (id.isNotEmpty && _otherLiveCallRoom(id) != null) {
       CallAudioDebugLog.add(
-          'voip', 'remote end stale only id=$id keep active=$active');
-      _markRoomEnded(id);
-      unawaited(
-          VoipCallkitController.toOrNull?.endCall(id) ?? Future.value());
+          'voip', 'remote end stale only id=$id keep=${_otherLiveCallRoom(id)}');
+      _terminateCallUi(id);
       return;
     }
 
-    unawaited(VoipCallkitController.toOrNull?.endAllCalls(roomID: id) ?? Future.value());
+    if (id.isNotEmpty &&
+        (!_userHasAnsweredCall(id) || _isRingingPrejoinOnly(id))) {
+      CallAudioDebugLog.add(
+          'voip', 'remote end while ringing — local only roomID=$id');
+      _terminateCallUi(id.isEmpty ? null : id);
+      return;
+    }
 
     if (id.isNotEmpty && _isRoomEnded(id)) {
       CallAudioDebugLog.add(
-          'voip', 'remote end — CallKit wipe, then terminate anyway $id');
-      _terminateCallUi(id);
+          'voip', 'remote end — already ended, CallKit only $id');
+      unawaited(
+          VoipCallkitController.toOrNull?.endCall(id) ?? Future.value());
       return;
     }
 
