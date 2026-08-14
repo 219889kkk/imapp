@@ -305,7 +305,7 @@ mixin OpenIMLive {
   /// Short window after Accept for CallKit incoming→active noise only.
   final Map<String, int> _callKitAcceptSettleUntilMs = {};
 
-  // --- iOS 被叫：三个状态 × 接听 / 终止 ---
+  // --- iOS 被叫：三个状态 × 接听 / 终止 / 超时（每次改通话都必须三种都过）---
   //
   // 1. 锁屏被叫          → 只有系统 CallKit
   // 2. 解锁但不在航讯     → 只有系统 CallKit（桌面 / Safari / 别的 App）
@@ -314,7 +314,9 @@ mixin OpenIMLive {
   // 接听：1/2 走 CallKit Answer（callingAccept + LiveKit，系统通话页保持到挂断）
   //       3 走应用内接听（关掉任何 CallKit，应用内音频）
   // 终止：本端或对端挂断 → 应用内页面关掉，同时 kill 全部 CallKit（响铃 UUID + 接通后的计时 UUID）
+  // 超时/未接：三种都要 callingCancel 通知主叫；进 App 不得重放已结束邀请
   // 主叫：自己呼出不要来电横幅；不要给主叫发 VoIP accept。
+  // 状态 3 判定：原生 alreadyInHangXunForeground（前台>0.8s），禁止用 VoIP 唤醒的 resumed。
 
   void _armCallKitUiDismiss(String? roomID,
       {Duration duration = const Duration(seconds: 3)}) {
@@ -391,11 +393,11 @@ mixin OpenIMLive {
     await voip?.endAllCalls(roomID: id);
   }
 
-  /// 状态 3：航讯在前台。锁屏 / 桌面 / 别的 App 都算不在 App。
+  /// 状态 3：航讯在前台超过 0.8s。VoIP 唤醒瞬间的 resumed 仍算不在 App（走 CallKit）。
   bool _iosCalleeIsInHangXun() {
     if (!Platform.isIOS) return true;
     if (_isRunningBackground) return false;
-    return WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
+    return VoipCallkitController.toOrNull?.inHangXunForeground == true;
   }
 
   /// 状态 1/2 用 CallKit；状态 3 用应用内全屏。
@@ -538,17 +540,14 @@ mixin OpenIMLive {
         _cancelRingTimeout();
         return;
       }
-      final client = OpenIMLiveClient();
       final isCaller =
           signaling.invitation?.inviterUserID == OpenIM.iMManager.userID;
-      // Only extend when peer is actually answering / joining — never because
-      // caller alone sits in an empty LiveKit wait room (felt like forever).
+      // Only extend after the peer actually accepted — never because the
+      // caller sits in an empty LiveKit wait room (callee CallKit already gone).
       if (isCaller &&
           _ringTimeoutExtendCount < 2 &&
-          client.currentRoomID == roomID &&
           (_peerAcceptedRooms.contains(roomID) ||
-              client.peerAcceptedForUi ||
-              client.isMediaConnecting)) {
+              OpenIMLiveClient().peerAcceptedForUi)) {
         _ringTimeoutExtendCount++;
         Logger.print(
             'call ring timeout extended #$_ringTimeoutExtendCount roomID=$roomID');
@@ -1083,6 +1082,9 @@ mixin OpenIMLive {
   /// Safari/browser accept does not tear down the audio session.
   Future<void> _onIosForegroundResume() async {
     if (!Platform.isIOS) return;
+    final voip = VoipCallkitController.toOrNull;
+    await voip?.refreshInHangXunForeground();
+    await voip?.refreshEndedRoomsFromNative();
     final endedRoom = _activeCallSignaling?.invitation?.roomID?.trim() ??
         OpenIMLiveClient().currentRoomID?.trim() ??
         '';
@@ -1190,6 +1192,17 @@ mixin OpenIMLive {
         return;
       }
 
+      final callKitUp = voip?.ownsIncomingUi == true ||
+          (pendingRoom.isNotEmpty && voip?.incomingRoomID == pendingRoom);
+      if (!callKitUp) {
+        // CallKit already gone (timeout/miss). Do not replay in-app invite.
+        CallAudioDebugLog.add(
+            'fg', 'unanswered but CallKit gone — miss cleanup roomID=$pendingRoom');
+        unawaited(_notifyCallerInviteStopped(pending.data));
+        _terminateCallUi(pendingRoom);
+        return;
+      }
+
       // VoIP / CallKit wake also looks like "foreground". Keep the system
       // incoming UI — dropping it is the home-screen banner that auto-ends.
       CallAudioDebugLog.add(
@@ -1222,7 +1235,17 @@ mixin OpenIMLive {
         await _restoreLiveCallAudio(active);
         return;
       }
-      // Unanswered leftover: VoIP wake looks like foreground. Keep CallKit.
+      // Unanswered leftover: keep CallKit if it is still showing (lock/home).
+      // If CallKit already timed out, do not replay an in-app invite page.
+      final leftoverKit = voip?.ownsIncomingUi == true ||
+          (activeRoom.isNotEmpty && voip?.incomingRoomID == activeRoom);
+      if (!leftoverKit) {
+        CallAudioDebugLog.add(
+            'fg', 'unanswered leftover CallKit gone — miss cleanup roomID=$activeRoom');
+        unawaited(_notifyCallerInviteStopped(active));
+        _terminateCallUi(activeRoom);
+        return;
+      }
       CallAudioDebugLog.add(
           'fg', 'unanswered leftover — keep CallKit roomID=$activeRoom');
       return;
@@ -2515,6 +2538,10 @@ mixin OpenIMLive {
             }
           }
           if (event.state == CallState.beCalled) {
+            if (Platform.isIOS) {
+              await VoipCallkitController.toOrNull
+                  ?.refreshInHangXunForeground();
+            }
             unawaited(_prefetchPickupToken(event.data.invitation?.roomID));
             _activeCallSignaling = event.data;
             _startRingTimeout(event.data);

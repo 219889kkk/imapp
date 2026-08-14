@@ -117,6 +117,8 @@ import flutter_callkit_incoming
                 self.loadEndedVoipRoomsIfNeeded()
                 self.pruneEndedVoipRooms()
                 result(Array(self.endedVoipRooms.keys))
+            case "isInHangXunForeground":
+                result(self.alreadyInHangXunForeground())
             case "endAllCallKit":
                 let args = call.arguments as? [String: Any]
                 let roomID = (args?["roomID"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""

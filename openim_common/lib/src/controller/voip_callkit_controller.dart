@@ -126,6 +126,7 @@ class VoipCallkitController extends GetxService {
       _refreshVoipToken();
       unawaited(_pullPendingIncomingRoom());
       unawaited(refreshEndedRoomsFromNative());
+      unawaited(refreshInHangXunForeground());
       Future<void>.delayed(const Duration(milliseconds: 800), () {
         unawaited(_pullPendingIncomingRoom());
       });
@@ -885,6 +886,19 @@ class VoipCallkitController extends GetxService {
     final compact = id.toLowerCase().replaceAll('-', '');
     return _nativeEndedRooms.any(
         (e) => e.toLowerCase().replaceAll('-', '') == compact);
+  }
+
+  bool inHangXunForeground = false;
+
+  Future<bool> refreshInHangXunForeground() async {
+    if (!Platform.isIOS) return false;
+    try {
+      final v = await _nativeChannel.invokeMethod('isInHangXunForeground');
+      inHangXunForeground = v == true;
+    } catch (_) {
+      inHangXunForeground = false;
+    }
+    return inHangXunForeground;
   }
 
   Future<void> refreshEndedRoomsFromNative() async {
