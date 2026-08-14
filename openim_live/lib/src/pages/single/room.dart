@@ -78,7 +78,9 @@ class _SingleRoomViewState extends SignalState<SingleRoomView> {
     // Caller waiting / callee still ringing: join (or attach prejoin) with mic off.
     final ringing = widget.initState == CallState.call ||
         widget.initState == CallState.beCalled;
-    final deferMic = ringing && callState != CallState.calling;
+    final deferMic = ringing &&
+        callState != CallState.calling &&
+        callState != CallState.connecting;
     await client.connectMedia(
       certificate: certificate,
       callType: widget.callType,
@@ -89,7 +91,7 @@ class _SingleRoomViewState extends SignalState<SingleRoomView> {
       onDisconnected: _onLiveKitDisconnected,
     );
     await _attachSharedMedia(client);
-    if (CallState.call == callState || CallState.connecting == callState) {
+    if (CallState.call == callState) {
       widget.onWaitingAccept?.call();
     }
   }
@@ -226,7 +228,8 @@ class _SingleRoomViewState extends SignalState<SingleRoomView> {
   bool get _deferMicrophone =>
       (widget.initState == CallState.call ||
           widget.initState == CallState.beCalled) &&
-      callState != CallState.calling;
+      callState != CallState.calling &&
+      callState != CallState.connecting;
 
   Future<void> _applySpeakerRoute() async {
     final speakerOn = enabledSpeaker;

@@ -161,6 +161,35 @@ mixin OpenIMLive {
     _callConnectedAtMs ??= DateTime.now().millisecondsSinceEpoch;
   }
 
+  int _talkingPromoteGen = 0;
+
+  /// After answer: show 连接中 until audio is actually up, then start the timer.
+  void _beginAnsweredConnecting(SignalingInfo signaling) {
+    signalingSubject.add(CallEvent(CallState.connecting, signaling));
+    unawaited(_promoteTalkingWhenMediaReady(signaling));
+  }
+
+  Future<void> _promoteTalkingWhenMediaReady(SignalingInfo signaling) async {
+    final gen = ++_talkingPromoteGen;
+    final roomID = signaling.invitation?.roomID?.trim() ?? '';
+    final deadline = DateTime.now().add(const Duration(milliseconds: 2800));
+    while (gen == _talkingPromoteGen && !_isRoomEnded(roomID)) {
+      final client = OpenIMLiveClient();
+      final media = client.hasMediaFor(roomID) || client.isConnectedMedia(roomID);
+      var audioUp = !Platform.isIOS;
+      if (Platform.isIOS) {
+        audioUp = _iosCallKitDidActivateNative ||
+            await IosWebRtcAudio.isEnabled();
+      }
+      if (media && audioUp) break;
+      if (DateTime.now().isAfter(deadline)) break;
+      await Future<void>.delayed(const Duration(milliseconds: 120));
+    }
+    if (gen != _talkingPromoteGen || _isRoomEnded(roomID)) return;
+    _markCallConnected();
+    signalingSubject.add(CallEvent(CallState.calling, signaling));
+  }
+
   int _connectedDurationSec() {
     final t = _callConnectedAtMs;
     if (t == null) return 0;
@@ -189,6 +218,7 @@ mixin OpenIMLive {
     if (id.isNotEmpty) _peerAcceptedRooms.remove(id);
     if (active.isNotEmpty) _peerAcceptedRooms.remove(active);
     _callConnectedAtMs = null;
+    _talkingPromoteGen++;
     _clearPickupCache();
     _acceptJoinInFlight = null;
     _acceptJoinRoomID = null;
@@ -547,7 +577,6 @@ mixin OpenIMLive {
     _peerAcceptedRooms.add(id);
     _cancelRingTimeout();
     _ringTimeoutExtendCount = 0;
-    _markCallConnected();
     final client = OpenIMLiveClient();
     client.setUserMicPreference(true);
     unawaited(client.onCallActive(
@@ -557,8 +586,7 @@ mixin OpenIMLive {
     OpenIMLiveClient().promoteCallingUi(markAccepted: true);
     final info = _activeCallSignaling;
     if (info != null) {
-      // Drive CallState.calling so UI timer + duration insert both work.
-      signalingSubject.add(CallEvent(CallState.calling, info));
+      _beginAnsweredConnecting(info);
     }
     Logger.print('outbound peer present (LiveKit) roomID=$id');
     CallAudioDebugLog.add('ring', 'LiveKit remote present — cancel timeout roomID=$id');
@@ -748,11 +776,11 @@ mixin OpenIMLive {
     PackageBridge.clearCallNotification?.call();
     if (roomID.isNotEmpty) {
       _markRoomAnswered(roomID);
-      _markCallConnected();
       _markCallKitAcceptClock(roomID);
       _armCallKitAcceptSettle(roomID);
     }
-    signalingSubject.add(CallEvent(CallState.calling, resolved));
+    signalingSubject.add(CallEvent(CallState.connecting, resolved));
+    unawaited(_promoteTalkingWhenMediaReady(resolved));
     CallAudioDebugLog.add('callkit', 'accept join roomID=$roomID');
     unawaited(_callKitAcceptAndJoin(resolved));
   }
@@ -1306,8 +1334,7 @@ mixin OpenIMLive {
     final gen = _callSessionGen;
     _activeCallSignaling = signaling;
     _markRoomAnswered(roomID);
-    _markCallConnected();
-    signalingSubject.add(CallEvent(CallState.calling, signaling));
+    _beginAnsweredConnecting(signaling);
     OpenIMLiveClient().onTapHangup = (duration, isPositive) => onTapHangup(
           signaling..userID = OpenIM.iMManager.userID,
           duration,
@@ -1326,8 +1353,7 @@ mixin OpenIMLive {
       if (gen == _callSessionGen && !_isRoomEnded(roomID)) {
         _autoPickup = false;
         _markRoomAnswered(roomID);
-        _markCallConnected();
-        signalingSubject.add(CallEvent(CallState.calling, signaling));
+        unawaited(_promoteTalkingWhenMediaReady(signaling));
         // Single setConnected after successful join.
         _armCallKitAcceptSettle(roomID);
         unawaited(
@@ -1792,7 +1818,9 @@ mixin OpenIMLive {
     if (outboundWaiting) {
       initState = CallState.call;
     } else if (mediaReady || answered) {
-      initState = CallState.calling;
+      initState = _callConnectedAtMs != null
+          ? CallState.calling
+          : CallState.connecting;
     } else {
       initState = CallState.beCalled;
     }
@@ -1888,7 +1916,7 @@ mixin OpenIMLive {
           speakerOn: OpenIMLiveClient().userSpeakerPreference,
           unmuteMic: true,
         ));
-        signalingSubject.add(CallEvent(CallState.calling, signaling));
+        _beginAnsweredConnecting(signaling);
       }
     } else {
       // Media still joining — show connecting, not timer.
@@ -1923,9 +1951,8 @@ mixin OpenIMLive {
       ));
     }
 
-    // Same clock as callee: start at accept, not when LiveKit remote arrives.
-    _markCallConnected();
-    signalingSubject.add(CallEvent(CallState.calling, merged));
+    // Show 连接中 until audio is up, then start the timer.
+    _beginAnsweredConnecting(merged);
     OpenIMLiveClient().promoteCallingUi(markAccepted: true);
   }
 
@@ -2365,13 +2392,12 @@ mixin OpenIMLive {
       if (roomID.isNotEmpty) {
         _callKitAcceptHandledRoomID = roomID;
         _markRoomAnswered(roomID);
-        _markCallConnected();
         _markCallKitAcceptClock(roomID);
         _armCallKitAcceptSettle(roomID);
       }
       _beCalledEvent = null;
       if (signaling != null) {
-        signalingSubject.add(CallEvent(CallState.calling, signaling));
+        _beginAnsweredConnecting(signaling);
         unawaited(_acceptIncomingCall(signaling, requestPermissions: false));
       } else {
         Logger.print('notification accept: no signaling context');
@@ -2401,12 +2427,11 @@ mixin OpenIMLive {
         if (roomID.isNotEmpty) {
           _callKitAcceptHandledRoomID = roomID;
           _markRoomAnswered(roomID);
-          _markCallConnected();
           _markCallKitAcceptClock(roomID);
           _armCallKitAcceptSettle(roomID);
         }
         if (signaling != null) {
-          signalingSubject.add(CallEvent(CallState.calling, signaling));
+          _beginAnsweredConnecting(signaling);
           unawaited(_acceptIncomingCall(signaling, requestPermissions: false));
         }
       },
@@ -3170,6 +3195,7 @@ mixin OpenIMLive {
     // Mirror hangup: end session first so in-flight dial/connect cannot reopen UI.
     _markRoomEnded(roomID);
     _callConnectedAtMs = null;
+    _talkingPromoteGen++;
     _callSessionGen++;
     _activeCallSignaling = null;
     _beCalledEvent = null;
@@ -3258,6 +3284,7 @@ mixin OpenIMLive {
     // Mark ended + bump session gen FIRST so late invite/accept cannot reopen UI.
     _markRoomEnded(roomID);
     _callConnectedAtMs = null;
+    _talkingPromoteGen++;
     _callSessionGen++;
     _activeCallSignaling = null;
     _beCalledEvent = null;

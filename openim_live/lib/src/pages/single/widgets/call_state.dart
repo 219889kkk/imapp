@@ -254,6 +254,7 @@ abstract class SignalState<T extends SignalView> extends State<T>
   /// Move UI off "等待接听" once truly in-call (peer accepted / remote joined).
   void promoteInCallUi({String? reason, bool force = false}) {
     if (callState == CallState.calling) return;
+    if (callState == CallState.connecting) return;
     final client = OpenIMLiveClient();
     final isOutboundWaiting =
         widget.initState == CallState.call && callState != CallState.calling;
