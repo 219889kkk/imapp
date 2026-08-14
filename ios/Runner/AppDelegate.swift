@@ -98,9 +98,9 @@ import flutter_callkit_incoming
             case "endAllCallKit":
                 let args = call.arguments as? [String: Any]
                 let roomID = (args?["roomID"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                self.killAllCallKit(roomID: roomID)
+                self.killCallKit(for: roomID)
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-                    self?.killAllCallKit(roomID: roomID)
+                    self?.killCallKit(for: roomID)
                 }
                 result(true)
             case "clearIconBadge":
@@ -885,6 +885,8 @@ import flutter_callkit_incoming
         let data = incomingCallKitData(roomID: roomID, dict: dict)
         let appState = UIApplication.shared.applicationState
         NSLog("HangXun VoIP: report CallKit room=%@ state=%ld", roomID, appState.rawValue)
+        // Drop leftover dummy/old CXCalls from the previous hangup before showing this invite.
+        endForeignCallKit(except: roomID)
         setTrackedCallRoom(roomID)
         if let plugin = SwiftFlutterCallkitIncomingPlugin.sharedInstance {
             plugin.showCallkitIncoming(data, fromPushKit: true) {
@@ -903,50 +905,86 @@ import flutter_callkit_incoming
         return CXCallObserver().calls.contains { $0.uuid.uuidString.lowercased() == target }
     }
 
-    /// Cancel / hungup / reject: end this room's CallKit, then mustReport dummy if needed.
-    /// Dummy must end in the same report callback — leaving it up was the leftover timer.
+    /// Cancel / hungup / reject: end this room's CallKit.
+    /// If a CXCall already existed, ending it is the CallKit report — do NOT
+    /// open a dummy incoming (that leftover ring + "通话结束" on the next dial).
     private func fulfillVoipEndAction(
         roomID: String,
         dict: [String: Any],
         mustReport: Bool,
         completion: @escaping () -> Void
     ) {
-        // End this room first (pending/tracked still set so Answer-swapped UUID is wiped).
+        let hadCall = !CXCallObserver().calls.filter { !$0.hasEnded }.isEmpty
         killCallKit(for: roomID)
         if pendingIncomingRoomID() == roomID {
             clearPendingIncomingRoom()
         }
         clearTrackedCallRoom(roomID)
-        fulfillVoipWithoutIncomingUi(mustReport: mustReport) { [weak self] in
-            self?.killCallKit(for: roomID)
-            completion()
+        let stillLive = !CXCallObserver().calls.filter { !$0.hasEnded }.isEmpty
+        if mustReport && !hadCall && !stillLive {
+            fulfillVoipWithoutIncomingUi(mustReport: true, completion: completion)
+            return
         }
+        completion()
     }
 
     /// Incoming + connected (timer) CallKit. Answer swaps UUID; end roomID alone is not enough.
-    /// Do not wipe a *different* room's ringing call (stale cancel used to kill the next invite).
+    /// Never wipe a *newer* ringing invite (rapid redial after hangup).
     private func killAllCallKit(roomID: String) {
         killCallKit(for: roomID)
     }
 
-    private func killCallKit(for roomID: String) {
-        pluginEndCall(id: roomID)
+    private func protectedCallRooms(except roomID: String) -> [String] {
         let pending = pendingIncomingRoomID()
         let tracked = trackedCallRoomID()
-        let wipeAll = roomID.isEmpty
-            || pending == roomID
-            || tracked == roomID
-            || (pending.isEmpty && tracked.isEmpty)
+        var rooms: [String] = []
+        if !pending.isEmpty && pending != roomID { rooms.append(pending) }
+        if !tracked.isEmpty && tracked != roomID && !rooms.contains(tracked) {
+            rooms.append(tracked)
+        }
+        return rooms
+    }
+
+    private func isProtectedCall(_ call: CXCall, protect: [String]) -> Bool {
+        protect.contains { uuidMatchesRoom(call.uuid, roomID: $0) }
+    }
+
+    /// End every CXCall except the one for [roomID] (leftover dummy / previous ring).
+    private func endForeignCallKit(except roomID: String) {
         for call in CXCallObserver().calls where !call.hasEnded {
-            if uuidMatchesRoom(call.uuid, roomID: roomID) || wipeAll {
+            if uuidMatchesRoom(call.uuid, roomID: roomID) { continue }
+            requestEndCall(call.uuid)
+            pluginEndCall(id: call.uuid.uuidString)
+        }
+    }
+
+    private func killCallKit(for roomID: String) {
+        pluginEndCall(id: roomID)
+        let protect = protectedCallRooms(except: roomID)
+        let pending = pendingIncomingRoomID()
+        let tracked = trackedCallRoomID()
+        // Only wipe every CXCall when this room is the one currently showing
+        // and there is no newer invite to keep.
+        let wipeUnprotected = protect.isEmpty && (
+            roomID.isEmpty
+                || pending == roomID
+                || tracked == roomID
+                || (pending.isEmpty && tracked.isEmpty)
+        )
+        for call in CXCallObserver().calls where !call.hasEnded {
+            if isProtectedCall(call, protect: protect) { continue }
+            if uuidMatchesRoom(call.uuid, roomID: roomID) || wipeUnprotected || roomID.isEmpty {
                 requestEndCall(call.uuid)
                 pluginEndCall(id: call.uuid.uuidString)
             }
         }
-        if wipeAll {
+        if protect.isEmpty && wipeUnprotected {
             pluginEndAllCalls()
         }
-        if wipeAll || pending == roomID {
+        if pending == roomID {
+            clearPendingIncomingRoom()
+        }
+        if tracked == roomID || (protect.isEmpty && wipeUnprotected) {
             clearTrackedCallRoom(roomID)
         }
     }
@@ -1011,8 +1049,11 @@ import flutter_callkit_incoming
             completion()
             return
         }
-        plugin.showCallkitIncoming(data, fromPushKit: true) {
+        plugin.showCallkitIncoming(data, fromPushKit: true) { [weak self] in
             plugin.endCall(data)
+            if let dummy = UUID(uuidString: uuid) {
+                self?.requestEndCall(dummy)
+            }
             DispatchQueue.main.async(execute: completion)
         }
     }

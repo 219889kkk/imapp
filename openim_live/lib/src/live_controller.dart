@@ -231,7 +231,7 @@ mixin OpenIMLive {
     if (id.isNotEmpty) {
       await voip.endCall(id);
     }
-    await voip.endAllCalls();
+    await voip.endAllCalls(roomID: id.isEmpty ? null : id);
   }
 
   final backgroundSubject = PublishSubject<bool>();
@@ -354,7 +354,7 @@ mixin OpenIMLive {
     await voip?.endCall(id);
     // endCall(roomID) misses a different CXCall UUID — leftover top banner /
     // app-switcher call UI. Unanswered only (answered path never calls this).
-    await voip?.endAllCalls();
+    await voip?.endAllCalls(roomID: id);
   }
 
   /// 状态 3：航讯在前台。锁屏 / 桌面 / 别的 App 都算不在 App。
@@ -1240,7 +1240,7 @@ mixin OpenIMLive {
       return;
     }
 
-    unawaited(VoipCallkitController.toOrNull?.endAllCalls() ?? Future.value());
+    unawaited(VoipCallkitController.toOrNull?.endAllCalls(roomID: id) ?? Future.value());
 
     if (id.isNotEmpty && _isRoomEnded(id)) {
       CallAudioDebugLog.add(

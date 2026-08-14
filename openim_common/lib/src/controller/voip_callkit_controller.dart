@@ -898,26 +898,38 @@ class VoipCallkitController extends GetxService {
     }
   }
 
-  Future<void> endAllCalls() async {
+  Future<void> endAllCalls({String? roomID}) async {
     if (!Platform.isIOS && !Platform.isAndroid) return;
+    final ended = (roomID ?? _incomingRoomID ?? '').trim();
+    final keep = _incomingRoomID?.trim() ?? '';
+    final keepNewer = keep.isNotEmpty && ended.isNotEmpty && keep != ended;
     try {
-      await FlutterCallkitIncoming.endAllCalls();
+      if (keepNewer) {
+        await FlutterCallkitIncoming.endCall(ended);
+      } else {
+        await FlutterCallkitIncoming.endAllCalls();
+      }
     } catch (e, s) {
       Logger.print('endAllCalls failed: $e $s');
     }
     if (Platform.isIOS) {
       try {
         await _nativeChannel.invokeMethod('endAllCallKit', {
-          'roomID': _incomingRoomID ?? '',
+          'roomID': ended,
         });
       } catch (e, s) {
         Logger.print('native endAllCallKit failed: $e $s');
       }
     }
-    callKitActive.value = false;
-    _incomingRoomID = null;
-    _incomingPresentedAtMs.clear();
-    _spuriousRecoveredRooms.clear();
+    if (!keepNewer) {
+      callKitActive.value = false;
+      _incomingRoomID = null;
+      _incomingPresentedAtMs.clear();
+      _spuriousRecoveredRooms.clear();
+    } else {
+      _incomingPresentedAtMs.remove(ended);
+      _spuriousRecoveredRooms.remove(ended);
+    }
   }
 
   /// Active CallKit room IDs (lock-screen ring / ongoing timer).
