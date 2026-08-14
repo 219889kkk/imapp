@@ -937,6 +937,10 @@ import flutter_callkit_incoming
         info["type"] = isVideo ? 1 : 0
         info["duration"] = timeoutSec * 1000
         info["extra"] = dict
+        info["missedCallNotification"] = [
+            "showNotification": false,
+            "isShowCallback": false,
+        ] as [String: Any]
         let data = flutter_callkit_incoming.Data(args: info)
         data.configureAudioSession = false
         data.audioSessionActive = false
@@ -1036,15 +1040,17 @@ import flutter_callkit_incoming
         let protect = protectedCallRooms(except: roomID)
         let pending = pendingIncomingRoomID()
         let tracked = trackedCallRoomID()
-        // Only wipe every CXCall when this room is the one currently showing
-        // and there is no newer invite to keep.
-        let wipeUnprotected = protect.isEmpty && (
+        let live = CXCallObserver().calls.filter { !$0.hasEnded }
+        let hasOtherLive = live.contains { !uuidMatchesRoom($0.uuid, roomID: roomID) }
+        // UUID-swap after Answer lives under this room's pending/tracked.
+        // A *different* live CXCall is the next redial — never wipe it.
+        let wipeUnprotected = !hasOtherLive && protect.isEmpty && (
             roomID.isEmpty
                 || pending == roomID
                 || tracked == roomID
                 || (pending.isEmpty && tracked.isEmpty)
         )
-        for call in CXCallObserver().calls where !call.hasEnded {
+        for call in live {
             if isProtectedCall(call, protect: protect) { continue }
             if uuidMatchesRoom(call.uuid, roomID: roomID) || wipeUnprotected || roomID.isEmpty {
                 requestEndCall(call.uuid)

@@ -808,8 +808,8 @@ class VoipCallkitController extends GetxService {
       textAccept: StrRes.pickUp,
       textDecline: StrRes.reject,
       extra: extra,
-      missedCallNotification: const NotificationParams(
-        showNotification: true,
+      missedCallNotification: NotificationParams(
+        showNotification: !Platform.isIOS,
         isShowCallback: false,
       ),
       android: const AndroidParams(

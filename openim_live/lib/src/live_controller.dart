@@ -203,13 +203,13 @@ mixin OpenIMLive {
   void _terminateCallUi(String? roomID) {
     final id = roomID?.trim() ?? '';
     final active = _activeCallSignaling?.invitation?.roomID?.trim() ?? '';
-    // Ghost / stale CallKit UUID must not wipe a *connected* live call.
-    if (id.isNotEmpty &&
-        active.isNotEmpty &&
-        !_sameCallRoom(id, active) &&
-        (_userHasAnsweredCall(active) || _isAcceptInProgressForRoom(active))) {
+    // Stale end for a previous room must not kill the current ring / call.
+    // Only protecting "already answered" left lock-screen redial dead:
+    // cancel(room1) arrived after invite(room2) and wiped CallKit + overlay.
+    if (id.isNotEmpty && active.isNotEmpty && !_sameCallRoom(id, active)) {
       CallAudioDebugLog.add(
-          'callkit', 'terminate ignored — room mismatch id=$id active=$active');
+          'callkit', 'terminate stale only id=$id keep active=$active');
+      _markRoomEnded(id);
       unawaited(
           VoipCallkitController.toOrNull?.endCall(id) ?? Future.value());
       return;
@@ -275,8 +275,8 @@ mixin OpenIMLive {
   /// One hungup IM/VoIP to the peer per room (local UI may already be gone).
   final Set<String> _hangupSignaledRooms = {};
 
-  /// One chat call-record bubble per room (hangup + beHangup echo used to double).
-  final Set<String> _hangupRecordInsertedRooms = {};
+  /// One chat call-record bubble per room (cancel + hangup-0 used to double 未接).
+  final Set<String> _callRecordInsertedRooms = {};
 
   Function(SignalingMessageEvent)? onSignalingMessage;
   final roomParticipantDisconnectedSubject = PublishSubject<RoomCallingInfo>();
@@ -317,7 +317,8 @@ mixin OpenIMLive {
   // 接听：1/2 走 CallKit Answer（callingAccept + LiveKit，系统通话页保持到挂断）
   //       3 走应用内接听（关掉任何 CallKit，应用内音频）
   // 终止：本端或对端挂断 → 应用内页面关掉，同时 kill 全部 CallKit（响铃 UUID + 接通后的计时 UUID）
-  // 超时/未接：三种都要 callingCancel 通知主叫；进 App 不得重放已结束邀请
+  // 超时/未接：三种都要 callingCancel 通知主叫；每通只插一条未接记录
+  // 连打：结束 room1 不得杀掉正在响的 room2（锁屏/桌面/应用内都一样）
   // 主叫：自己呼出不要来电横幅；不要给主叫发 VoIP accept。
   // 状态 3 判定：原生 alreadyInHangXunForeground（前台>0.8s），禁止用 VoIP 唤醒的 resumed。
 
@@ -1292,7 +1293,10 @@ mixin OpenIMLive {
     final active = _activeCallSignaling?.invitation?.roomID?.trim() ?? '';
     final sameCall = id.isEmpty || active.isEmpty || active == id;
     // Stale end for an old room must not kill the next incoming CallKit.
-    if (!sameCall && id.isNotEmpty && _isRoomEnded(id)) {
+    if (!sameCall && id.isNotEmpty) {
+      CallAudioDebugLog.add(
+          'voip', 'remote end stale only id=$id keep active=$active');
+      _markRoomEnded(id);
       unawaited(
           VoipCallkitController.toOrNull?.endCall(id) ?? Future.value());
       return;
@@ -2751,7 +2755,7 @@ mixin OpenIMLive {
     _activeCallSignaling = signal;
     final newRoom = signal.invitation!.roomID?.trim() ?? '';
     _peerAcceptedRooms.remove(newRoom);
-    _hangupRecordInsertedRooms.remove(newRoom);
+    _callRecordInsertedRooms.remove(newRoom);
     _hangupSignaledRooms.remove(newRoom);
     _missNotifiedRooms.remove(newRoom);
     _ringTimeoutExtendCount = 0;
@@ -2846,10 +2850,18 @@ mixin OpenIMLive {
   onRoomDisconnected(SignalingInfo signalingInfo) {
     final roomID = signalingInfo.invitation?.roomID?.trim() ?? '';
     Logger.print('call room disconnected roomID=$roomID');
-    CallAudioDebugLog.add('livekit', 'roomDisconnected → hangup roomID=$roomID');
-    // Notify peer — bare UI close left the other side timing forever.
+    CallAudioDebugLog.add('livekit', 'roomDisconnected roomID=$roomID');
     if (roomID.isEmpty || _isRoomEnded(roomID)) {
       _terminateCallUi(roomID.isEmpty ? null : roomID);
+      return;
+    }
+    // Ringing prejoin / unanswered: caller cancel already stops the invite.
+    // Treating this as hangup inserted a second 未接 and could hungup-push
+    // the caller who already started the next dial.
+    if (!_userHasAnsweredCall(roomID) || _isRingingPrejoinOnly(roomID)) {
+      CallAudioDebugLog.add(
+          'livekit', 'ringing disconnect — local only roomID=$roomID');
+      _terminateCallUi(roomID);
       return;
     }
     unawaited(
@@ -3537,14 +3549,24 @@ mixin OpenIMLive {
       var inviteeUserID = invitation.inviteeUserIDList!.first;
       var groupID = invitation.groupID;
       final roomKey = invitation.roomID?.trim() ?? '';
-      // hangup / beHangup both mean "answered then ended" — only one bubble.
-      if (state == CallState.hangup || state == CallState.beHangup) {
-        if (roomKey.isNotEmpty &&
-            !_hangupRecordInsertedRooms.add(roomKey)) {
-          Logger.print(
-              'skip duplicate hangup record roomID=$roomKey state=${state.name}');
-          return;
-        }
+      // One chat bubble per room for any terminal state (cancel + hangup-0
+      // used to show two 未接来电 when the caller cancelled while ringing).
+      const terminal = {
+        CallState.hangup,
+        CallState.beHangup,
+        CallState.cancel,
+        CallState.beCanceled,
+        CallState.timeout,
+        CallState.reject,
+        CallState.beRejected,
+        CallState.networkError,
+      };
+      if (terminal.contains(state) &&
+          roomKey.isNotEmpty &&
+          !_callRecordInsertedRooms.add(roomKey)) {
+        Logger.print(
+            'skip duplicate call record roomID=$roomKey state=${state.name}');
+        return;
       }
       Logger.print(
           'end calling and insert message state:${state.name}, mediaType:$mediaType, inviterUserID:$inviterUserID, inviteeUserID:$inviteeUserID, groupID:$groupID, duration:$duration',
