@@ -714,6 +714,27 @@ import flutter_callkit_incoming
         UserDefaults.standard.removeObject(forKey: pendingIncomingAtKey)
     }
 
+    private let trackedCallRoomKey = "hangxun.trackedCallRoomID"
+
+    private func setTrackedCallRoom(_ roomID: String) {
+        let id = roomID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !id.isEmpty else { return }
+        UserDefaults.standard.set(id, forKey: trackedCallRoomKey)
+    }
+
+    private func trackedCallRoomID() -> String {
+        (UserDefaults.standard.string(forKey: trackedCallRoomKey) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func clearTrackedCallRoom(_ roomID: String) {
+        let id = roomID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let tracked = trackedCallRoomID()
+        if id.isEmpty || tracked.isEmpty || tracked == id {
+            UserDefaults.standard.removeObject(forKey: trackedCallRoomKey)
+        }
+    }
+
     private func notifyDartVoipCallKitPresented(roomID: String) {
         persistPendingIncomingRoom(roomID)
         let fire: () -> Void = { [weak self] in
@@ -760,9 +781,10 @@ import flutter_callkit_incoming
         }
 
         if action == "accept" || action == "answered" {
-            NSLog("HangXun VoIP peer accept room=%@ — never show incoming on caller", roomID)
+            NSLog("HangXun VoIP peer accept room=%@ — mustReport without caller banner", roomID)
             notifyDartVoipRemoteEnd(roomID: roomID, action: "accept")
-            completion()
+            // iOS 13+/26: skip reportNewIncomingCall → VoIP 被停掉，三种被叫全挂。
+            fulfillVoipWithoutIncomingUi(mustReport: mustReport, completion: completion)
             return
         }
 
@@ -783,11 +805,13 @@ import flutter_callkit_incoming
             return
         }
 
-        // 被叫三态：前台(3)只用应用内邀请；锁屏(1)/不在航讯(2)才报 CallKit。
+        // 状态 3：应用内全屏邀请。仍必须 CallKit-report，否则系统停掉 VoIP。
+        // 用一次性假 UUID，不要真实 roomID（否则顶栏+全屏两套 UI）。
         let appState = UIApplication.shared.applicationState
         if appState == .active {
-            NSLog("HangXun VoIP: in-app invite — no CallKit room=%@", roomID)
-            completion()
+            NSLog("HangXun VoIP: in-app invite — mustReport dummy room=%@", roomID)
+            notifyDartVoipCallKitPresented(roomID: roomID)
+            fulfillVoipWithoutIncomingUi(mustReport: mustReport, completion: completion)
             return
         }
 
@@ -839,6 +863,7 @@ import flutter_callkit_incoming
         let data = incomingCallKitData(roomID: roomID, dict: dict)
         let appState = UIApplication.shared.applicationState
         NSLog("HangXun VoIP: report CallKit room=%@ state=%ld", roomID, appState.rawValue)
+        setTrackedCallRoom(roomID)
         if let plugin = SwiftFlutterCallkitIncomingPlugin.sharedInstance {
             plugin.showCallkitIncoming(data, fromPushKit: true) {
                 completion()
@@ -856,37 +881,53 @@ import flutter_callkit_incoming
         return CXCallObserver().calls.contains { $0.uuid.uuidString.lowercased() == target }
     }
 
-    /// Cancel / hungup / reject: kill every CallKit call (incoming AND connected).
-    /// Never report a new incoming — that left a lock-screen timer after hangup.
+    /// Cancel / hungup / reject: end this room's CallKit, then mustReport dummy if needed.
+    /// Dummy must end in the same report callback — leaving it up was the leftover timer.
     private func fulfillVoipEndAction(
         roomID: String,
         dict: [String: Any],
         mustReport: Bool,
         completion: @escaping () -> Void
     ) {
+        // End this room first (pending/tracked still set so Answer-swapped UUID is wiped).
+        killCallKit(for: roomID)
         if pendingIncomingRoomID() == roomID {
             clearPendingIncomingRoom()
         }
-        killAllCallKit(roomID: roomID)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-            self?.killAllCallKit(roomID: roomID)
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) { [weak self] in
-            self?.killAllCallKit(roomID: roomID)
+        clearTrackedCallRoom(roomID)
+        fulfillVoipWithoutIncomingUi(mustReport: mustReport) { [weak self] in
+            self?.killCallKit(for: roomID)
             completion()
         }
     }
 
     /// Incoming + connected (timer) CallKit. Answer swaps UUID; end roomID alone is not enough.
+    /// Do not wipe a *different* room's ringing call (stale cancel used to kill the next invite).
     private func killAllCallKit(roomID: String) {
+        killCallKit(for: roomID)
+    }
+
+    private func killCallKit(for roomID: String) {
         pluginEndCall(id: roomID)
-        pluginEndAllCalls()
+        let pending = pendingIncomingRoomID()
+        let tracked = trackedCallRoomID()
+        let wipeAll = roomID.isEmpty
+            || pending == roomID
+            || tracked == roomID
+            || (pending.isEmpty && tracked.isEmpty)
         for call in CXCallObserver().calls where !call.hasEnded {
-            requestEndCall(call.uuid)
-            pluginEndCall(id: call.uuid.uuidString)
-            voipFulfillProvider?.reportCall(with: call.uuid, endedAt: Date(), reason: .remoteEnded)
+            if uuidMatchesRoom(call.uuid, roomID: roomID) || wipeAll {
+                requestEndCall(call.uuid)
+                pluginEndCall(id: call.uuid.uuidString)
+                voipFulfillProvider?.reportCall(with: call.uuid, endedAt: Date(), reason: .remoteEnded)
+            }
         }
-        pluginEndAllCalls()
+        if wipeAll {
+            pluginEndAllCalls()
+        }
+        if wipeAll || pending == roomID {
+            clearTrackedCallRoom(roomID)
+        }
     }
 
     /// Invite vs end: `action` may be missing; customType / body still say "ended".
@@ -918,14 +959,36 @@ import flutter_callkit_incoming
         return action
     }
 
-    /// iOS 13+/26 require a CallKit report for some VoIP wakes. Do it without
-    /// plugin Incoming/Decline events and without a visible fake incoming call.
+    /// iOS 13+/26 require reportNewIncomingCall before VoIP completion.
+    /// Throwaway UUID, ended in the same callback so it does not become a timer page.
     private func fulfillVoipWithoutIncomingUi(
         mustReport: Bool,
         completion: @escaping () -> Void
     ) {
-        NSLog("HangXun VoIP: fulfill without incoming UI mustReport=%@", mustReport ? "1" : "0")
-        completion()
+        if !mustReport {
+            NSLog("HangXun VoIP: skip incoming UI fulfill mustReport=0")
+            completion()
+            return
+        }
+        let uuid = UUID()
+        let update = CXCallUpdate()
+        update.remoteHandle = CXHandle(type: .generic, value: "hangxun")
+        update.localizedCallerName = " "
+        update.hasVideo = false
+        if voipFulfillProvider == nil {
+            let config = CXProviderConfiguration()
+            config.supportedHandleTypes = [.generic]
+            config.maximumCallGroups = 1
+            config.maximumCallsPerCallGroup = 1
+            voipFulfillProvider = CXProvider(configuration: config)
+        }
+        let provider = voipFulfillProvider!
+        NSLog("HangXun VoIP: dummy CallKit fulfill uuid=%@", uuid.uuidString)
+        provider.reportNewIncomingCall(with: uuid, update: update) { [weak self] _ in
+            provider.reportCall(with: uuid, endedAt: Date(), reason: .answeredElsewhere)
+            self?.requestEndCall(uuid)
+            DispatchQueue.main.async(execute: completion)
+        }
     }
 
     func handleReplayKitFromFlutter(result: FlutterResult, call: FlutterMethodCall) {

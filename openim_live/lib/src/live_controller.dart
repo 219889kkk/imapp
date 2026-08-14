@@ -1235,7 +1235,15 @@ mixin OpenIMLive {
       return;
     }
 
-    // 终止必须先清 CallKit。IM 可能已经 mark-ended，这里再 return 会留下锁屏计时页。
+    final active = _activeCallSignaling?.invitation?.roomID?.trim() ?? '';
+    final sameCall = id.isEmpty || active.isEmpty || active == id;
+    // Stale end for an old room must not kill the next incoming CallKit.
+    if (!sameCall && id.isNotEmpty && _isRoomEnded(id)) {
+      unawaited(
+          VoipCallkitController.toOrNull?.endCall(id) ?? Future.value());
+      return;
+    }
+
     unawaited(VoipCallkitController.toOrNull?.endAllCalls() ?? Future.value());
 
     if (id.isNotEmpty && _isRoomEnded(id)) {
