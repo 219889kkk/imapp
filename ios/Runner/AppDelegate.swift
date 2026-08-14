@@ -112,9 +112,16 @@ import flutter_callkit_incoming
             case "endAllCallKit":
                 let args = call.arguments as? [String: Any]
                 let roomID = (args?["roomID"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                if !roomID.isEmpty {
+                    self.markVoipRoomEnded(roomID)
+                }
                 self.killCallKit(for: roomID)
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-                    self?.killCallKit(for: roomID)
+                    guard let self = self else { return }
+                    let stillLive = !CXCallObserver().calls.filter { !$0.hasEnded }.isEmpty
+                    if stillLive {
+                        self.killCallKit(for: roomID)
+                    }
                 }
                 result(true)
             case "clearIconBadge":
@@ -656,25 +663,36 @@ import flutter_callkit_incoming
         return nil
     }
 
-    /// Peer hangup / programmatic dismiss. CXEndCallAction is the "即将结束" UI that can hang forever.
-    private func reportRemoteEnded(_ uuid: UUID) {
-        pluginCallKitProvider()?.reportCall(with: uuid, endedAt: Date(), reason: .remoteEnded)
-        silentCallKitProvider.reportCall(with: uuid, endedAt: Date(), reason: .remoteEnded)
+    /// End a live CXCall only. Reporting ended on an already-dead UUID
+    /// re-opens CallKit (callee hangup bounce → auto dismiss).
+    private func reportCallEnded(_ uuid: UUID, reason: CXCallEndedReason) {
+        let live = CXCallObserver().calls.contains { $0.uuid == uuid && !$0.hasEnded }
+        guard live else { return }
+        pluginCallKitProvider()?.reportCall(
+            with: uuid,
+            endedAt: Date().addingTimeInterval(-1),
+            reason: reason
+        )
+        silentCallKitProvider.reportCall(
+            with: uuid,
+            endedAt: Date().addingTimeInterval(-1),
+            reason: reason
+        )
     }
 
     private func requestEndCall(_ uuid: UUID) {
-        reportRemoteEnded(uuid)
+        reportCallEnded(uuid, reason: .failed)
     }
 
     private func pluginEndCall(id: String) {
         if let uuid = UUID(uuidString: id) {
-            reportRemoteEnded(uuid)
+            reportCallEnded(uuid, reason: .failed)
         }
     }
 
     private func pluginEndAllCalls() {
         for call in CXCallObserver().calls where !call.hasEnded {
-            reportRemoteEnded(call.uuid)
+            reportCallEnded(call.uuid, reason: .failed)
         }
     }
 
@@ -822,11 +840,16 @@ import flutter_callkit_incoming
 
         if action == "cancel" || action == "end" || action == "hungup" || action == "reject" {
             NSLog("HangXun VoIP remote end action=%@ room=%@", action, roomID)
+            let alreadyEnded = isVoipRoomEnded(roomID)
             markVoipRoomEnded(roomID)
-            // Finish silent mustReport BEFORE notifying Dart. WS hangup often
-            // already killed CallKit; dummy-then-Dart-kill was racing and the
-            // dummy incoming bounced back after the real call died.
-            fulfillVoipEndAction(roomID: roomID, dict: dict, mustReport: mustReport) {
+            // Finish silent mustReport BEFORE notifying Dart. Skip dummy if this
+            // device already hung up — dummy incoming is the callee bounce.
+            fulfillVoipEndAction(
+                roomID: roomID,
+                dict: dict,
+                mustReport: mustReport,
+                allowDummy: !alreadyEnded
+            ) {
                 self.notifyDartVoipRemoteEnd(roomID: roomID, action: action)
                 completion()
             }
@@ -843,7 +866,13 @@ import flutter_callkit_incoming
 
         if isVoipRoomEnded(roomID) {
             NSLog("HangXun VoIP: room already ended %@", roomID)
-            fulfillVoipEndAction(roomID: roomID, dict: dict, mustReport: mustReport, completion: completion)
+            fulfillVoipEndAction(
+                roomID: roomID,
+                dict: dict,
+                mustReport: mustReport,
+                allowDummy: false,
+                completion: completion
+            )
             return
         }
 
@@ -940,6 +969,7 @@ import flutter_callkit_incoming
         roomID: String,
         dict: [String: Any],
         mustReport: Bool,
+        allowDummy: Bool = true,
         completion: @escaping () -> Void
     ) {
         let hadCall = !CXCallObserver().calls.filter { !$0.hasEnded }.isEmpty
@@ -949,7 +979,8 @@ import flutter_callkit_incoming
         }
         clearTrackedCallRoom(roomID)
         let stillLive = !CXCallObserver().calls.filter { !$0.hasEnded }.isEmpty
-        if mustReport && !hadCall && !stillLive {
+        // Dummy incoming after local hangup is the callee bounce (flash then auto-end).
+        if mustReport && allowDummy && !hadCall && !stillLive {
             fulfillVoipWithoutIncomingUi(mustReport: true, completion: completion)
             return
         }
@@ -989,7 +1020,7 @@ import flutter_callkit_incoming
     private func killCallKit(for roomID: String) {
         pluginEndCall(id: roomID)
         if let dummy = lastSilentFulfillUUID {
-            reportRemoteEnded(dummy)
+            reportCallEnded(dummy, reason: .failed)
             lastSilentFulfillUUID = nil
         }
         let protect = protectedCallRooms(except: roomID)
