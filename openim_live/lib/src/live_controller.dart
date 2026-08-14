@@ -272,6 +272,9 @@ mixin OpenIMLive {
   /// One chat-record / one cancel-to-caller per missed room.
   final Set<String> _missNotifiedRooms = {};
 
+  /// One hungup IM/VoIP to the peer per room (local UI may already be gone).
+  final Set<String> _hangupSignaledRooms = {};
+
   /// One chat call-record bubble per room (hangup + beHangup echo used to double).
   final Set<String> _hangupRecordInsertedRooms = {};
 
@@ -2749,6 +2752,8 @@ mixin OpenIMLive {
     final newRoom = signal.invitation!.roomID?.trim() ?? '';
     _peerAcceptedRooms.remove(newRoom);
     _hangupRecordInsertedRooms.remove(newRoom);
+    _hangupSignaledRooms.remove(newRoom);
+    _missNotifiedRooms.remove(newRoom);
     _ringTimeoutExtendCount = 0;
 
     OpenIMLiveClient().start(
@@ -3339,54 +3344,61 @@ mixin OpenIMLive {
 
   onTapHangup(SignalingInfo signaling, int duration, bool isPositive) async {
     final roomID = signaling.invitation?.roomID;
-    if (_isRoomEnded(roomID)) {
-      Logger.print('onTapHangup skip — already ended $roomID');
-      return;
-    }
+    final alreadyLocal = _isRoomEnded(roomID);
     // UI timer can reset after CallKit/unlock — take the longer of UI vs wall-clock.
     final wall = _connectedDurationSec();
     final sec = duration > wall ? duration : wall;
-    // Mark ended + bump session gen FIRST so late invite/accept cannot reopen UI.
-    _markRoomEnded(roomID);
-    _callConnectedAtMs = null;
-    _talkingPromoteGen++;
-    _callSessionGen++;
-    _activeCallSignaling = null;
-    _beCalledEvent = null;
-    _autoPickup = false;
-    _acceptJoinInFlight = null;
-    _acceptJoinRoomID = null;
-    _clearPickupCache();
-    _cancelRingTimeout();
-    _ringTimeoutExtendCount = 0;
-    _suppressCallKitEnded(roomID, duration: const Duration(seconds: 2));
-    CallAudioDebugLog.add(
-      'hangup',
-      'local roomID=$roomID positive=$isPositive duration=$sec (ui=$duration)',
-    );
-    // Drop LiveKit + mic + AVAudioSession BEFORE IM/VoIP. Waiting on send
-    // left the peer in-call for ~1s and kept the system mic bar until kill.
-    _stopSound();
-    PackageBridge.clearCallNotification?.call();
-    FlutterOpenimLiveAlert.closeLiveAlert();
-    unawaited(CallAudioKeepAlive.instance.stop());
-    if (Platform.isIOS) {
-      unawaited(IosWebRtcAudio.disable());
-    }
-    unawaited(_endSystemCallUi(roomID));
-    if (roomID != null && roomID.isNotEmpty) {
-      OpenIMLiveClient().closeByRoomID(roomID);
-    } else {
-      OpenIMLiveClient().close();
-    }
+    if (!alreadyLocal) {
+      // Mark ended + bump session gen FIRST so late invite/accept cannot reopen UI.
+      _markRoomEnded(roomID);
+      _callConnectedAtMs = null;
+      _talkingPromoteGen++;
+      _callSessionGen++;
+      _activeCallSignaling = null;
+      _beCalledEvent = null;
+      _autoPickup = false;
+      _acceptJoinInFlight = null;
+      _acceptJoinRoomID = null;
+      _clearPickupCache();
+      _cancelRingTimeout();
+      _ringTimeoutExtendCount = 0;
+      _suppressCallKitEnded(roomID, duration: const Duration(seconds: 2));
+      CallAudioDebugLog.add(
+        'hangup',
+        'local roomID=$roomID positive=$isPositive duration=$sec (ui=$duration)',
+      );
+      _stopSound();
+      PackageBridge.clearCallNotification?.call();
+      FlutterOpenimLiveAlert.closeLiveAlert();
+      unawaited(CallAudioKeepAlive.instance.stop());
+      if (Platform.isIOS) {
+        unawaited(IosWebRtcAudio.disable());
+      }
+      unawaited(_endSystemCallUi(roomID));
+      if (roomID != null && roomID.isNotEmpty) {
+        OpenIMLiveClient().closeByRoomID(roomID);
+      } else {
+        OpenIMLiveClient().close();
+      }
 
-    insertSignalingMessageSubject.add(CallEvent(
-      CallState.hangup,
-      signaling,
-      fields: sec,
-    ));
+      insertSignalingMessageSubject.add(CallEvent(
+        CallState.hangup,
+        signaling,
+        fields: sec,
+      ));
+    } else {
+      CallAudioDebugLog.add(
+        'hangup',
+        'local already ended — still signal peer roomID=$roomID positive=$isPositive',
+      );
+    }
 
     if (!isPositive) return;
+    final signaledId = roomID?.trim() ?? '';
+    if (signaledId.isNotEmpty && !_hangupSignaledRooms.add(signaledId)) {
+      Logger.print('onTapHangup skip duplicate peer signal $signaledId');
+      return;
+    }
     final recvUserIDList = _recvUserIDList(signaling);
     try {
       await _triggerVoipPush(

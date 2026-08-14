@@ -122,9 +122,9 @@ import flutter_callkit_incoming
             case "endAllCallKit":
                 let args = call.arguments as? [String: Any]
                 let roomID = (args?["roomID"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                if !roomID.isEmpty {
-                    self.markVoipRoomEnded(roomID)
-                }
+                // Dismissing CallKit is not hanging up — do not mark the room
+                // ended here (in-app pickup / leftover banner would then skip
+                // hungup to the peer and leave them timing).
                 self.killCallKit(for: roomID)
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
                     guard let self = self else { return }
