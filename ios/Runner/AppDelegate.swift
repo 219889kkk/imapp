@@ -20,6 +20,7 @@ import flutter_callkit_incoming
     private var voipPushDelegate: HangXunVoipPushDelegate?
     /// Fulfill non-invite VoIP without going through the plugin (no fake incoming UI).
     private var voipFulfillProvider: CXProvider?
+    private let callKitEndController = CXCallController()
     private var lastCallKitAcceptAt: TimeInterval = 0
     /// roomID → endedAt (ignore late PushKit invites that re-show CallKit).
     private var endedVoipRooms: [String: Date] = [:]
@@ -91,6 +92,9 @@ import flutter_callkit_incoming
                     self.markVoipRoomEnded(roomID)
                     NSLog("HangXun VoIP: markRoomEnded %@", roomID)
                 }
+                result(true)
+            case "endAllCallKit":
+                self.endAllActiveCallKitCalls()
                 result(true)
             case "clearIconBadge":
                 self.clearIconBadge()
@@ -557,7 +561,9 @@ import flutter_callkit_incoming
         pruneEndedVoipRooms()
         let id = roomID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !id.isEmpty else { return false }
-        return endedVoipRooms[id] != nil
+        if endedVoipRooms[id] != nil { return true }
+        let compact = compactCallUUID(id)
+        return endedVoipRooms.contains { compactCallUUID($0.key) == compact }
     }
 
     private func pruneEndedVoipRooms() {
@@ -594,19 +600,70 @@ import flutter_callkit_incoming
         UserDefaults.standard.set(map, forKey: endedVoipRoomsDefaultsKey)
     }
 
-    private func endCallKitCalls(roomID: String) {
+    private func compactCallUUID(_ value: String) -> String {
+        value.lowercased().replacingOccurrences(of: "-", with: "")
+    }
+
+    private func uuidMatchesRoom(_ uuid: UUID, roomID: String) -> Bool {
+        compactCallUUID(uuid.uuidString) == compactCallUUID(roomID)
+    }
+
+    private func requestEndCall(_ uuid: UUID) {
+        let tx = CXTransaction(action: CXEndCallAction(call: uuid))
+        callKitEndController.request(tx) { error in
+            if let error = error {
+                NSLog("HangXun CallKit: CXEndCall %@ %@", uuid.uuidString, error.localizedDescription)
+            }
+        }
+    }
+
+    private func pluginEndCall(id: String) {
         let endData = flutter_callkit_incoming.Data(args: [
-            "id": roomID,
+            "id": id,
             "nameCaller": "",
             "handle": "",
             "type": 0,
         ])
-        let plugin = SwiftFlutterCallkitIncomingPlugin.sharedInstance
-        plugin?.endCall(endData)
-        // Retry same id only — endAllCalls would kill a brand-new invite
-        // that arrives within a few hundred ms of cancel.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-            plugin?.endCall(endData)
+        SwiftFlutterCallkitIncomingPlugin.sharedInstance?.endCall(endData)
+    }
+
+    private func endAllActiveCallKitCalls() {
+        for call in CXCallObserver().calls where !call.hasEnded {
+            requestEndCall(call.uuid)
+            pluginEndCall(id: call.uuid.uuidString)
+        }
+    }
+
+    private func shouldForceEndAllCallKit(for roomID: String) -> Bool {
+        let pending = pendingIncomingRoomID()
+        if pending == roomID { return true }
+        let calls = CXCallObserver().calls.filter { !$0.hasEnded }
+        if calls.isEmpty { return false }
+        for call in calls {
+            if uuidMatchesRoom(call.uuid, roomID: roomID) { continue }
+            if isVoipRoomEnded(call.uuid.uuidString) { continue }
+            if !pending.isEmpty && pending != roomID { return false }
+        }
+        return true
+    }
+
+    private func endCallKitCalls(roomID: String, forceEndAll: Bool) {
+        pluginEndCall(id: roomID)
+
+        let calls = CXCallObserver().calls.filter { !$0.hasEnded }
+        for call in calls {
+            if uuidMatchesRoom(call.uuid, roomID: roomID) || forceEndAll {
+                requestEndCall(call.uuid)
+                pluginEndCall(id: call.uuid.uuidString)
+            }
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+            guard let self = self else { return }
+            self.pluginEndCall(id: roomID)
+            if forceEndAll {
+                self.endAllActiveCallKitCalls()
+            }
         }
     }
 
@@ -793,8 +850,12 @@ import flutter_callkit_incoming
         mustReport: Bool,
         completion: @escaping () -> Void
     ) {
-        if callKitHasUUID(roomID) {
-            endCallKitCalls(roomID: roomID)
+        let forceEndAll = shouldForceEndAllCallKit(for: roomID)
+        if pendingIncomingRoomID() == roomID {
+            clearPendingIncomingRoom()
+        }
+        endCallKitCalls(roomID: roomID, forceEndAll: forceEndAll)
+        if forceEndAll || callKitHasUUID(roomID) {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: completion)
             return
         }

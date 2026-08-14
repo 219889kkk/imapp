@@ -201,20 +201,16 @@ mixin OpenIMLive {
     }
   }
 
-  /// End CallKit / system incoming UI. Never [endAllCalls] during active LiveKit.
+  /// End CallKit / system incoming UI. Always wipe leftovers on terminate —
+  /// ringing prejoin and UUID mismatch left a lock-screen call in the switcher.
   Future<void> _endSystemCallUi(String? roomID) async {
     final voip = VoipCallkitController.toOrNull;
     if (voip == null) return;
     final id = roomID?.trim() ?? '';
-    final client = OpenIMLiveClient();
-    final inLiveCall = id.isNotEmpty && client.isConnectedMedia(id);
     if (id.isNotEmpty) {
       await voip.endCall(id);
     }
-    // Ringing-only fallback — endAllCalls during live call drops audio + fires ended.
-    if (Platform.isIOS && voip.callKitActive.value && !inLiveCall) {
-      await voip.endAllCalls();
-    }
+    await voip.endAllCalls();
   }
 
   final backgroundSubject = PublishSubject<bool>();
@@ -350,7 +346,11 @@ mixin OpenIMLive {
     if (id.isEmpty) return;
     // 3s is enough for plugin Ended echo; do NOT use 45s (that swallowed real hangups).
     _armCallKitUiDismiss(id, duration: const Duration(seconds: 3));
-    await VoipCallkitController.toOrNull?.endCall(id);
+    final voip = VoipCallkitController.toOrNull;
+    await voip?.endCall(id);
+    // endCall(roomID) misses a different CXCall UUID — leftover top banner /
+    // app-switcher call UI. Unanswered only (answered path never calls this).
+    await voip?.endAllCalls();
   }
 
   bool _iosShouldUseCallKitForRing(String? roomID) {
@@ -727,7 +727,9 @@ mixin OpenIMLive {
     }
 
     _autoPickup = true;
-    _stopSound();
+    unawaited(_stopSound());
+    unawaited(VoipCallkitController.toOrNull?.setConnected(roomID) ??
+        Future.value());
     // Gate must exist before async accept — native audio may activate immediately after fulfill.
     _ensureIosCallKitAudioGate();
     CallAudioDebugLog.add(
@@ -1019,6 +1021,8 @@ mixin OpenIMLive {
       Logger.print('iOS bg: overlay→CallKit roomID=$roomID');
       client.closeOverlayOnly();
     }
+    // Overlay ring must not keep looping under CallKit (late answer / cancel).
+    unawaited(_stopRingSound());
 
     _beCalledEvent ??= CallEvent(CallState.beCalled, signaling);
     _activeCallSignaling = signaling;
@@ -1765,6 +1769,9 @@ mixin OpenIMLive {
     } else {
       initState = CallState.beCalled;
     }
+    if (answered || initState == CallState.calling) {
+      unawaited(_stopRingSound());
+    }
     if (overlayContext == null) {
       _beCalledEvent = CallEvent(initState, signaling);
       return;
@@ -2139,7 +2146,6 @@ mixin OpenIMLive {
 
   /// Lock-screen / system UI End — classify before reject/hangup.
   void _onCallKitEnded(SignalingInfo? signaling) {
-    _stopSound();
     PackageBridge.clearCallNotification?.call();
 
     final info = _resolveIncomingSignaling(signaling) ??
@@ -2151,11 +2157,15 @@ mixin OpenIMLive {
 
     // 1) We closed CallKit for UI switch (unlock → in-app) — never reject/hangup.
     if (_isCallKitUiDismissArmed(roomID) || _isRoomEnded(roomID)) {
+      if (_isRoomEnded(roomID) || _userHasAnsweredCall(roomID)) {
+        unawaited(_stopRingSound());
+      }
       Logger.print('CallKit ended ignored — uiDismiss/ended roomID=$roomKey');
       CallAudioDebugLog.add(
           'callkit', 'ended ignored uiDismiss roomID=$roomKey');
       return;
     }
+    _stopSound();
     if (roomKey.isNotEmpty && !_isKnownActiveCallRoom(roomKey)) {
       CallAudioDebugLog.add(
           'callkit', 'ended ignored unknown roomID=$roomKey');
@@ -2243,6 +2253,11 @@ mixin OpenIMLive {
     final peers = _peerUserIDs(info!);
     if (peers.isEmpty) return;
     try {
+      await _triggerVoipPush(info, action: 'cancel', toUserIDs: peers);
+    } catch (e) {
+      Logger.print('notify caller cancel voip failed: $e');
+    }
+    try {
       final data = {
         'customType': CustomMessageType.callingCancel,
         'data': info.invitation!.toJson(),
@@ -2263,11 +2278,6 @@ mixin OpenIMLive {
       }
     } catch (e) {
       Logger.print('notify caller cancel IM skipped: $e');
-    }
-    try {
-      await _triggerVoipPush(info, action: 'cancel', toUserIDs: peers);
-    } catch (e) {
-      Logger.print('notify caller cancel voip failed: $e');
     }
   }
 
@@ -2373,6 +2383,7 @@ mixin OpenIMLive {
             PackageBridge.clearCallNotification?.call();
             // Stop ring on terminal / in-call transitions (not via `_stopSound` — keeps timeout).
             if (event.state == CallState.calling ||
+                event.state == CallState.connecting ||
                 event.state == CallState.beRejected ||
                 event.state == CallState.beCanceled ||
                 event.state == CallState.beHangup) {
@@ -2439,7 +2450,7 @@ mixin OpenIMLive {
               }
               return;
             }
-            if (!_autoPickup) {
+            if (!_autoPickup && !_userHasAnsweredCall(roomID)) {
               _playSound();
             } else {
               _stopSound();
@@ -3083,8 +3094,7 @@ mixin OpenIMLive {
       } catch (e, s) {
         Logger.print('reject VoIP push failed: $e $s');
       }
-      unawaited(
-          VoipCallkitController.toOrNull?.endCall(roomID) ?? Future.value());
+      unawaited(_endSystemCallUi(roomID));
       return result;
     } catch (e, s) {
       Logger.print('onTapReject send failed: $e $s');
@@ -3098,8 +3108,7 @@ mixin OpenIMLive {
       } catch (e2, s2) {
         Logger.print('reject VoIP fallback failed: $e2 $s2');
       }
-      unawaited(
-          VoipCallkitController.toOrNull?.endCall(roomID) ?? Future.value());
+      unawaited(_endSystemCallUi(roomID));
       return null;
     }
   }
@@ -3116,8 +3125,7 @@ mixin OpenIMLive {
     PackageBridge.clearCallNotification?.call();
     FlutterOpenimLiveAlert.closeLiveAlert();
     unawaited(CallAudioKeepAlive.instance.stop());
-    unawaited(
-        VoipCallkitController.toOrNull?.endCall(roomID) ?? Future.value());
+    unawaited(_endSystemCallUi(roomID));
     if (roomID != null && roomID.isNotEmpty) {
       OpenIMLiveClient().closeByRoomID(roomID);
     } else {
@@ -3126,15 +3134,23 @@ mixin OpenIMLive {
 
     insertSignalingMessageSubject.add(CallEvent(CallState.cancel, signaling));
 
+    final recvUserIDList = _recvUserIDList(signaling);
+    // VoIP cancel first so lock-screen CallKit stops without waiting on IM.
+    try {
+      await _triggerVoipPush(
+        signaling,
+        action: 'cancel',
+        toUserIDs: recvUserIDList,
+      );
+    } catch (e, s) {
+      Logger.print('voip cancel push failed: $e $s');
+    }
     final data = {
       'customType': CustomMessageType.callingCancel,
       'data': signaling.invitation!.toJson()
     };
     final message = await OpenIM.iMManager.messageManager.createCustomMessage(
         data: jsonEncode(data), extension: '', description: '');
-    final recvUserIDList = _recvUserIDList(signaling);
-    // Await IM + VoIP cancel — fire-and-forget is dropped when caller
-    // backgrounds immediately after hanging up from the dial UI.
     for (final userID in recvUserIDList) {
       try {
         await OpenIM.iMManager.messageManager.sendMessage(
@@ -3146,34 +3162,12 @@ mixin OpenIMLive {
         Logger.print('cancel IM send failed user=$userID: $e $s');
       }
     }
-    try {
-      await _triggerVoipPush(
-        signaling,
-        action: 'cancel',
-        toUserIDs: recvUserIDList,
-      );
-    } catch (e, s) {
-      Logger.print('voip cancel push failed: $e $s');
-    }
     return true;
   }
 
   onTimeoutCancelled(SignalingInfo signaling) async {
     _markRoomEnded(signaling.invitation?.roomID);
-    final data = {
-      'customType': CustomMessageType.callingCancel,
-      'data': signaling.invitation!.toJson()
-    };
-    final message = await OpenIM.iMManager.messageManager.createCustomMessage(
-        data: jsonEncode(data), extension: '', description: '');
     final recvUserIDList = _recvUserIDList(signaling);
-    for (final userID in recvUserIDList) {
-      await OpenIM.iMManager.messageManager.sendMessage(
-          message: message,
-          offlinePushInfo: OfflinePushInfo(),
-          userID: userID,
-          isOnlineOnly: false);
-    }
     try {
       await _triggerVoipPush(
         signaling,
@@ -3182,6 +3176,19 @@ mixin OpenIMLive {
       );
     } catch (e, s) {
       Logger.print('voip timeout cancel push failed: $e $s');
+    }
+    final data = {
+      'customType': CustomMessageType.callingCancel,
+      'data': signaling.invitation!.toJson()
+    };
+    final message = await OpenIM.iMManager.messageManager.createCustomMessage(
+        data: jsonEncode(data), extension: '', description: '');
+    for (final userID in recvUserIDList) {
+      await OpenIM.iMManager.messageManager.sendMessage(
+          message: message,
+          offlinePushInfo: OfflinePushInfo(),
+          userID: userID,
+          isOnlineOnly: false);
     }
     return true;
   }
@@ -3221,8 +3228,7 @@ mixin OpenIMLive {
     if (Platform.isIOS) {
       unawaited(IosWebRtcAudio.disable());
     }
-    unawaited(
-        VoipCallkitController.toOrNull?.endCall(roomID) ?? Future.value());
+    unawaited(_endSystemCallUi(roomID));
     if (roomID != null && roomID.isNotEmpty) {
       OpenIMLiveClient().closeByRoomID(roomID);
     } else {
@@ -3236,6 +3242,16 @@ mixin OpenIMLive {
     ));
 
     if (!isPositive) return;
+    final recvUserIDList = _recvUserIDList(signaling);
+    try {
+      await _triggerVoipPush(
+        signaling,
+        action: 'hungup',
+        toUserIDs: recvUserIDList,
+      );
+    } catch (e, s) {
+      Logger.print('voip hungup push failed: $e $s');
+    }
     final data = {
       'customType': CustomMessageType.callingHungup,
       'data': {
@@ -3245,7 +3261,6 @@ mixin OpenIMLive {
     };
     final message = await OpenIM.iMManager.messageManager.createCustomMessage(
         data: jsonEncode(data), extension: '', description: '');
-    final recvUserIDList = _recvUserIDList(signaling);
     for (final userID in recvUserIDList) {
       try {
         await OpenIM.iMManager.messageManager.sendMessage(
@@ -3256,15 +3271,6 @@ mixin OpenIMLive {
       } catch (e, s) {
         Logger.print('hungup IM send failed user=$userID: $e $s');
       }
-    }
-    try {
-      await _triggerVoipPush(
-        signaling,
-        action: 'hungup',
-        toUserIDs: recvUserIDList,
-      );
-    } catch (e, s) {
-      Logger.print('voip hungup push failed: $e $s');
     }
   }
   onBusyLine() {
@@ -3298,18 +3304,30 @@ mixin OpenIMLive {
     return list;
   }
 
+  bool _shouldSkipRingPlayback() {
+    final roomID = _activeCallSignaling?.invitation?.roomID ??
+        _beCalledEvent?.data.invitation?.roomID;
+    if (_isRoomEnded(roomID) || _userHasAnsweredCall(roomID)) return true;
+    final id = roomID?.trim() ?? '';
+    return id.isNotEmpty && _peerAcceptedRooms.contains(id);
+  }
+
   void _playSound() async {
+    if (_shouldSkipRingPlayback()) {
+      unawaited(_stopRingSound());
+      return;
+    }
     final gen = ++_ringPlayGen;
     try {
       if (_audioPlayer.playerState.playing) {
         await _audioPlayer.stop();
       }
-      if (gen != _ringPlayGen) return;
+      if (gen != _ringPlayGen || _shouldSkipRingPlayback()) return;
       await _audioPlayer.setAsset(_ring, package: 'openim_common');
-      if (gen != _ringPlayGen) return;
+      if (gen != _ringPlayGen || _shouldSkipRingPlayback()) return;
       await _audioPlayer.setLoopMode(LoopMode.one);
       await _audioPlayer.setVolume(1.0);
-      if (gen != _ringPlayGen) return;
+      if (gen != _ringPlayGen || _shouldSkipRingPlayback()) return;
       await _audioPlayer.play();
     } catch (e, s) {
       Logger.print('play ring failed: $e $s');
@@ -3319,7 +3337,13 @@ mixin OpenIMLive {
   Future<void> _stopRingSound() async {
     _ringPlayGen++;
     try {
+      await _audioPlayer.setVolume(0);
+    } catch (_) {}
+    try {
       await _audioPlayer.stop();
+    } catch (_) {}
+    try {
+      await _audioPlayer.pause();
     } catch (_) {}
   }
 

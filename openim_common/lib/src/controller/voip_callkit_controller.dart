@@ -900,7 +900,17 @@ class VoipCallkitController extends GetxService {
     } catch (e, s) {
       Logger.print('endAllCalls failed: $e $s');
     }
+    if (Platform.isIOS) {
+      try {
+        await _nativeChannel.invokeMethod('endAllCallKit');
+      } catch (e, s) {
+        Logger.print('native endAllCallKit failed: $e $s');
+      }
+    }
     callKitActive.value = false;
+    _incomingRoomID = null;
+    _incomingPresentedAtMs.clear();
+    _spuriousRecoveredRooms.clear();
   }
 
   /// Active CallKit room IDs (lock-screen ring / ongoing timer).
