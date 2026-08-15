@@ -261,33 +261,21 @@ class _ControlsViewState extends State<ControlsView> with WidgetsBindingObserver
   Future<void> _applySpeakerRoute(bool on) async {
     final gen = ++_speakerApplyGen;
     final local = _participant;
-    final wasMic = local?.isMicrophoneEnabled() == true;
+    final wasMic = !Platform.isIOS && local?.isMicrophoneEnabled() == true;
     try {
-      // Mute mic longer while AEC re-converges on speaker — prevents howl burst.
+      // Android: mute briefly while the output device switches.
+      // iOS: port-only override — muting + LiveKit Hardware.setSpeakerphoneOn
+      // restarts Voice-Processing I/O and the caller hears every sentence twice.
       if (wasMic) {
         try {
           await local?.setMicrophoneEnabled(false);
         } catch (_) {}
       }
-      if (Platform.isIOS) {
-        await IosWebRtcAudio.setSpeakerRoute(on);
-      }
-      if (gen != _speakerApplyGen) return;
-      await Hardware.instance.setSpeakerphoneOn(on);
-      if (gen != _speakerApplyGen) return;
-      await _room?.setSpeakerOn(on);
-      if (gen != _speakerApplyGen) return;
-      // Give voiceChat AEC time to adapt before opening the mic again.
-      await Future<void>.delayed(Duration(milliseconds: on ? 350 : 180));
+      await OpenIMLiveClient().applySpeakerOutput(on, room: _room);
       if (gen != _speakerApplyGen || !mounted) return;
       if (_enabledSpeaker != on) return;
-      if (Platform.isIOS) {
-        await IosWebRtcAudio.setSpeakerRoute(on);
-      }
-      await Hardware.instance.setSpeakerphoneOn(on);
-      await _room?.setSpeakerOn(on);
       if (wasMic && OpenIMLiveClient().userMicPreference != false) {
-        await Future<void>.delayed(const Duration(milliseconds: 80));
+        await Future<void>.delayed(Duration(milliseconds: on ? 200 : 80));
         if (gen != _speakerApplyGen || !mounted) return;
         await local?.setMicrophoneEnabled(true);
       }

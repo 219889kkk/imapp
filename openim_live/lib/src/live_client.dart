@@ -130,6 +130,19 @@ class OpenIMLiveClient implements RTCBridge {
     _userSpeakerPreference = on;
   }
 
+  /// iOS: native port override only. LiveKit Hardware.setSpeakerphoneOn
+  /// rebuilds AVAudioSession and kills hardware AEC (caller hears doubles).
+  Future<void> applySpeakerOutput(bool speakerOn, {Room? room}) async {
+    _userSpeakerPreference = speakerOn;
+    _pendingSpeakerOn = speakerOn;
+    if (Platform.isIOS) {
+      await IosWebRtcAudio.setSpeakerRoute(speakerOn);
+      return;
+    }
+    await Hardware.instance.setSpeakerphoneOn(speakerOn);
+    await (room ?? _mediaRoom)?.setSpeakerOn(speakerOn);
+  }
+
   /// Explicit user tap only — never infer speaker from video (AEC howls when cold).
   bool get userSpeakerPreference => _userSpeakerPreference == true;
 
@@ -659,8 +672,7 @@ class OpenIMLiveClient implements RTCBridge {
         if (!skipSessionActivation) {
           await CallAudioKeepAlive.instance.prepareForRtc(speakerOn: speakerOn);
         }
-        await Hardware.instance.setSpeakerphoneOn(speakerOn);
-        await room.setSpeakerOn(speakerOn);
+        await applySpeakerOutput(speakerOn, room: room);
         // CallKit lock-screen: subscribe remote audio even when mic deferred.
         if (skipSessionActivation) {
           await _subscribeRemoteTracks();
@@ -749,9 +761,10 @@ class OpenIMLiveClient implements RTCBridge {
       await CallAudioKeepAlive.instance.prepareForRtc(speakerOn: on);
       if (Platform.isIOS) {
         await _applyIosCallAudioRoute(on);
+      } else {
+        await Hardware.instance.setSpeakerphoneOn(on);
+        await room.setSpeakerOn(on);
       }
-      await Hardware.instance.setSpeakerphoneOn(on);
-      await room.setSpeakerOn(on);
       if (unmuteMic && _userMicPreference != false) {
         final local = room.localParticipant;
         if (local != null && local.isMicrophoneEnabled() != true) {
@@ -772,6 +785,7 @@ class OpenIMLiveClient implements RTCBridge {
   Future<void> _applyIosCallAudioRoute(bool speakerOn) async {
     if (CallAudioKeepAlive.instance.callKitOwnsSession) {
       await IosWebRtcAudio.bridgeCallKitSession();
+      await IosWebRtcAudio.setSpeakerRoute(speakerOn);
       return;
     }
     final already = await IosWebRtcAudio.isEnabled();
@@ -801,9 +815,10 @@ class OpenIMLiveClient implements RTCBridge {
       await CallAudioKeepAlive.instance.prepareForRtc(speakerOn: on);
       if (Platform.isIOS) {
         await _applyIosCallAudioRoute(on);
+      } else {
+        await Hardware.instance.setSpeakerphoneOn(on);
+        await room.setSpeakerOn(on);
       }
-      await Hardware.instance.setSpeakerphoneOn(on);
-      await room.setSpeakerOn(on);
       final local = room.localParticipant;
       if (local != null &&
           local.isMicrophoneEnabled() != true &&
@@ -1064,11 +1079,7 @@ class OpenIMLiveClient implements RTCBridge {
     final room = _mediaRoom;
     if (room == null) return;
     try {
-      if (Platform.isIOS) {
-        await IosWebRtcAudio.setSpeakerRoute(speakerOn);
-      }
-      await Hardware.instance.setSpeakerphoneOn(speakerOn);
-      await room.setSpeakerOn(speakerOn);
+      await applySpeakerOutput(speakerOn, room: room);
     } catch (e, s) {
       Logger.print('connectMedia speaker failed: $e $s');
     }

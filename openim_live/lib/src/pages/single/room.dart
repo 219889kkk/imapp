@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io';
 
 import 'package:collection/collection.dart';
 import 'package:livekit_client/livekit_client.dart';
@@ -157,8 +156,10 @@ class _SingleRoomViewState extends SignalState<SingleRoomView> {
     } else {
       // Waiting: route only — do not unmute over deferred mic.
       try {
-        await Hardware.instance.setSpeakerphoneOn(enabledSpeaker);
-        await room.setSpeakerOn(enabledSpeaker);
+        await OpenIMLiveClient().applySpeakerOutput(
+          enabledSpeaker,
+          room: room,
+        );
       } catch (_) {}
     }
     if (room.remoteParticipants.isNotEmpty) {
@@ -232,44 +233,23 @@ class _SingleRoomViewState extends SignalState<SingleRoomView> {
       callState != CallState.connecting;
 
   Future<void> _applySpeakerRoute() async {
-    final speakerOn = enabledSpeaker;
-    final local = _room?.localParticipant;
-    final wasMic = local?.isMicrophoneEnabled() == true;
     try {
-      if (wasMic) {
-        try {
-          await local?.setMicrophoneEnabled(false);
-        } catch (_) {}
-      }
-      if (Platform.isIOS) {
-        await IosWebRtcAudio.setSpeakerRoute(speakerOn);
-      }
-      await Hardware.instance.setSpeakerphoneOn(speakerOn);
-      await _room?.setSpeakerOn(speakerOn);
-      if (wasMic && OpenIMLiveClient().userMicPreference != false) {
-        await Future<void>.delayed(
-          Duration(milliseconds: speakerOn ? 350 : 180),
-        );
-        await local?.setMicrophoneEnabled(true);
-      }
+      await OpenIMLiveClient().applySpeakerOutput(
+        enabledSpeaker,
+        room: _room,
+      );
     } catch (error, stackTrace) {
       Logger.print('could not set speaker: $error $stackTrace');
-      if (wasMic && OpenIMLiveClient().userMicPreference != false) {
-        try {
-          await local?.setMicrophoneEnabled(true);
-        } catch (_) {}
-      }
     }
   }
 
   Future<void> _publish() async {
     // Do not mute→wait→unmute on first publish — that delays first audio.
     try {
-      if (Platform.isIOS) {
-        await IosWebRtcAudio.setSpeakerRoute(enabledSpeaker);
-      }
-      await Hardware.instance.setSpeakerphoneOn(enabledSpeaker);
-      await _room?.setSpeakerOn(enabledSpeaker);
+      await OpenIMLiveClient().applySpeakerOutput(
+        enabledSpeaker,
+        room: _room,
+      );
     } catch (error, stackTrace) {
       Logger.print('could not set speaker: $error $stackTrace');
     }

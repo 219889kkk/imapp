@@ -358,22 +358,46 @@ import flutter_callkit_incoming
         try session.overrideOutputAudioPort(preferSpeaker ? .speaker : .none)
     }
 
+    /// Last in-call speaker choice. didActivate must not force earpiece over it.
+    private var lastPreferSpeaker = false
+
+    private func isVoipVoiceSession(_ session: AVAudioSession) -> Bool {
+        session.category == .playAndRecord &&
+            (session.mode == .voiceChat || session.mode == .videoChat)
+    }
+
     /// Switch earpiece ↔ speaker while keeping voiceChat AEC. Sync RTCAudioSession.
     /// After CallKit didDeactivate the session is dead — must setActive again or
     /// isAudioEnabled=true with an inactive session leaves every call silent.
+    ///
+    /// Mid-call: only override the output port. setCategory / didActivate here
+    /// restarts the Voice-Processing I/O unit, AEC never reconverges, and the
+    /// caller hears every sentence twice (speaker → mic leak).
     private func setSpeakerRoute(preferSpeaker: Bool, result: @escaping FlutterResult) {
+        lastPreferSpeaker = preferSpeaker
         let session = AVAudioSession.sharedInstance()
         let rtc = RTCAudioSession.sharedInstance()
         rtc.lockForConfiguration()
         defer { rtc.unlockForConfiguration() }
         do {
-            // When WebRTC session is inactive (post-CallKit handoff), setActive.
-            // While CallKit still owns activation, rtc.isActive is already true.
+            if isVoipVoiceSession(session) {
+                try session.overrideOutputAudioPort(preferSpeaker ? .speaker : .none)
+                if !rtc.isActive {
+                    try session.setActive(true, options: [])
+                    rtc.audioSessionDidActivate(session)
+                }
+                rtc.isAudioEnabled = true
+                emitAudioDebug("setSpeakerRoute port-only speaker=\(preferSpeaker) active=\(rtc.isActive) aec=keep")
+                result(true)
+                return
+            }
             let activate = !rtc.isActive
             try applyVoipAudioSession(session, preferSpeaker: preferSpeaker, activate: activate)
-            rtc.audioSessionDidActivate(session)
+            if activate {
+                rtc.audioSessionDidActivate(session)
+            }
             rtc.isAudioEnabled = true
-            emitAudioDebug("setSpeakerRoute speaker=\(preferSpeaker) activate=\(activate) mode=voiceChat aec=on")
+            emitAudioDebug("setSpeakerRoute full speaker=\(preferSpeaker) activate=\(activate) mode=voiceChat aec=on")
             result(true)
         } catch {
             emitAudioDebug("setSpeakerRoute failed \(error.localizedDescription)")
@@ -431,8 +455,18 @@ import flutter_callkit_incoming
 
     func didActivateAudioSession(_ audioSession: AVAudioSession) {
         // Keep voiceChat (hardware AEC). Do not add A2DP — it breaks echo cancellation.
+        // If already VoIP, only restore the user's speaker port — setCategory here
+        // resets AEC the same way a mid-call 免提 tap used to.
         do {
-            try applyVoipAudioSession(audioSession, preferSpeaker: false, activate: false)
+            if isVoipVoiceSession(audioSession) {
+                try audioSession.overrideOutputAudioPort(lastPreferSpeaker ? .speaker : .none)
+            } else {
+                try applyVoipAudioSession(
+                    audioSession,
+                    preferSpeaker: lastPreferSpeaker,
+                    activate: false
+                )
+            }
         } catch {
             emitAudioDebug("CallKit didActivate category failed \(error.localizedDescription)")
         }
