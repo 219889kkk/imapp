@@ -474,6 +474,30 @@ mixin OpenIMLive {
     return !_iosCalleeIsInHangXun();
   }
 
+  /// Android lock / screen-off / not in HangXun → full-screen incoming.
+  /// In HangXun (state 3) stays the in-app invite page. Does not change iOS.
+  bool _androidShouldUseFullScreenIncoming(String? roomID) {
+    if (!Platform.isAndroid) return false;
+    if (roomID != null && _isRoomEnded(roomID)) return false;
+    if (_autoPickup || _isAcceptInProgressForRoom(roomID)) return false;
+    final voip = VoipCallkitController.toOrNull;
+    final incoming = voip?.incomingRoomID?.trim() ?? '';
+    final id = roomID?.trim() ?? '';
+    if (voip?.ownsIncomingUi == true) return true;
+    if (id.isNotEmpty && incoming == id) return true;
+    if (voip?.deviceLocked == true) return true;
+    if (_isRunningBackground) return true;
+    final life = WidgetsBinding.instance.lifecycleState;
+    return life == AppLifecycleState.paused ||
+        life == AppLifecycleState.hidden;
+  }
+
+  bool _shouldUseSystemIncomingUi(String? roomID) {
+    if (Platform.isIOS) return _iosShouldUseCallKitForRing(roomID);
+    if (Platform.isAndroid) return _androidShouldUseFullScreenIncoming(roomID);
+    return false;
+  }
+
   /// Prefetch/prejoin occupies LiveKit while still ringing. That is not an answer.
   bool _isRingingPrejoinOnly(String? roomID) {
     final client = OpenIMLiveClient();
@@ -1101,8 +1125,12 @@ mixin OpenIMLive {
     }
   }
 
-  /// Background / lock: ringing uses CallKit, not Flutter overlay.
+  /// Background / lock: ringing uses system incoming UI, not Flutter overlay.
   Future<void> _onIosBackgroundForRinging() async {
+    if (Platform.isAndroid) {
+      await _onAndroidBackgroundForRinging();
+      return;
+    }
     if (!Platform.isIOS) return;
     final signaling = _activeCallSignaling ?? _beCalledEvent?.data;
     if (signaling == null) return;
@@ -1133,6 +1161,39 @@ mixin OpenIMLive {
     _beCalledEvent ??= CallEvent(CallState.beCalled, signaling);
     _activeCallSignaling = signaling;
 
+    if (!voip.ownsIncomingUi) {
+      await voip.showIncoming(signaling);
+    }
+  }
+
+  /// Android lock / home while still ringing: switch overlay → full-screen incoming.
+  Future<void> _onAndroidBackgroundForRinging() async {
+    await VoipCallkitController.toOrNull?.refreshDeviceLocked();
+    final signaling = _activeCallSignaling ?? _beCalledEvent?.data;
+    if (signaling == null) return;
+    final roomID = signaling.invitation?.roomID?.trim() ?? '';
+    if (roomID.isEmpty || _isRoomEnded(roomID)) return;
+    if (_answeredRoomUntilMs.containsKey(roomID) ||
+        _isAcceptInProgressForRoom(roomID) ||
+        _callKitAcceptHandledRoomID == roomID) {
+      return;
+    }
+    if (!_androidShouldUseFullScreenIncoming(roomID)) return;
+
+    final client = OpenIMLiveClient();
+    if ((client.hasMediaFor(roomID) || client.isBusy) &&
+        !_isRingingPrejoinOnly(roomID)) return;
+
+    final voip = VoipCallkitController.toOrNull;
+    if (voip == null) return;
+
+    if (client.hasOverlay) {
+      Logger.print('Android bg: overlay→full-screen incoming roomID=$roomID');
+      client.closeOverlayOnly();
+    }
+    unawaited(_stopRingSound());
+    _beCalledEvent ??= CallEvent(CallState.beCalled, signaling);
+    _activeCallSignaling = signaling;
     if (!voip.ownsIncomingUi) {
       await voip.showIncoming(signaling);
     }
@@ -2606,6 +2667,8 @@ mixin OpenIMLive {
             if (Platform.isIOS) {
               await VoipCallkitController.toOrNull
                   ?.refreshInHangXunForeground();
+            } else if (Platform.isAndroid) {
+              await VoipCallkitController.toOrNull?.refreshDeviceLocked();
             }
             unawaited(_prefetchPickupToken(event.data.invitation?.roomID));
             _activeCallSignaling = event.data;
@@ -2614,32 +2677,30 @@ mixin OpenIMLive {
             final callType =
                 mediaType == 'audio' ? CallType.audio : CallType.video;
 
-            // 状态 1/2：锁屏或解锁不在航讯 → 只响 CallKit。状态 3 走下面全屏邀请。
-            if (_iosShouldUseCallKitForRing(roomID)) {
+            // 状态 1/2：锁屏或解锁不在航讯 → 系统来电。状态 3 走下面全屏邀请。
+            if (_shouldUseSystemIncomingUi(roomID)) {
               // Never play in-app ring under CallKit — cancel may end CallKit
               // while Flutter ringtone keeps looping on home/lock.
               _stopSound();
               _beCalledEvent = event;
               _activeCallSignaling = event.data;
               if (Platform.isAndroid) {
-                // Prefer flutter_callkit_incoming full-screen / call notification.
                 final voip = VoipCallkitController.toOrNull;
                 if (voip != null) {
                   if (OpenIMLiveClient().hasOverlay) {
-                    Logger.print('skip background CallKit: in-app overlay visible');
-                  } else {
-                    String caller = event.data.invitation?.inviterUserID ?? '';
-                    try {
-                      final uid = event.data.invitation?.inviterUserID;
-                      if (uid != null && uid.isNotEmpty) {
-                        final list = await OpenIM.iMManager.userManager
-                            .getUsersInfo(userIDList: [uid]);
-                        caller = list.firstOrNull?.simpleUserInfo.nickname ??
-                            caller;
-                      }
-                    } catch (_) {}
-                    await voip.showIncoming(event.data, nameCaller: caller);
+                    OpenIMLiveClient().closeOverlayOnly();
                   }
+                  String caller = event.data.invitation?.inviterUserID ?? '';
+                  try {
+                    final uid = event.data.invitation?.inviterUserID;
+                    if (uid != null && uid.isNotEmpty) {
+                      final list = await OpenIM.iMManager.userManager
+                          .getUsersInfo(userIDList: [uid]);
+                      caller = list.firstOrNull?.simpleUserInfo.nickname ??
+                          caller;
+                    }
+                  } catch (_) {}
+                  await voip.showIncoming(event.data, nameCaller: caller);
                 } else {
                   final hasOverlay =
                       await Permissions.checkSystemAlertWindow();

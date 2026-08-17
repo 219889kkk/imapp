@@ -890,6 +890,9 @@ class VoipCallkitController extends GetxService {
 
   bool inHangXunForeground = false;
 
+  /// Android lock screen / screen-off (Keyguard). iOS unused.
+  bool deviceLocked = false;
+
   Future<bool> refreshInHangXunForeground() async {
     if (!Platform.isIOS) return false;
     try {
@@ -899,6 +902,17 @@ class VoipCallkitController extends GetxService {
       inHangXunForeground = false;
     }
     return inHangXunForeground;
+  }
+
+  Future<bool> refreshDeviceLocked() async {
+    if (!Platform.isAndroid) return false;
+    try {
+      final v = await _nativeChannel.invokeMethod('isDeviceLocked');
+      deviceLocked = v == true;
+    } catch (_) {
+      deviceLocked = false;
+    }
+    return deviceLocked;
   }
 
   Future<void> refreshEndedRoomsFromNative() async {
