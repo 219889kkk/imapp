@@ -8,10 +8,8 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
 import io.flutter.Log;
-import io.openim.flutter_openim_sdk.FlutterOpenimSdkPlugin;
-import open_im_sdk.Open_im_sdk;
 
-public class VisibilityListener implements Application.ActivityLifecycleCallbacks, open_im_sdk_callback.Base {
+public class VisibilityListener implements Application.ActivityLifecycleCallbacks {
     public void register(Activity activity) {
         if (null != activity) {
             activity.getApplication().registerActivityLifecycleCallbacks(this);
@@ -38,17 +36,16 @@ public class VisibilityListener implements Application.ActivityLifecycleCallback
     @Override
     public void onActivityResumed(@NonNull Activity activity) {
         Log.i("VisibilityListener", "onActivityResumed");
-        if (FlutterOpenimSdkPlugin.isInitialized) {
-            Open_im_sdk.setAppBackgroundStatus(this, String.valueOf(System.currentTimeMillis()), false);
-        }
+        HangxunImKeepAlivePoke.poke();
     }
 
     @Override
     public void onActivityPaused(@NonNull Activity activity) {
         Log.i("VisibilityListener", "onActivityPaused");
-        if (FlutterOpenimSdkPlugin.isInitialized) {
-            Open_im_sdk.setAppBackgroundStatus(this, String.valueOf(System.currentTimeMillis()), true);
-        }
+        // Do not report isBackground=true. HangXun has no Getui; lock
+        // screen delivery is the websocket. Marking background makes
+        // OpenIM queue messages until the user opens the app.
+        HangxunImKeepAlivePoke.poke();
     }
 
     @Override
@@ -64,15 +61,5 @@ public class VisibilityListener implements Application.ActivityLifecycleCallback
     @Override
     public void onActivityDestroyed(@NonNull Activity activity) {
         Log.i("VisibilityListener", "onActivityDestroyed");
-    }
-
-    @Override
-    public void onError(int i, String s) {
-
-    }
-
-    @Override
-    public void onSuccess(String s) {
-
     }
 }

@@ -10,9 +10,13 @@ import android.content.Intent;
 import android.content.pm.ServiceInfo;
 import android.net.wifi.WifiManager;
 import android.os.Build;
+import android.os.Handler;
+import android.os.HandlerThread;
 import android.os.IBinder;
 import android.os.PowerManager;
 import android.util.Log;
+
+import io.openim.flutter_openim_sdk.connectivity.HangxunImKeepAlivePoke;
 
 /**
  * Always-on while logged in. HangXun Android has no Getui, so the IM
@@ -25,9 +29,26 @@ public class ImKeepAliveService extends Service {
     private static final String TAG = "HangxunKeepAlive";
     private static final String CHANNEL_ID = "hangxun_im_keepalive";
     private static final int NOTIF_ID = 71002;
+    private static final long POKE_INTERVAL_MS = 20_000L;
 
     private PowerManager.WakeLock wakeLock;
     private WifiManager.WifiLock wifiLock;
+    private HandlerThread pokeThread;
+    private Handler pokeHandler;
+    private final Runnable pokeRunnable = new Runnable() {
+        @Override
+        public void run() {
+            try {
+                HangxunImKeepAlivePoke.poke();
+                acquireLocks();
+            } catch (Throwable t) {
+                Log.w(TAG, "im poke skipped", t);
+            }
+            if (pokeHandler != null) {
+                pokeHandler.postDelayed(this, POKE_INTERVAL_MS);
+            }
+        }
+    };
 
     public static void start(Context context) {
         if (context == null) return;
@@ -61,6 +82,7 @@ public class ImKeepAliveService extends Service {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent != null && ACTION_STOP.equals(intent.getAction())) {
+            stopPoke();
             releaseLocks();
             stopForeground(true);
             stopSelf();
@@ -78,6 +100,7 @@ public class ImKeepAliveService extends Service {
                 startForeground(NOTIF_ID, notification);
             }
             acquireLocks();
+            startPoke();
         } catch (Throwable t) {
             Log.e(TAG, "foreground start failed", t);
             stopSelf();
@@ -88,8 +111,30 @@ public class ImKeepAliveService extends Service {
 
     @Override
     public void onDestroy() {
+        stopPoke();
         releaseLocks();
         super.onDestroy();
+    }
+
+    private void startPoke() {
+        if (pokeThread == null) {
+            pokeThread = new HandlerThread("hangxun-im-poke");
+            pokeThread.start();
+            pokeHandler = new Handler(pokeThread.getLooper());
+        }
+        pokeHandler.removeCallbacks(pokeRunnable);
+        pokeHandler.post(pokeRunnable);
+    }
+
+    private void stopPoke() {
+        if (pokeHandler != null) {
+            pokeHandler.removeCallbacks(pokeRunnable);
+        }
+        pokeHandler = null;
+        if (pokeThread != null) {
+            pokeThread.quitSafely();
+            pokeThread = null;
+        }
     }
 
     @Override
