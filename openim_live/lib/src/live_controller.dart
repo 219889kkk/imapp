@@ -758,6 +758,9 @@ mixin OpenIMLive {
     if (identical(PackageBridge.onIncomingCallPresented, _onIncomingCallPresented)) {
       PackageBridge.onIncomingCallPresented = null;
     }
+    if (identical(PackageBridge.onPushCallEvent, _onPushCallEvent)) {
+      PackageBridge.onPushCallEvent = null;
+    }
     if (identical(PackageBridge.suppressCallKitEnded, _suppressCallKitEnded)) {
       PackageBridge.suppressCallKitEnded = null;
     }
@@ -799,6 +802,8 @@ mixin OpenIMLive {
     PackageBridge.onCallKitTimeout = _onCallKitTimeout;
     PackageBridge.onVoipRemoteEnd = _onVoipRemoteEnd;
     PackageBridge.onIncomingCallPresented = _onIncomingCallPresented;
+    PackageBridge.onPushCallEvent = _onPushCallEvent;
+    PackageBridge.flushPendingPushCalls();
     PackageBridge.suppressCallKitEnded = _suppressCallKitEnded;
     PackageBridge.isCallRoomEnded = _isRoomEnded;
     PackageBridge.onPeerLeftCall = _onPeerLeftCall;
@@ -1380,6 +1385,22 @@ mixin OpenIMLive {
     if (_isOutboundWaitingRoom(id)) return;
     CallAudioDebugLog.add('prejoin', 'voip presented — prefetch roomID=$id');
     unawaited(_prefetchPickupToken(id));
+  }
+
+  /// Android lock keep-alive / offline push — same invite/cancel as IM.
+  void _onPushCallEvent(SignalingInfo info, String action) {
+    final act = action.trim().toLowerCase();
+    final roomID = info.invitation?.roomID?.trim() ?? '';
+    Logger.print('push call event action=$act roomID=$roomID');
+    if (act == 'invite' || act.isEmpty) {
+      if (Platform.isAndroid) {
+        final voip = VoipCallkitController.toOrNull;
+        if (voip != null) unawaited(voip.refreshDeviceLocked());
+      }
+      receiveNewInvitation(info);
+      return;
+    }
+    _onVoipRemoteEnd(roomID, act);
   }
 
   /// PushKit cancel/hungup/accept — tear down or mark answered.
@@ -2690,12 +2711,17 @@ mixin OpenIMLive {
                   if (OpenIMLiveClient().hasOverlay) {
                     OpenIMLiveClient().closeOverlayOnly();
                   }
-                  String caller = event.data.invitation?.inviterUserID ?? '';
+                  String caller =
+                      event.data.offlinePushInfo?.title?.trim() ?? '';
+                  if (caller.isEmpty) {
+                    caller = event.data.invitation?.inviterUserID ?? '';
+                  }
                   try {
                     final uid = event.data.invitation?.inviterUserID;
                     if (uid != null && uid.isNotEmpty) {
                       final list = await OpenIM.iMManager.userManager
-                          .getUsersInfo(userIDList: [uid]);
+                          .getUsersInfo(userIDList: [uid])
+                          .timeout(const Duration(milliseconds: 800));
                       caller = list.firstOrNull?.simpleUserInfo.nickname ??
                           caller;
                     }
@@ -3122,7 +3148,8 @@ mixin OpenIMLive {
     required String action,
     List<String>? toUserIDs,
   }) async {
-    if (!Platform.isIOS && !Platform.isAndroid) return;
+    // iOS CallKit uses APNs VoIP. Android has no Getui — invite stays on IM WS.
+    if (!Platform.isIOS) return;
     final inv = signaling.invitation;
     if (inv == null) return;
     final targets = (toUserIDs ?? inv.inviteeUserIDList ?? const [])

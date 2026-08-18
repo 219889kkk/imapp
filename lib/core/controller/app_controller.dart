@@ -31,6 +31,7 @@ class AppController extends GetxController
   StreamSubscription<List<ConnectivityResult>>? _connectivitySub;
   DateTime? _lastImNudgeAt;
   Timer? _backgroundDebounce;
+  Timer? _imKeepAlivePing;
 
   final initializationSettingsAndroid =
       const AndroidInitializationSettings('@mipmap/ic_launcher');
@@ -98,10 +99,13 @@ class AppController extends GetxController
     _backgroundDebounce?.cancel();
     if (!run) {
       isRunningBackground = false;
+      _imKeepAlivePing?.cancel();
+      _imKeepAlivePing = null;
       if (Get.isRegistered<IMController>()) {
         Get.find<IMController>().backgroundSubject.add(false);
       }
       _nudgeImConnection();
+      unawaited(CallAudioKeepAlive.stopImBackgroundKeepAlive());
       return;
     }
     // Debounce: permission dialogs briefly fire onForegroundLost — ignore blips.
@@ -110,6 +114,18 @@ class AppController extends GetxController
       if (Get.isRegistered<IMController>()) {
         Get.find<IMController>().backgroundSubject.add(true);
       }
+      unawaited(CallAudioKeepAlive.startImBackgroundKeepAlive());
+      _startImKeepAlivePing();
+    });
+  }
+
+  /// Ping IM while locked so the websocket is not silently dropped.
+  void _startImKeepAlivePing() {
+    _imKeepAlivePing?.cancel();
+    if (!Platform.isAndroid || !SessionGuard.shouldNotify) return;
+    _imKeepAlivePing = Timer.periodic(const Duration(seconds: 40), (_) {
+      if (!isRunningBackground) return;
+      unawaited(_nudgeImConnection());
     });
   }
 
@@ -620,6 +636,9 @@ class AppController extends GetxController
     await _stopMessageSound();
     await _cancelAllNotifications();
     clearBadgeForLoggedOut();
+    unawaited(CallAudioKeepAlive.stopImBackgroundKeepAlive());
+    _imKeepAlivePing?.cancel();
+    _imKeepAlivePing = null;
   }
 
   bool get _imLoggedIn {
@@ -702,6 +721,7 @@ class AppController extends GetxController
     }
     _connectivitySub?.cancel();
     _backgroundDebounce?.cancel();
+    _imKeepAlivePing?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     closeSubject();
     _audioPlayer.dispose();

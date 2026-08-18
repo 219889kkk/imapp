@@ -1263,6 +1263,13 @@ class StrRes {
       'androidCallPermFullScreen'.tr;
   static String get androidCallPermOverlay => 'androidCallPermOverlay'.tr;
   static String get androidCallPermBattery => 'androidCallPermBattery'.tr;
+  static String get androidCallPermHibernation =>
+      'androidCallPermHibernation'.tr;
+  static String get androidCallPermAutostart => 'androidCallPermAutostart'.tr;
+  static String get androidCallPermOpenHibernation =>
+      'androidCallPermOpenHibernation'.tr;
+  static String get androidCallPermOpenAutostart =>
+      'androidCallPermOpenAutostart'.tr;
   static String get monday => 'monday'.tr;
   static String get tuesday => 'tuesday'.tr;
   static String get wednesday => 'wednesday'.tr;

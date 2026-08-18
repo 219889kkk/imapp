@@ -290,15 +290,27 @@ class VoipCallkitController extends GetxService {
       }
     } catch (_) {}
 
-    if (missing.isEmpty) return;
+    var hibernationOn = false;
+    try {
+      hibernationOn = await unusedAppRestrictionsEnabled();
+      if (hibernationOn) {
+        missing.add(StrRes.androidCallPermHibernation);
+      }
+    } catch (e, s) {
+      Logger.print('unusedAppRestrictions check failed: $e $s');
+    }
 
     final last = DataSp.getAndroidCallPermPromptAt();
     final now = DateTime.now().millisecondsSinceEpoch;
     const cooldownMs = 3 * 24 * 60 * 60 * 1000;
-    if (last > 0 && now - last < cooldownMs) {
+    final firstPrompt = last <= 0;
+    if (missing.isEmpty && !firstPrompt) return;
+    if (last > 0 && now - last < cooldownMs && !firstPrompt) {
       Logger.print('android call perm guide skipped (cooldown), missing=$missing');
       return;
     }
+
+    missing.add(StrRes.androidCallPermAutostart);
 
     final ctx = Get.context ?? Get.overlayContext;
     if (ctx == null) {
@@ -315,7 +327,7 @@ class VoipCallkitController extends GetxService {
       builder: (dialogCtx) {
         return AlertDialog(
           title: Text(StrRes.androidCallPermTitle),
-          content: Text(body),
+          content: SingleChildScrollView(child: Text(body)),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(8),
           ),
@@ -327,14 +339,62 @@ class VoipCallkitController extends GetxService {
             TextButton(
               onPressed: () {
                 Navigator.of(dialogCtx).pop();
-                openAppSettings();
+                unawaited(openAutostartSettings());
               },
-              child: Text(StrRes.androidCallPermGoSettings),
+              child: Text(StrRes.androidCallPermOpenAutostart),
+            ),
+            TextButton(
+              onPressed: () {
+                Navigator.of(dialogCtx).pop();
+                if (hibernationOn) {
+                  unawaited(openUnusedAppSettings());
+                } else {
+                  openAppSettings();
+                }
+              },
+              child: Text(hibernationOn
+                  ? StrRes.androidCallPermOpenHibernation
+                  : StrRes.androidCallPermGoSettings),
             ),
           ],
         );
       },
     );
+  }
+
+  Future<bool> unusedAppRestrictionsEnabled() async {
+    if (!Platform.isAndroid) return false;
+    try {
+      final v = await _nativeChannel.invokeMethod('unusedAppRestrictionsEnabled');
+      return v == true;
+    } catch (e) {
+      Logger.print('unusedAppRestrictionsEnabled failed: $e');
+      return false;
+    }
+  }
+
+  Future<bool> openUnusedAppSettings() async {
+    if (!Platform.isAndroid) return false;
+    try {
+      final v = await _nativeChannel.invokeMethod('openUnusedAppSettings');
+      return v == true;
+    } catch (e) {
+      Logger.print('openUnusedAppSettings failed: $e');
+      openAppSettings();
+      return false;
+    }
+  }
+
+  Future<bool> openAutostartSettings() async {
+    if (!Platform.isAndroid) return false;
+    try {
+      final v = await _nativeChannel.invokeMethod('openAutostartSettings');
+      if (v == true) return true;
+    } catch (e) {
+      Logger.print('openAutostartSettings failed: $e');
+    }
+    openAppSettings();
+    return false;
   }
 
   /// Reject placeholders like server test token `bbbbbb...`.

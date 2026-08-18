@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:firebase_core/firebase_core.dart';
@@ -47,14 +48,11 @@ class PushController extends GetxService {
       // Alert (text) push is direct APNs. Starting Getui on iOS would
       // double-notify and stamp login-screen badges via CID.
       pushType = PushType.apns;
-    } else if (_hasGetuiCredentials) {
-      pushType = PushType.getui;
     } else {
+      // HangXun has no Getui account. Android incoming after lock depends
+      // on the IM websocket + ImKeepAliveService, not vendor push.
       pushType = PushType.none;
-      Logger.print(
-        'PushController: Getui credentials not set, pushType=none '
-        '(offline push disabled until AppID/AppKey/AppSecret are filled)',
-      );
+      Logger.print('PushController: Android pushType=none (no Getui)');
     }
   }
 
@@ -130,19 +128,31 @@ class PushController extends GetxService {
           },
           onReceiveOnlineState: (res) => _log('online', res),
           onRegisterDeviceToken: (res) => _log('deviceToken', res),
-          onReceivePayload: (msg) => _log('payload', msg),
-          onReceiveNotificationResponse: (msg) =>
-              _log('notificationResponse', msg),
-          onTransmitUserMessageReceive: (msg) => _log('userMessage', msg),
+          onReceivePayload: (msg) async {
+            await _log('payload', msg);
+            _dispatchGetuiCall(msg);
+          },
+          onReceiveNotificationResponse: (msg) async {
+            await _log('notificationResponse', msg);
+            _dispatchGetuiCall(msg);
+          },
+          onTransmitUserMessageReceive: (msg) async {
+            await _log('userMessage', msg);
+            _dispatchGetuiCall(msg);
+          },
           onNotificationMessageArrived: (msg) async {
             await _log('notificationArrived', msg);
             if (!SessionGuard.shouldNotify) {
               Logger.print(
                   'Getui notification arrived while logged out — ignore (badge wipe is native)');
+              return;
             }
+            _dispatchGetuiCall(msg);
           },
-          onNotificationMessageClicked: (msg) =>
-              _log('notificationClicked', msg),
+          onNotificationMessageClicked: (msg) async {
+            await _log('notificationClicked', msg);
+            _dispatchGetuiCall(msg);
+          },
           onAppLinkPayload: (res) => _log('appLink', res),
           onPushModeResult: (msg) => _log('pushMode', msg),
           onSetTagResult: (msg) => _log('setTag', msg),
@@ -183,6 +193,120 @@ class PushController extends GetxService {
       Logger.print('Getui SDK start failed: $e $s');
       _getuiInited = false;
     }
+  }
+
+  void _dispatchGetuiCall(dynamic msg) {
+    if (!Platform.isAndroid) return;
+    if (!SessionGuard.shouldNotify) return;
+    final parsed = _parseGetuiCall(msg);
+    if (parsed == null) return;
+    final info = parsed.$1;
+    final action = parsed.$2;
+    Logger.print(
+        'Getui call dispatch action=$action room=${info.invitation?.roomID}');
+    PackageBridge.dispatchPushCallEvent(info, action);
+  }
+
+  /// Returns (signaling, action) for invite/cancel/hungup Getui payloads.
+  (SignalingInfo, String)? _parseGetuiCall(dynamic msg) {
+    final map = _asStringKeyMap(msg);
+    if (map == null) return null;
+    var payload = Map<String, dynamic>.from(map);
+    for (final key in [
+      'payload',
+      'transmission',
+      'offlineMsg',
+      'message',
+      'payloadMsg',
+    ]) {
+      final nested = _asStringKeyMap(payload[key]) ?? _decodeJsonMap(payload[key]);
+      if (nested != null) {
+        payload = {...payload, ...nested};
+      }
+    }
+    final inner = _asStringKeyMap(payload['data']) ??
+        _asStringKeyMap(payload['ex']) ??
+        _decodeJsonMap(payload['ex']);
+    if (inner != null) {
+      payload = {...payload, ...inner};
+    }
+
+    final customType = payload['customType'];
+    final customTypeInt = customType is num
+        ? customType.toInt()
+        : int.tryParse('$customType');
+    final type = '${payload['type'] ?? ''}';
+    var action = '${payload['action'] ?? ''}'.trim().toLowerCase();
+    final roomID = '${payload['roomID'] ?? payload['callUUID'] ?? ''}'.trim();
+    if (roomID.isEmpty) return null;
+
+    final isCallType = customTypeInt == 200 ||
+        customTypeInt == 201 ||
+        customTypeInt == 202 ||
+        customTypeInt == 203 ||
+        customTypeInt == 204 ||
+        type == 'callingInvite';
+    if (!isCallType && action.isEmpty) return null;
+
+    if (action.isEmpty) {
+      if (customTypeInt == 201) {
+        action = 'accept';
+      } else if (customTypeInt == 202) {
+        action = 'reject';
+      } else if (customTypeInt == 203) {
+        action = 'cancel';
+      } else if (customTypeInt == 204) {
+        action = 'hungup';
+      } else {
+        action = 'invite';
+      }
+    }
+
+    List<String>? invitees;
+    final rawInvitees = payload['inviteeUserIDList'];
+    if (rawInvitees is List) {
+      invitees = rawInvitees.map((e) => e.toString()).toList();
+    }
+
+    final nickname =
+        '${payload['inviterNickname'] ?? payload['nickname'] ?? payload['title'] ?? ''}'
+            .trim();
+    final info = SignalingInfo(
+      userID: '${payload['inviterUserID'] ?? ''}',
+      invitation: InvitationInfo(
+        roomID: roomID,
+        inviterUserID: '${payload['inviterUserID'] ?? ''}',
+        inviteeUserIDList: invitees,
+        mediaType: '${payload['mediaType'] ?? 'audio'}',
+        sessionType: int.tryParse('${payload['sessionType'] ?? 1}') ?? 1,
+        groupID: payload['groupID']?.toString(),
+        timeout: int.tryParse('${payload['timeout'] ?? 60}') ?? 60,
+      ),
+      offlinePushInfo: nickname.isEmpty
+          ? null
+          : OfflinePushInfo(title: nickname),
+    );
+    return (info, action);
+  }
+
+  Map<String, dynamic>? _asStringKeyMap(dynamic v) {
+    if (v is Map) {
+      return v.map((k, val) => MapEntry(k.toString(), val));
+    }
+    return _decodeJsonMap(v);
+  }
+
+  Map<String, dynamic>? _decodeJsonMap(dynamic v) {
+    if (v is! String) return null;
+    final s = v.trim();
+    if (s.isEmpty || !s.startsWith('{')) return null;
+    try {
+      final decoded = jsonDecode(s);
+      if (decoded is Map) {
+        return decoded.map((k, val) => MapEntry(k.toString(), val));
+      }
+    } catch (_) {}
+    return null;
   }
 
   void _bindPendingAlias() {

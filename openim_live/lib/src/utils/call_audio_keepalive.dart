@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:audio_session/audio_session.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_background/flutter_background.dart';
 import 'package:flutter_callkit_incoming/entities/call_kit_params.dart';
@@ -19,6 +20,10 @@ class CallAudioKeepAlive with WidgetsBindingObserver {
   CallAudioKeepAlive._();
   static final CallAudioKeepAlive instance = CallAudioKeepAlive._();
 
+  static const _voipChannel = MethodChannel('top.hangxun.app/voip');
+  static bool _imKeepAliveWanted = false;
+  static String? _androidFgsTitle;
+
   bool _active = false;
   String? _roomID;
   bool _isVideo = false;
@@ -30,6 +35,42 @@ class CallAudioKeepAlive with WidgetsBindingObserver {
 
   bool get isActive => _active;
   bool get callKitOwnsSession => _callKitOwnsSession;
+
+  /// Keep IM websocket alive while Android is locked / backgrounded.
+  /// No Getui wake-up — Doze otherwise freezes the socket after ~5 minutes.
+  /// Call FGS takes over if a call is already active.
+  static Future<void> startImBackgroundKeepAlive() async {
+    if (!Platform.isAndroid) return;
+    if (!SessionGuard.shouldNotify) return;
+    _imKeepAliveWanted = true;
+    if (instance.isActive) return;
+    await _startNativeImKeepAlive();
+  }
+
+  static Future<void> stopImBackgroundKeepAlive() async {
+    _imKeepAliveWanted = false;
+    if (!Platform.isAndroid) return;
+    await _stopNativeImKeepAlive();
+    if (instance.isActive) return;
+    await instance._disableAndroidForegroundService();
+  }
+
+  static Future<void> _startNativeImKeepAlive() async {
+    try {
+      await _voipChannel.invokeMethod('startImKeepAlive');
+      Logger.print('IM keep-alive native FGS start');
+    } catch (e, s) {
+      Logger.print('IM keep-alive native FGS start failed: $e $s');
+    }
+  }
+
+  static Future<void> _stopNativeImKeepAlive() async {
+    try {
+      await _voipChannel.invokeMethod('stopImKeepAlive');
+    } catch (e, s) {
+      Logger.print('IM keep-alive native FGS stop failed: $e $s');
+    }
+  }
 
   void releaseCallKitSession() {
     _callKitOwnsSession = false;
@@ -111,7 +152,12 @@ class CallAudioKeepAlive with WidgetsBindingObserver {
     }
     await _listenInterruptions();
     if (Platform.isAndroid) {
-      await _enableAndroidCallForegroundService();
+      await _stopNativeImKeepAlive();
+      await _enableAndroidForegroundService(
+        title: '航讯通话中',
+        text: '与$_peerName通话中，点此返回',
+        importance: AndroidNotificationImportance.high,
+      );
     }
     // iOS: do NOT setCallConnected here — start() runs before LiveKit ICE.
     // CallKit connected is set by LiveController after join succeeds.
@@ -131,12 +177,9 @@ class CallAudioKeepAlive with WidgetsBindingObserver {
     onNeedRepublishMic = null;
 
     if (Platform.isAndroid) {
-      try {
-        if (FlutterBackground.isBackgroundExecutionEnabled) {
-          await FlutterBackground.disableBackgroundExecution();
-        }
-      } catch (e, s) {
-        Logger.print('CallAudioKeepAlive disable FGS failed: $e $s');
+      await _disableAndroidForegroundService();
+      if (_imKeepAliveWanted && SessionGuard.shouldNotify) {
+        await _startNativeImKeepAlive();
       }
     } else if (Platform.isIOS) {
       // Drop the system mic indicator immediately. Do not wait for CallKit —
@@ -230,29 +273,52 @@ class CallAudioKeepAlive with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _enableAndroidCallForegroundService() async {
+  Future<void> _disableAndroidForegroundService() async {
+    _androidFgsTitle = null;
     try {
+      if (FlutterBackground.isBackgroundExecutionEnabled) {
+        await FlutterBackground.disableBackgroundExecution();
+      }
+    } catch (e, s) {
+      Logger.print('CallAudioKeepAlive disable FGS failed: $e $s');
+    }
+  }
+
+  Future<void> _enableAndroidForegroundService({
+    required String title,
+    required String text,
+    required AndroidNotificationImportance importance,
+  }) async {
+    try {
+      if (FlutterBackground.isBackgroundExecutionEnabled &&
+          _androidFgsTitle == title) {
+        return;
+      }
       var hasPermissions = await FlutterBackground.hasPermissions;
       hasPermissions = await FlutterBackground.initialize(
         androidConfig: FlutterBackgroundAndroidConfig(
-          notificationTitle: '航讯通话中',
-          notificationText: '与$_peerName通话中，点此返回',
-          notificationImportance: AndroidNotificationImportance.high,
+          notificationTitle: title,
+          notificationText: text,
+          notificationImportance: importance,
           notificationIcon:
               const AndroidResource(name: 'ic_launcher', defType: 'mipmap'),
           shouldRequestBatteryOptimizationsOff: false,
         ),
       );
-      if (hasPermissions && !FlutterBackground.isBackgroundExecutionEnabled) {
-        final ok = await FlutterBackground.enableBackgroundExecution();
-        Logger.print('CallAudioKeepAlive Android FGS enabled=$ok');
+      if (!hasPermissions) return;
+      if (FlutterBackground.isBackgroundExecutionEnabled) {
+        await FlutterBackground.disableBackgroundExecution();
       }
+      final ok = await FlutterBackground.enableBackgroundExecution();
+      if (ok) _androidFgsTitle = title;
+      Logger.print('CallAudioKeepAlive Android FGS enabled=$ok title=$title');
     } catch (e, s) {
       Logger.print('CallAudioKeepAlive Android FGS failed: $e $s');
       try {
         await Future<void>.delayed(const Duration(seconds: 1));
         if (!FlutterBackground.isBackgroundExecutionEnabled) {
-          await FlutterBackground.enableBackgroundExecution();
+          final ok = await FlutterBackground.enableBackgroundExecution();
+          if (ok) _androidFgsTitle = title;
         }
       } catch (_) {}
     }

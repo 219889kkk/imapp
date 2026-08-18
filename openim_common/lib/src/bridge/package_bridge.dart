@@ -58,6 +58,31 @@ class PackageBridge {
   /// Caller: remote joined LiveKit while waiting — cancel ring timeout / start in-call UI.
   static void Function(String? roomID)? markOutboundPeerPresent;
 
+  /// Android Getui / offline push reconstructed a call event (invite/cancel/…).
+  static void Function(SignalingInfo info, String action)? onPushCallEvent;
+  static final List<(SignalingInfo, String)> _pendingPushCalls = [];
+
+  static void dispatchPushCallEvent(SignalingInfo info, String action) {
+    final handler = onPushCallEvent;
+    if (handler != null) {
+      handler(info, action);
+      return;
+    }
+    _pendingPushCalls.add((info, action));
+    if (_pendingPushCalls.length > 8) {
+      _pendingPushCalls.removeAt(0);
+    }
+  }
+
+  static void flushPendingPushCalls() {
+    if (onPushCallEvent == null || _pendingPushCalls.isEmpty) return;
+    final pending = List<(SignalingInfo, String)>.from(_pendingPushCalls);
+    _pendingPushCalls.clear();
+    for (final item in pending) {
+      onPushCallEvent?.call(item.$1, item.$2);
+    }
+  }
+
   /// HTTP/WS endpoint switched (primary ↔ backup). App should reinit IM SDK.
   static Future<void> Function()? onEndpointSwitched;
 
