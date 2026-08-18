@@ -105,7 +105,8 @@ class AppController extends GetxController
         Get.find<IMController>().backgroundSubject.add(false);
       }
       _nudgeImConnection();
-      unawaited(CallAudioKeepAlive.stopImBackgroundKeepAlive());
+      // Keep the IM FGS while logged in — stopping it on resume let Doze
+      // freeze the socket after the next lock.
       return;
     }
     // Debounce: permission dialogs briefly fire onForegroundLost — ignore blips.
@@ -195,13 +196,21 @@ class AppController extends GetxController
         !SessionGuard.suppressNotifications;
   }
 
-  /// Lets AppDelegate know whether a SpringBoard badge wipe is safe on resume.
+  /// Lets native know the user is logged in so Android can keep the IM socket
+  /// (and iOS can decide whether a SpringBoard badge wipe is safe).
   Future<void> syncNativeLoginHint(bool active) async {
-    if (!Platform.isIOS) return;
+    if (!Platform.isIOS && !Platform.isAndroid) return;
     try {
       await _voipChannel.invokeMethod('setLoginSessionHint', {'active': active});
     } catch (e, s) {
       Logger.print('syncNativeLoginHint failed: $e $s');
+    }
+    if (Platform.isAndroid) {
+      if (active) {
+        unawaited(CallAudioKeepAlive.startImBackgroundKeepAlive());
+      } else {
+        unawaited(CallAudioKeepAlive.stopImBackgroundKeepAlive());
+      }
     }
   }
 

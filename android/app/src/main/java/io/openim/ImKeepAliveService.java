@@ -8,33 +8,44 @@ import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ServiceInfo;
+import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.os.IBinder;
 import android.os.PowerManager;
+import android.util.Log;
 
 /**
- * Keeps the process (and IM websocket) alive after lock / Doze.
- * HangXun Android has no Getui — incoming calls only arrive while this socket lives.
+ * Always-on while logged in. HangXun Android has no Getui, so the IM
+ * websocket only survives lock/Doze if this service is already running
+ * before the screen turns off.
  */
 public class ImKeepAliveService extends Service {
     public static final String ACTION_START = "io.openim.KEEPALIVE_START";
     public static final String ACTION_STOP = "io.openim.KEEPALIVE_STOP";
-
+    private static final String TAG = "HangxunKeepAlive";
     private static final String CHANNEL_ID = "hangxun_im_keepalive";
     private static final int NOTIF_ID = 71002;
+
     private PowerManager.WakeLock wakeLock;
+    private WifiManager.WifiLock wifiLock;
 
     public static void start(Context context) {
-        Intent intent = new Intent(context, ImKeepAliveService.class);
-        intent.setAction(ACTION_START);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            context.startForegroundService(intent);
-        } else {
-            context.startService(intent);
+        if (context == null) return;
+        try {
+            Intent intent = new Intent(context, ImKeepAliveService.class);
+            intent.setAction(ACTION_START);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent);
+            } else {
+                context.startService(intent);
+            }
+        } catch (Throwable t) {
+            Log.e(TAG, "start failed", t);
         }
     }
 
     public static void stop(Context context) {
+        if (context == null) return;
         Intent intent = new Intent(context, ImKeepAliveService.class);
         intent.setAction(ACTION_STOP);
         try {
@@ -50,7 +61,7 @@ public class ImKeepAliveService extends Service {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent != null && ACTION_STOP.equals(intent.getAction())) {
-            releaseWakeLock();
+            releaseLocks();
             stopForeground(true);
             stopSelf();
             return START_NOT_STICKY;
@@ -66,8 +77,9 @@ public class ImKeepAliveService extends Service {
             } else {
                 startForeground(NOTIF_ID, notification);
             }
-            acquireWakeLock();
+            acquireLocks();
         } catch (Throwable t) {
+            Log.e(TAG, "foreground start failed", t);
             stopSelf();
             return START_NOT_STICKY;
         }
@@ -76,7 +88,7 @@ public class ImKeepAliveService extends Service {
 
     @Override
     public void onDestroy() {
-        releaseWakeLock();
+        releaseLocks();
         super.onDestroy();
     }
 
@@ -92,7 +104,7 @@ public class ImKeepAliveService extends Service {
         NotificationChannel channel = new NotificationChannel(
                 CHANNEL_ID,
                 "航讯保持连接",
-                NotificationManager.IMPORTANCE_LOW);
+                NotificationManager.IMPORTANCE_DEFAULT);
         channel.setDescription("锁屏来电需要保持连接");
         channel.setShowBadge(false);
         channel.enableVibration(false);
@@ -122,30 +134,50 @@ public class ImKeepAliveService extends Service {
                 .setOngoing(true)
                 .setOnlyAlertOnce(true);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            builder.setVisibility(Notification.VISIBILITY_SECRET);
+            builder.setVisibility(Notification.VISIBILITY_PUBLIC);
+            builder.setPriority(Notification.PRIORITY_DEFAULT);
         }
         return builder.build();
     }
 
-    private void acquireWakeLock() {
-        if (wakeLock != null && wakeLock.isHeld()) return;
+    private void acquireLocks() {
         try {
-            PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
-            if (pm == null) return;
-            wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "hangxun:im");
-            wakeLock.setReferenceCounted(false);
-            wakeLock.acquire();
-        } catch (Throwable ignored) {
+            if (wakeLock == null || !wakeLock.isHeld()) {
+                PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+                if (pm != null) {
+                    wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "hangxun:im");
+                    wakeLock.setReferenceCounted(false);
+                    wakeLock.acquire(6 * 60 * 60 * 1000L);
+                }
+            }
+        } catch (Throwable t) {
+            Log.e(TAG, "wake lock failed", t);
+        }
+        try {
+            if (wifiLock == null || !wifiLock.isHeld()) {
+                WifiManager wifi = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+                if (wifi != null) {
+                    wifiLock = wifi.createWifiLock(
+                            WifiManager.WIFI_MODE_FULL_HIGH_PERF, "hangxun:im-wifi");
+                    wifiLock.setReferenceCounted(false);
+                    wifiLock.acquire();
+                }
+            }
+        } catch (Throwable t) {
+            Log.e(TAG, "wifi lock failed", t);
         }
     }
 
-    private void releaseWakeLock() {
+    private void releaseLocks() {
         try {
-            if (wakeLock != null && wakeLock.isHeld()) {
-                wakeLock.release();
-            }
+            if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
         } catch (Throwable ignored) {
         }
         wakeLock = null;
+        try {
+            if (wifiLock != null && wifiLock.isHeld()) wifiLock.release();
+        } catch (Throwable ignored) {
+        }
+        wifiLock = null;
     }
 }

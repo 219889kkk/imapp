@@ -10,6 +10,8 @@ import android.os.Build;
 import android.os.PowerManager;
 import android.provider.Settings;
 
+import android.content.SharedPreferences;
+
 import androidx.annotation.NonNull;
 
 import java.util.ArrayList;
@@ -18,10 +20,66 @@ import java.util.Locale;
 
 import io.flutter.embedding.android.FlutterFragmentActivity;
 import io.flutter.embedding.engine.FlutterEngine;
+import io.flutter.embedding.engine.FlutterEngineCache;
+import io.flutter.embedding.engine.dart.DartExecutor;
 import io.flutter.plugin.common.MethodChannel;
+import io.flutter.plugins.GeneratedPluginRegistrant;
 
 public class MainActivity extends FlutterFragmentActivity {
     private static final String VOIP_CHANNEL = "top.hangxun.app/voip";
+    private static final String ENGINE_ID = "hangxun_engine";
+    private static final String PREFS = "hangxun";
+    private static final String PREF_LOGIN = "hasLoginSession";
+
+    @Override
+    public FlutterEngine provideFlutterEngine(@NonNull android.content.Context context) {
+        FlutterEngineCache cache = FlutterEngineCache.getInstance();
+        FlutterEngine engine = cache.get(ENGINE_ID);
+        if (engine != null) return engine;
+        engine = new FlutterEngine(context.getApplicationContext());
+        GeneratedPluginRegistrant.registerWith(engine);
+        engine.getDartExecutor().executeDartEntrypoint(
+                DartExecutor.DartEntrypoint.createDefault());
+        cache.put(ENGINE_ID, engine);
+        return engine;
+    }
+
+    @Override
+    public boolean shouldDestroyEngineWithHost() {
+        return false;
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        if (hasLoginSession()) {
+            ImKeepAliveService.start(getApplicationContext());
+        }
+    }
+
+    @Override
+    protected void onStop() {
+        super.onStop();
+        if (hasLoginSession()) {
+            ImKeepAliveService.start(getApplicationContext());
+        }
+    }
+
+    private boolean hasLoginSession() {
+        return getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(PREF_LOGIN, false);
+    }
+
+    private void setLoginSession(boolean active) {
+        SharedPreferences.Editor ed =
+                getSharedPreferences(PREFS, MODE_PRIVATE).edit();
+        ed.putBoolean(PREF_LOGIN, active);
+        ed.apply();
+        if (active) {
+            ImKeepAliveService.start(getApplicationContext());
+        } else {
+            ImKeepAliveService.stop(getApplicationContext());
+        }
+    }
 
     @Override
     public void configureFlutterEngine(@NonNull FlutterEngine flutterEngine) {
@@ -40,6 +98,11 @@ public class MainActivity extends FlutterFragmentActivity {
                             break;
                         case "openAutostartSettings":
                             result.success(openAutostartSettings());
+                            break;
+                        case "setLoginSessionHint":
+                            boolean active = Boolean.TRUE.equals(call.argument("active"));
+                            setLoginSession(active);
+                            result.success(true);
                             break;
                         case "startImKeepAlive":
                             ImKeepAliveService.start(getApplicationContext());
