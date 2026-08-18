@@ -17,6 +17,7 @@ import io.flutter.plugin.common.MethodChannel;
 import io.flutter.plugin.common.MethodChannel.MethodCallHandler;
 import io.flutter.plugin.common.MethodChannel.Result;
 import io.openim.flutter_openim_sdk.connectivity.ConnectivityListener;
+import io.openim.flutter_openim_sdk.connectivity.HangxunImKeepAlivePoke;
 import io.openim.flutter_openim_sdk.connectivity.VisibilityListener;
 import io.openim.flutter_openim_sdk.manager.ConversationManager;
 import io.openim.flutter_openim_sdk.manager.FriendshipManager;
@@ -66,6 +67,7 @@ public class FlutterOpenimSdkPlugin implements FlutterPlugin, MethodCallHandler,
         connectivityListener = new ConnectivityListener(context);
         visibilityListener = new VisibilityListener();
         connectivityListener.register();
+        HangxunImKeepAlivePoke.register(context);
     }
 
     @Override
@@ -77,6 +79,7 @@ public class FlutterOpenimSdkPlugin implements FlutterPlugin, MethodCallHandler,
     public void onDetachedFromEngine(@NonNull FlutterPluginBinding binding) {
         FlutterOpenimSdkPlugin.channel.setMethodCallHandler(null);
         connectivityListener.unregisterReceiver();
+        HangxunImKeepAlivePoke.unregister(binding.getApplicationContext());
     }
 
 

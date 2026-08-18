@@ -16,7 +16,6 @@ import android.os.IBinder;
 import android.os.PowerManager;
 import android.util.Log;
 
-import io.openim.flutter_openim_sdk.connectivity.HangxunImKeepAlivePoke;
 
 /**
  * Always-on while logged in. HangXun Android has no Getui, so the IM
@@ -39,7 +38,9 @@ public class ImKeepAliveService extends Service {
         @Override
         public void run() {
             try {
-                HangxunImKeepAlivePoke.poke();
+                Intent poke = new Intent("io.openim.hangxun.POKE_IM");
+                poke.setPackage(getPackageName());
+                sendBroadcast(poke);
                 acquireLocks();
             } catch (Throwable t) {
                 Log.w(TAG, "im poke skipped", t);
