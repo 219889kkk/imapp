@@ -198,14 +198,48 @@ public class MainActivity extends FlutterFragmentActivity {
     private List<Intent> hibernationIntents() {
         String pkg = getPackageName();
         List<Intent> intents = new ArrayList<>();
-        Intent unusedPkg = new Intent("android.settings.UNUSED_APP_SETTINGS");
-        unusedPkg.setData(Uri.fromParts("package", pkg, null));
-        intents.add(unusedPkg);
-        intents.add(new Intent("android.settings.UNUSED_APP_SETTINGS"));
+        // App info / 权限页 — this is where 「暂停闲置应用的活动」 lives.
+        // UNUSED_APP_SETTINGS is a system list and often misses the toggle.
+        Intent details = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+        details.setData(Uri.fromParts("package", pkg, null));
+        intents.add(details);
+        addOemAppPermissionPage(intents, pkg);
         Intent autoRevoke = new Intent("android.intent.action.AUTO_REVOKE_PERMISSIONS");
         autoRevoke.setData(Uri.fromParts("package", pkg, null));
         intents.add(autoRevoke);
+        Intent unusedPkg = new Intent("android.settings.UNUSED_APP_SETTINGS");
+        unusedPkg.setData(Uri.fromParts("package", pkg, null));
+        intents.add(unusedPkg);
         return intents;
+    }
+
+    private void addOemAppPermissionPage(List<Intent> intents, String pkg) {
+        String family = oemFamily();
+        if ("xiaomi".equals(family)) {
+            Intent editor = new Intent("miui.intent.action.APP_PERM_EDITOR");
+            editor.setClassName("com.miui.securitycenter",
+                    "com.miui.permcenter.permissions.PermissionsEditorActivity");
+            editor.putExtra("extra_pkgname", pkg);
+            intents.add(editor);
+        } else if ("huawei".equals(family)) {
+            Intent hw = new Intent();
+            hw.setClassName("com.huawei.systemmanager",
+                    "com.huawei.permissionmanager.ui.MainActivity");
+            hw.putExtra("packageName", pkg);
+            intents.add(hw);
+        } else if ("oppo".equals(family)) {
+            Intent oppo = new Intent();
+            oppo.setClassName("com.coloros.safecenter",
+                    "com.coloros.privacypermissionsentry.PermissionTopActivity");
+            oppo.putExtra("packageName", pkg);
+            intents.add(oppo);
+        } else if ("vivo".equals(family)) {
+            Intent vivo = new Intent();
+            vivo.setClassName("com.vivo.permissionmanager",
+                    "com.vivo.permissionmanager.activity.SoftPermissionDetailActivity");
+            vivo.putExtra("packagename", pkg);
+            intents.add(vivo);
+        }
     }
 
     private boolean hasResolvable(List<Intent> intents) {
@@ -233,11 +267,7 @@ public class MainActivity extends FlutterFragmentActivity {
     }
 
     private boolean openUnusedAppSettings() {
-        List<Intent> intents = new ArrayList<>(hibernationIntents());
-        Intent details = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
-        details.setData(Uri.fromParts("package", getPackageName(), null));
-        intents.add(details);
-        return startFirstResolvable(intents);
+        return startFirstResolvable(hibernationIntents());
     }
 
     private boolean openAutostartSettings() {

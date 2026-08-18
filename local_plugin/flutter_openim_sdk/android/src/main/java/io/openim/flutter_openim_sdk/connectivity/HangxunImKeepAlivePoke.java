@@ -11,11 +11,13 @@ import io.openim.flutter_openim_sdk.FlutterOpenimSdkPlugin;
 import open_im_sdk.Open_im_sdk;
 
 /**
- * HangXun Android has no Getui. Keep telling OpenIM we are foreground
- * so lock-screen text/calls still arrive on the websocket.
+ * HangXun Android has no Getui. On lock, tell OpenIM we are still
+ * foreground so the websocket keeps delivering.
  *
- * The app process pokes via broadcast so :app does not compile against
- * open_im_sdk_callback.Base (that class lives only in the SDK AAR).
+ * Do not call networkStatusChanged on a timer — that reconnects the
+ * socket and the conversation list flashes 「连接中」 then refreshes.
+ * Do not repeat setAppBackgroundStatus(false) while the UI is visible:
+ * each call wakes a full data sync.
  */
 public final class HangxunImKeepAlivePoke {
     public static final String ACTION = "io.openim.hangxun.POKE_IM";
@@ -32,19 +34,47 @@ public final class HangxunImKeepAlivePoke {
     };
 
     private static BroadcastReceiver receiver;
+    private static int startedActivities;
+    private static boolean backgroundHintSent;
 
     private HangxunImKeepAlivePoke() {}
 
-    public static void poke() {
+    public static void onActivityStarted() {
+        startedActivities++;
+        backgroundHintSent = false;
+    }
+
+    public static void onActivityStopped() {
+        if (startedActivities > 0) {
+            startedActivities--;
+        }
+        if (startedActivities == 0) {
+            keepForegroundHint();
+        }
+    }
+
+    /** Keep-alive service tick: ignore while the user is in the app. */
+    public static void onKeepAliveTick() {
+        if (startedActivities > 0) {
+            return;
+        }
+        keepForegroundHint();
+    }
+
+    private static void keepForegroundHint() {
         if (!FlutterOpenimSdkPlugin.isInitialized) {
             return;
         }
+        if (backgroundHintSent) {
+            return;
+        }
+        backgroundHintSent = true;
         try {
             String op = String.valueOf(System.currentTimeMillis());
             Open_im_sdk.setAppBackgroundStatus(CALLBACK, op, false);
-            Open_im_sdk.networkStatusChanged(CALLBACK, op + "-n");
         } catch (Throwable t) {
-            Log.e(TAG, "poke failed", t);
+            Log.e(TAG, "foreground hint failed", t);
+            backgroundHintSent = false;
         }
     }
 
@@ -56,7 +86,7 @@ public final class HangxunImKeepAlivePoke {
             @Override
             public void onReceive(Context ctx, Intent intent) {
                 if (intent != null && ACTION.equals(intent.getAction())) {
-                    poke();
+                    onKeepAliveTick();
                 }
             }
         };

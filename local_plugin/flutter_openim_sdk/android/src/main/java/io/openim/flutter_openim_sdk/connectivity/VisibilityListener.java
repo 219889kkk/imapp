@@ -6,6 +6,8 @@ import android.os.Bundle;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.lifecycle.Lifecycle;
+import androidx.lifecycle.LifecycleOwner;
 
 import io.flutter.Log;
 
@@ -13,12 +15,26 @@ public class VisibilityListener implements Application.ActivityLifecycleCallback
     public void register(Activity activity) {
         if (null != activity) {
             activity.getApplication().registerActivityLifecycleCallbacks(this);
+            if (activity instanceof LifecycleOwner) {
+                Lifecycle.State state =
+                        ((LifecycleOwner) activity).getLifecycle().getCurrentState();
+                if (state.isAtLeast(Lifecycle.State.STARTED)) {
+                    HangxunImKeepAlivePoke.onActivityStarted();
+                }
+            }
         }
     }
 
     public void unregisterReceiver(Activity activity) {
         if (null != activity) {
             activity.getApplication().unregisterActivityLifecycleCallbacks(this);
+            if (activity instanceof LifecycleOwner) {
+                Lifecycle.State state =
+                        ((LifecycleOwner) activity).getLifecycle().getCurrentState();
+                if (state.isAtLeast(Lifecycle.State.STARTED)) {
+                    HangxunImKeepAlivePoke.onActivityStopped();
+                }
+            }
         }
     }
 
@@ -31,26 +47,23 @@ public class VisibilityListener implements Application.ActivityLifecycleCallback
     @Override
     public void onActivityStarted(@NonNull Activity activity) {
         Log.i("VisibilityListener", "onActivityStarted");
+        HangxunImKeepAlivePoke.onActivityStarted();
     }
 
     @Override
     public void onActivityResumed(@NonNull Activity activity) {
         Log.i("VisibilityListener", "onActivityResumed");
-        HangxunImKeepAlivePoke.poke();
     }
 
     @Override
     public void onActivityPaused(@NonNull Activity activity) {
         Log.i("VisibilityListener", "onActivityPaused");
-        // Do not report isBackground=true. HangXun has no Getui; lock
-        // screen delivery is the websocket. Marking background makes
-        // OpenIM queue messages until the user opens the app.
-        HangxunImKeepAlivePoke.poke();
     }
 
     @Override
     public void onActivityStopped(@NonNull Activity activity) {
         Log.i("VisibilityListener", "onActivityStopped");
+        HangxunImKeepAlivePoke.onActivityStopped();
     }
 
     @Override
