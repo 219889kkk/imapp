@@ -177,6 +177,19 @@ class AppController extends GetxController
       onDidReceiveNotificationResponse: _onNotificationResponse,
     );
     await _ensureAndroidNotificationChannels();
+    try {
+      final launch = await flutterLocalNotificationsPlugin
+          .getNotificationAppLaunchDetails();
+      if (launch?.didNotificationLaunchApp == true) {
+        _onNotificationResponse(launch!.notificationResponse ??
+            const NotificationResponse(
+              notificationResponseType:
+                  NotificationResponseType.selectedNotification,
+            ));
+      }
+    } catch (e, s) {
+      Logger.print('notification launch details failed: $e $s');
+    }
     _listenConnectivity();
     PackageBridge.clearCallNotification = cancelCallNotification;
 
@@ -468,22 +481,41 @@ class AppController extends GetxController
       id: message.seq ?? _fallbackNotificationID,
       title: title,
       body: body,
+      payload: _msgNotifyPayload(message),
     );
+  }
+
+  String? _msgNotifyPayload(im.Message message) {
+    final sessionType = message.sessionType ?? ConversationType.single;
+    final sourceID = sessionType == ConversationType.single
+        ? (message.sendID ?? '')
+        : (message.groupID ?? '');
+    if (sourceID.isEmpty) return null;
+    return 'msg|$sessionType|$sourceID';
   }
 
   void _onNotificationResponse(NotificationResponse response) {
     final actionId = response.actionId;
+    final payload = response.payload ?? '';
     final isCall = response.id == _callNotificationId ||
-        response.payload == 'callingInvite' ||
-        response.payload?.startsWith('callingInvite') == true;
-    if (!isCall) return;
-
-    if (actionId == _callActionAccept) {
-      PackageBridge.handleCallNotificationAction?.call(true);
-    } else if (actionId == _callActionReject) {
-      PackageBridge.handleCallNotificationAction?.call(false);
+        payload == 'callingInvite' ||
+        payload.startsWith('callingInvite');
+    if (isCall) {
+      if (actionId == _callActionAccept) {
+        PackageBridge.handleCallNotificationAction?.call(true);
+      } else if (actionId == _callActionReject) {
+        PackageBridge.handleCallNotificationAction?.call(false);
+      }
+      return;
     }
-    // Body tap: system brings app foreground; pending invite UI is restored there.
+    if (payload.startsWith('msg|')) {
+      final parts = payload.split('|');
+      if (parts.length >= 3) {
+        final sessionType = int.tryParse(parts[1]) ?? ConversationType.single;
+        final sourceID = parts.sublist(2).join('|');
+        PackageBridge.dispatchChatNotify(sessionType, sourceID);
+      }
+    }
   }
 
   Future<void> showCallNotification(SignalingInfo info) async {
@@ -606,6 +638,7 @@ class AppController extends GetxController
     required int id,
     required String title,
     required String body,
+    String? payload,
   }) async {
     final beepOn = _isAllowBeep;
 
@@ -614,9 +647,19 @@ class AppController extends GetxController
       beepOn ? 'Chat Messages' : 'Chat Messages (Silent)',
       channelDescription: '航讯消息通知',
       importance: Importance.max,
-      priority: Priority.high,
-      ticker: 'ticker',
+      priority: Priority.max,
+      category: AndroidNotificationCategory.message,
+      visibility: NotificationVisibility.public,
+      ticker: body,
       playSound: beepOn,
+      enableVibration: beepOn,
+      autoCancel: true,
+      channelShowBadge: true,
+      styleInformation: BigTextStyleInformation(
+        body,
+        contentTitle: title,
+        summaryText: '航讯',
+      ),
       sound: beepOn
           ? const RawResourceAndroidNotificationSound('notification_ring')
           : null,
@@ -633,7 +676,7 @@ class AppController extends GetxController
       title,
       body,
       NotificationDetails(android: androidDetails, iOS: iosDetails),
-      payload: '',
+      payload: payload ?? '',
     );
   }
 

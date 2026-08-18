@@ -90,10 +90,23 @@ class ConversationLogic extends GetxController {
       }
     });
     super.onInit();
+    PackageBridge.openChatFromNotify = _openChatFromNotify;
+    PackageBridge.flushPendingChatNotify();
+  }
+
+  void _openChatFromNotify(int sessionType, String sourceID) {
+    if (sessionType == ConversationType.single) {
+      toChat(userID: sourceID, sessionType: sessionType);
+    } else {
+      toChat(groupID: sourceID, sessionType: sessionType);
+    }
   }
 
   @override
   void onClose() {
+    if (identical(PackageBridge.openChatFromNotify, _openChatFromNotify)) {
+      PackageBridge.openChatFromNotify = null;
+    }
     _prefetchTimer?.cancel();
     refreshController.dispose();
     list.clear();

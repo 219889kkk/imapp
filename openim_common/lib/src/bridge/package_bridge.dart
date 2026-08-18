@@ -88,6 +88,28 @@ class PackageBridge {
 
   /// Wall-clock seconds since the active call was answered (0 if not connected).
   static int Function()? connectedCallDurationSec;
+
+  /// Android lock-screen text notification tap → open that chat.
+  static void Function(int sessionType, String sourceID)? openChatFromNotify;
+  static (int, String)? _pendingChatNotify;
+
+  static void dispatchChatNotify(int sessionType, String sourceID) {
+    final id = sourceID.trim();
+    if (id.isEmpty) return;
+    if (openChatFromNotify != null) {
+      openChatFromNotify!(sessionType, id);
+      return;
+    }
+    _pendingChatNotify = (sessionType, id);
+  }
+
+  static void flushPendingChatNotify() {
+    final pending = _pendingChatNotify;
+    _pendingChatNotify = null;
+    if (pending != null) {
+      openChatFromNotify?.call(pending.$1, pending.$2);
+    }
+  }
 }
 
 abstract class ScanBridge {
