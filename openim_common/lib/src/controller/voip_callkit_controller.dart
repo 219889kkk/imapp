@@ -263,6 +263,7 @@ class VoipCallkitController extends GetxService {
 
   bool _awaitingCallPermSettings = false;
   bool _callPermPromptInFlight = false;
+  bool _oemAutostartVisited = false;
 
   /// After login: request runtime perms, then guide user to Settings if still missing.
   /// Returning from Settings continues with whatever is still off.
@@ -290,10 +291,43 @@ class VoipCallkitController extends GetxService {
     await promptAndroidCallPermissionsIfNeeded(continueAfterSettings: true);
   }
 
+  Future<Map<String, dynamic>> _callPermGuide() async {
+    try {
+      final raw = await _nativeChannel.invokeMethod('getCallPermGuide');
+      if (raw is Map) {
+        return raw.map((k, v) => MapEntry(k.toString(), v));
+      }
+    } catch (e) {
+      Logger.print('getCallPermGuide failed: $e');
+    }
+    return {};
+  }
+
+  String _autostartLabelFor(String family) {
+    switch (family) {
+      case 'xiaomi':
+        return StrRes.androidCallPermAutostartXiaomi;
+      case 'huawei':
+        return StrRes.androidCallPermAutostartHuawei;
+      case 'oppo':
+        return StrRes.androidCallPermAutostartOppo;
+      case 'vivo':
+        return StrRes.androidCallPermAutostartVivo;
+      case 'meizu':
+        return StrRes.androidCallPermAutostartMeizu;
+      default:
+        return StrRes.androidCallPermAutostart;
+    }
+  }
+
   Future<void> _promptAndroidCallPermissionsIfNeeded(
     bool continueAfterSettings,
   ) async {
     await ensureAndroidCallPermissions();
+    final guide = await _callPermGuide();
+    final family = '${guide['family'] ?? 'stock'}';
+    final hasAutostart = guide['hasAutostart'] == true;
+    final hibernationOn = guide['hibernationOn'] == true;
 
     final missing = <String>[];
     try {
@@ -317,28 +351,27 @@ class VoipCallkitController extends GetxService {
         missing.add(StrRes.androidCallPermBattery);
       }
     } catch (_) {}
-
-    var hibernationOn = false;
-    try {
-      hibernationOn = await unusedAppRestrictionsEnabled();
-      if (hibernationOn) {
-        missing.add(StrRes.androidCallPermHibernation);
-      }
-    } catch (e, s) {
-      Logger.print('unusedAppRestrictions check failed: $e $s');
+    if (hibernationOn) {
+      missing.add(StrRes.androidCallPermHibernation);
+    }
+    final hardMissing = List<String>.from(missing);
+    if (hasAutostart && !_oemAutostartVisited) {
+      missing.add(_autostartLabelFor(family));
     }
 
-    final detectableMissing = List<String>.from(missing);
-    missing.add(StrRes.androidCallPermAutostart);
+    if (missing.isEmpty) {
+      Logger.print('android call perm guide skipped (nothing for $family)');
+      return;
+    }
 
     final last = DataSp.getAndroidCallPermPromptAt();
     final now = DateTime.now().millisecondsSinceEpoch;
     const cooldownMs = 3 * 24 * 60 * 60 * 1000;
     if (!continueAfterSettings &&
-        detectableMissing.isEmpty &&
+        hardMissing.isEmpty &&
         last > 0 &&
         now - last < cooldownMs) {
-      Logger.print('android call perm guide skipped (cooldown)');
+      Logger.print('android call perm guide skipped (cooldown) family=$family');
       return;
     }
 
@@ -349,6 +382,7 @@ class VoipCallkitController extends GetxService {
     }
 
     final body = sprintf(StrRes.androidCallPermBody, [missing.join('\n')]);
+    final showAutostart = hasAutostart && !_oemAutostartVisited;
 
     await showDialog<void>(
       context: ctx,
@@ -369,14 +403,16 @@ class VoipCallkitController extends GetxService {
               },
               child: Text(StrRes.androidCallPermLater),
             ),
-            TextButton(
-              onPressed: () {
-                _awaitingCallPermSettings = true;
-                Navigator.of(dialogCtx).pop();
-                unawaited(openAutostartSettings());
-              },
-              child: Text(StrRes.androidCallPermOpenAutostart),
-            ),
+            if (showAutostart)
+              TextButton(
+                onPressed: () {
+                  _awaitingCallPermSettings = true;
+                  _oemAutostartVisited = true;
+                  Navigator.of(dialogCtx).pop();
+                  unawaited(openAutostartSettings());
+                },
+                child: Text(StrRes.androidCallPermOpenAutostart),
+              ),
             TextButton(
               onPressed: () {
                 _awaitingCallPermSettings = true;

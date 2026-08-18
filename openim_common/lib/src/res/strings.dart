@@ -1266,6 +1266,16 @@ class StrRes {
   static String get androidCallPermHibernation =>
       'androidCallPermHibernation'.tr;
   static String get androidCallPermAutostart => 'androidCallPermAutostart'.tr;
+  static String get androidCallPermAutostartXiaomi =>
+      'androidCallPermAutostartXiaomi'.tr;
+  static String get androidCallPermAutostartHuawei =>
+      'androidCallPermAutostartHuawei'.tr;
+  static String get androidCallPermAutostartOppo =>
+      'androidCallPermAutostartOppo'.tr;
+  static String get androidCallPermAutostartVivo =>
+      'androidCallPermAutostartVivo'.tr;
+  static String get androidCallPermAutostartMeizu =>
+      'androidCallPermAutostartMeizu'.tr;
   static String get androidCallPermOpenHibernation =>
       'androidCallPermOpenHibernation'.tr;
   static String get androidCallPermOpenAutostart =>
