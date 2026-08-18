@@ -261,10 +261,38 @@ class VoipCallkitController extends GetxService {
     }
   }
 
+  bool _awaitingCallPermSettings = false;
+  bool _callPermPromptInFlight = false;
+
   /// After login: request runtime perms, then guide user to Settings if still missing.
-  /// Dialog at most once every 3 days to avoid nagging.
-  Future<void> promptAndroidCallPermissionsIfNeeded() async {
+  /// Returning from Settings continues with whatever is still off.
+  /// "Later" starts a 3-day cooldown only when nothing detectable is missing.
+  Future<void> promptAndroidCallPermissionsIfNeeded({
+    bool continueAfterSettings = false,
+  }) async {
     if (!Platform.isAndroid) return;
+    if (_callPermPromptInFlight) return;
+    _callPermPromptInFlight = true;
+    try {
+      await _promptAndroidCallPermissionsIfNeeded(continueAfterSettings);
+    } finally {
+      _callPermPromptInFlight = false;
+    }
+  }
+
+  /// User came back from system Settings — keep guiding remaining items.
+  Future<void> onReturnedFromSettings() async {
+    if (!Platform.isAndroid) return;
+    if (!_awaitingCallPermSettings) return;
+    await Future<void>.delayed(const Duration(milliseconds: 700));
+    if (!_awaitingCallPermSettings) return;
+    _awaitingCallPermSettings = false;
+    await promptAndroidCallPermissionsIfNeeded(continueAfterSettings: true);
+  }
+
+  Future<void> _promptAndroidCallPermissionsIfNeeded(
+    bool continueAfterSettings,
+  ) async {
     await ensureAndroidCallPermissions();
 
     final missing = <String>[];
@@ -300,17 +328,19 @@ class VoipCallkitController extends GetxService {
       Logger.print('unusedAppRestrictions check failed: $e $s');
     }
 
+    final detectableMissing = List<String>.from(missing);
+    missing.add(StrRes.androidCallPermAutostart);
+
     final last = DataSp.getAndroidCallPermPromptAt();
     final now = DateTime.now().millisecondsSinceEpoch;
     const cooldownMs = 3 * 24 * 60 * 60 * 1000;
-    final firstPrompt = last <= 0;
-    if (missing.isEmpty && !firstPrompt) return;
-    if (last > 0 && now - last < cooldownMs && !firstPrompt) {
-      Logger.print('android call perm guide skipped (cooldown), missing=$missing');
+    if (!continueAfterSettings &&
+        detectableMissing.isEmpty &&
+        last > 0 &&
+        now - last < cooldownMs) {
+      Logger.print('android call perm guide skipped (cooldown)');
       return;
     }
-
-    missing.add(StrRes.androidCallPermAutostart);
 
     final ctx = Get.context ?? Get.overlayContext;
     if (ctx == null) {
@@ -318,7 +348,6 @@ class VoipCallkitController extends GetxService {
       return;
     }
 
-    await DataSp.putAndroidCallPermPromptAt(now);
     final body = sprintf(StrRes.androidCallPermBody, [missing.join('\n')]);
 
     await showDialog<void>(
@@ -333,11 +362,16 @@ class VoipCallkitController extends GetxService {
           ),
           actions: [
             TextButton(
-              onPressed: () => Navigator.of(dialogCtx).pop(),
+              onPressed: () {
+                unawaited(DataSp.putAndroidCallPermPromptAt(
+                    DateTime.now().millisecondsSinceEpoch));
+                Navigator.of(dialogCtx).pop();
+              },
               child: Text(StrRes.androidCallPermLater),
             ),
             TextButton(
               onPressed: () {
+                _awaitingCallPermSettings = true;
                 Navigator.of(dialogCtx).pop();
                 unawaited(openAutostartSettings());
               },
@@ -345,6 +379,7 @@ class VoipCallkitController extends GetxService {
             ),
             TextButton(
               onPressed: () {
+                _awaitingCallPermSettings = true;
                 Navigator.of(dialogCtx).pop();
                 if (hibernationOn) {
                   unawaited(openUnusedAppSettings());

@@ -140,6 +140,8 @@ class AppController extends GetxController
       // After "Allow Notifications", push SDKs may stamp a stale badge — wipe if logged out.
       if (!_hasLoginSession) {
         clearBadgeForLoggedOut();
+      } else if (Platform.isAndroid) {
+        unawaited(VoipCallkitController.toOrNull?.onReturnedFromSettings());
       }
     } else if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.inactive ||
