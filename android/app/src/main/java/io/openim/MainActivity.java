@@ -1,5 +1,6 @@
 package io.openim;
 
+import android.app.ActivityManager;
 import android.app.KeyguardManager;
 import android.content.ComponentName;
 import android.content.Context;
@@ -8,6 +9,8 @@ import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.PowerManager;
 import android.os.SystemClock;
 import android.provider.Settings;
@@ -16,7 +19,9 @@ import android.content.SharedPreferences;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.lifecycle.Lifecycle;
 
+import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -24,6 +29,7 @@ import java.util.Locale;
 import java.util.Map;
 
 import io.flutter.embedding.android.FlutterFragmentActivity;
+import io.flutter.embedding.android.RenderMode;
 import io.flutter.embedding.engine.FlutterEngine;
 import io.flutter.plugin.common.MethodChannel;
 
@@ -31,17 +37,46 @@ public class MainActivity extends FlutterFragmentActivity {
     private static final String VOIP_CHANNEL = "top.hangxun.app/voip";
     private static final String PREFS = "hangxun";
     private static final String PREF_LOGIN = "hasLoginSession";
-    /** After this long in the background, the Flutter GPU/JNI surface is often dead. */
-    private static final long STALE_AFTER_MS = 4 * 60 * 1000L;
+    /** Drop the Flutter view before OEM GPU reset; IM keep-alive stays. */
+    private static final long DISCARD_UI_AFTER_MS = 45_000L;
+    /** Fallback if SCREEN_OFF never arrives (home / recents for a long time). */
+    private static final long STALE_AFTER_MS = 60_000L;
 
+    private static WeakReference<MainActivity> current;
+
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private final Runnable discardUiRunnable = this::discardStoppedUiNow;
     private long stoppedAtElapsed;
     private boolean abandonThisInstance;
+    private boolean callUiActive;
 
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
+        current = new WeakReference<>(this);
         // Restoring a frozen Flutter fragment after a long lock crashes on arm64.
         super.onCreate(null);
         applyLockScreenPolicy(getIntent());
+    }
+
+    @Override
+    @NonNull
+    public RenderMode getRenderMode() {
+        // TextureView survives brief lock better than SurfaceView on Mali/Adreno.
+        return RenderMode.texture;
+    }
+
+    public static void onScreenOff() {
+        MainActivity a = peek();
+        if (a != null) a.scheduleDiscardUi();
+    }
+
+    public static void onScreenOn() {
+        MainActivity a = peek();
+        if (a != null && a.isUiStarted()) a.cancelDiscardUi();
+    }
+
+    private static MainActivity peek() {
+        return current == null ? null : current.get();
     }
 
     @Override
@@ -93,6 +128,12 @@ public class MainActivity extends FlutterFragmentActivity {
     }
 
     @Override
+    protected void onStart() {
+        cancelDiscardUi();
+        super.onStart();
+    }
+
+    @Override
     protected void onPause() {
         super.onPause();
         if (hasLoginSession()) {
@@ -107,6 +148,73 @@ public class MainActivity extends FlutterFragmentActivity {
         if (hasLoginSession()) {
             ImKeepAliveService.start(getApplicationContext());
         }
+        scheduleDiscardUi();
+    }
+
+    @Override
+    public void onTrimMemory(int level) {
+        super.onTrimMemory(level);
+        if (level >= TRIM_MEMORY_COMPLETE || level == TRIM_MEMORY_RUNNING_CRITICAL) {
+            discardStoppedUiNow();
+        } else if (level >= TRIM_MEMORY_UI_HIDDEN) {
+            scheduleDiscardUi();
+        }
+    }
+
+    @Override
+    protected void onDestroy() {
+        cancelDiscardUi();
+        if (current != null && current.get() == this) {
+            current.clear();
+        }
+        super.onDestroy();
+    }
+
+    private void scheduleDiscardUi() {
+        mainHandler.removeCallbacks(discardUiRunnable);
+        if (abandonThisInstance || isFinishing() || isCallActive()) return;
+        mainHandler.postDelayed(discardUiRunnable, DISCARD_UI_AFTER_MS);
+    }
+
+    private void cancelDiscardUi() {
+        mainHandler.removeCallbacks(discardUiRunnable);
+    }
+
+    /** Tear down Flutter while it is still valid. Next tap creates a new engine. */
+    private void discardStoppedUiNow() {
+        if (abandonThisInstance || isFinishing()) return;
+        if (isUiStarted() || isCallActive()) return;
+        abandonThisInstance = true;
+        try {
+            finish();
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private boolean isUiStarted() {
+        try {
+            return getLifecycle().getCurrentState().isAtLeast(Lifecycle.State.STARTED);
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    @SuppressWarnings("deprecation")
+    private boolean isCallActive() {
+        if (callUiActive) return true;
+        if (isCallIntent(getIntent())) return true;
+        try {
+            ActivityManager am = (ActivityManager) getSystemService(ACTIVITY_SERVICE);
+            if (am == null) return false;
+            for (ActivityManager.RunningServiceInfo info : am.getRunningServices(32)) {
+                String n = info.service != null ? info.service.getClassName() : "";
+                if (n.contains("IsolateHolderService") || n.contains("CallService")) {
+                    return true;
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return false;
     }
 
     @Override
@@ -185,6 +293,10 @@ public class MainActivity extends FlutterFragmentActivity {
                             break;
                         case "stopImKeepAlive":
                             ImKeepAliveService.stop(getApplicationContext());
+                            result.success(true);
+                            break;
+                        case "setCallUiActive":
+                            callUiActive = Boolean.TRUE.equals(call.argument("active"));
                             result.success(true);
                             break;
                         default:

@@ -72,6 +72,13 @@ class CallAudioKeepAlive with WidgetsBindingObserver {
     }
   }
 
+  static Future<void> _setNativeCallUiActive(bool active) async {
+    if (!Platform.isAndroid) return;
+    try {
+      await _voipChannel.invokeMethod('setCallUiActive', {'active': active});
+    } catch (_) {}
+  }
+
   void releaseCallKitSession() {
     _callKitOwnsSession = false;
     CallAudioDebugLog.add('keepalive', 'releaseCallKitSession');
@@ -147,6 +154,7 @@ class CallAudioKeepAlive with WidgetsBindingObserver {
     }
     _active = true;
     WidgetsBinding.instance.addObserver(this);
+    await _setNativeCallUiActive(true);
     if (!_callKitOwnsSession && !skipSessionActivation) {
       await _activateCallSession(preferSpeaker: speakerOn);
     }
@@ -172,6 +180,7 @@ class CallAudioKeepAlive with WidgetsBindingObserver {
     _callKitOwnsSession = false;
     _roomID = null;
     WidgetsBinding.instance.removeObserver(this);
+    await _setNativeCallUiActive(false);
     await _interruptionSub?.cancel();
     _interruptionSub = null;
     onNeedRepublishMic = null;

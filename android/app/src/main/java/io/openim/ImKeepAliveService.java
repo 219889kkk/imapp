@@ -5,8 +5,10 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
+import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.pm.ServiceInfo;
 import android.net.wifi.WifiManager;
 import android.os.Build;
@@ -34,6 +36,7 @@ public class ImKeepAliveService extends Service {
     private WifiManager.WifiLock wifiLock;
     private HandlerThread pokeThread;
     private Handler pokeHandler;
+    private BroadcastReceiver screenReceiver;
     private final Runnable pokeRunnable = new Runnable() {
         @Override
         public void run() {
@@ -102,6 +105,7 @@ public class ImKeepAliveService extends Service {
             }
             acquireLocks();
             startPoke();
+            registerScreenReceiver();
         } catch (Throwable t) {
             Log.e(TAG, "foreground start failed", t);
             stopSelf();
@@ -124,9 +128,50 @@ public class ImKeepAliveService extends Service {
 
     @Override
     public void onDestroy() {
+        unregisterScreenReceiver();
         stopPoke();
         releaseLocks();
         super.onDestroy();
+    }
+
+    private void registerScreenReceiver() {
+        if (screenReceiver != null) return;
+        screenReceiver = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                if (intent == null) return;
+                String action = intent.getAction();
+                if (Intent.ACTION_SCREEN_OFF.equals(action)) {
+                    MainActivity.onScreenOff();
+                } else if (Intent.ACTION_SCREEN_ON.equals(action)
+                        || Intent.ACTION_USER_PRESENT.equals(action)) {
+                    MainActivity.onScreenOn();
+                }
+            }
+        };
+        IntentFilter filter = new IntentFilter();
+        filter.addAction(Intent.ACTION_SCREEN_OFF);
+        filter.addAction(Intent.ACTION_SCREEN_ON);
+        filter.addAction(Intent.ACTION_USER_PRESENT);
+        try {
+            if (Build.VERSION.SDK_INT >= 33) {
+                registerReceiver(screenReceiver, filter, Context.RECEIVER_EXPORTED);
+            } else {
+                registerReceiver(screenReceiver, filter);
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "screen receiver failed", t);
+            screenReceiver = null;
+        }
+    }
+
+    private void unregisterScreenReceiver() {
+        if (screenReceiver == null) return;
+        try {
+            unregisterReceiver(screenReceiver);
+        } catch (Throwable ignored) {
+        }
+        screenReceiver = null;
     }
 
     private void startPoke() {
