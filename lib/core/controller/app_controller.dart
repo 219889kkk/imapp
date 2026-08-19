@@ -160,13 +160,19 @@ class AppController extends GetxController
     _syncStylesTheme();
     _initPlayer();
 
-    // Overlay IPA keeps DataSp tokens + UserDefaults. Always disarm native
+    // Overlay IPA keeps DataSp tokens + UserDefaults. iOS: disarm native
     // badge until IM login succeeds — otherwise 未登录桌面图标会显示未读数.
-    // Getui SDK must not start here (see PushController). iOS APNs registration
-    // waits until IM login so queued payloads cannot stamp the login-screen icon.
-    SessionGuard.markLoggedOut();
-    unawaited(syncNativeLoginHint(false));
-    clearBadgeForLoggedOut();
+    // Android: do not stop the IM keep-alive FGS here. Engine restart after
+    // a long lock still has tokens; killing FGS then re-init used to crash.
+    final hasSession = (DataSp.userID?.trim().isNotEmpty ?? false) &&
+        (DataSp.imToken?.trim().isNotEmpty ?? false);
+    if (Platform.isIOS || !hasSession) {
+      SessionGuard.markLoggedOut();
+      unawaited(syncNativeLoginHint(false));
+      clearBadgeForLoggedOut();
+    } else {
+      unawaited(syncNativeLoginHint(true));
+    }
 
     final initializationSettings = InitializationSettings(
       android: initializationSettingsAndroid,

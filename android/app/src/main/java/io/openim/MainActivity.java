@@ -7,12 +7,15 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Build;
+import android.os.Bundle;
 import android.os.PowerManager;
+import android.os.SystemClock;
 import android.provider.Settings;
 
 import android.content.SharedPreferences;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -22,33 +25,71 @@ import java.util.Map;
 
 import io.flutter.embedding.android.FlutterFragmentActivity;
 import io.flutter.embedding.engine.FlutterEngine;
-import io.flutter.embedding.engine.FlutterEngineCache;
-import io.flutter.embedding.engine.dart.DartExecutor;
 import io.flutter.plugin.common.MethodChannel;
-import io.flutter.plugins.GeneratedPluginRegistrant;
 
 public class MainActivity extends FlutterFragmentActivity {
     private static final String VOIP_CHANNEL = "top.hangxun.app/voip";
-    private static final String ENGINE_ID = "hangxun_engine";
     private static final String PREFS = "hangxun";
     private static final String PREF_LOGIN = "hasLoginSession";
+    /** After this long in the background, the Flutter GPU/JNI surface is often dead. */
+    private static final long STALE_AFTER_MS = 4 * 60 * 1000L;
+
+    private long stoppedAtElapsed;
+    private boolean abandonThisInstance;
 
     @Override
-    public FlutterEngine provideFlutterEngine(@NonNull android.content.Context context) {
-        FlutterEngineCache cache = FlutterEngineCache.getInstance();
-        FlutterEngine engine = cache.get(ENGINE_ID);
-        if (engine != null) return engine;
-        engine = new FlutterEngine(context.getApplicationContext());
-        GeneratedPluginRegistrant.registerWith(engine);
-        engine.getDartExecutor().executeDartEntrypoint(
-                DartExecutor.DartEntrypoint.createDefault());
-        cache.put(ENGINE_ID, engine);
-        return engine;
+    protected void onCreate(@Nullable Bundle savedInstanceState) {
+        // Restoring a frozen Flutter fragment after a long lock crashes on arm64.
+        super.onCreate(null);
+        applyLockScreenPolicy(getIntent());
+    }
+
+    @Override
+    protected void onNewIntent(@NonNull Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        applyLockScreenPolicy(intent);
+    }
+
+    /**
+     * Always-on showWhenLocked draws Flutter over the keyguard. After a long
+     * lock that surface is invalid and tapping the keep-alive notification
+     * SIGSEGVs. Only cover the lock screen for an actual incoming call.
+     */
+    private void applyLockScreenPolicy(@Nullable Intent intent) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O_MR1) return;
+        boolean call = isCallIntent(intent);
+        try {
+            setShowWhenLocked(call);
+            setTurnScreenOn(call);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private boolean isCallIntent(@Nullable Intent intent) {
+        if (intent == null) return false;
+        if (intent.hasExtra("EXTRA_CALLKIT_ID")
+                || intent.hasExtra("EXTRA_CALLKIT_NAME_CALLER")
+                || intent.hasExtra("id")) {
+            return true;
+        }
+        String action = intent.getAction();
+        if (action != null) {
+            String lower = action.toLowerCase(Locale.US);
+            if (lower.contains("callkit") || lower.contains("incoming_call")) return true;
+        }
+        Uri data = intent.getData();
+        return data != null && String.valueOf(data).toLowerCase(Locale.US).contains("call");
     }
 
     @Override
     public boolean shouldDestroyEngineWithHost() {
-        return false;
+        return true;
+    }
+
+    @Override
+    public boolean shouldAttachEngineToActivity() {
+        return !abandonThisInstance;
     }
 
     @Override
@@ -61,10 +102,39 @@ public class MainActivity extends FlutterFragmentActivity {
 
     @Override
     protected void onStop() {
+        stoppedAtElapsed = SystemClock.elapsedRealtime();
         super.onStop();
         if (hasLoginSession()) {
             ImKeepAliveService.start(getApplicationContext());
         }
+    }
+
+    @Override
+    protected void onRestart() {
+        long gone = stoppedAtElapsed <= 0
+                ? 0
+                : SystemClock.elapsedRealtime() - stoppedAtElapsed;
+        if (gone >= STALE_AFTER_MS && !isFinishing()) {
+            // Skip attaching the stale FlutterView, then cold-start a new Activity.
+            abandonThisInstance = true;
+            Intent intent = new Intent(this, MainActivity.class);
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+            Intent src = getIntent();
+            if (src != null) {
+                if (src.getExtras() != null) intent.putExtras(src);
+                intent.setData(src.getData());
+                if (src.getAction() != null) intent.setAction(src.getAction());
+            }
+            super.onRestart();
+            try {
+                startActivity(intent);
+            } catch (Throwable ignored) {
+            }
+            finish();
+            overridePendingTransition(0, 0);
+            return;
+        }
+        super.onRestart();
     }
 
     private boolean hasLoginSession() {

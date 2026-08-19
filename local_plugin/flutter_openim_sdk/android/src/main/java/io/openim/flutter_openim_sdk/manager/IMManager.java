@@ -13,16 +13,37 @@ import open_im_sdk.Open_im_sdk;
 public class IMManager extends BaseManager {
 
     public void initSDK(MethodCall methodCall, MethodChannel.Result result) {
-        boolean initialized = Open_im_sdk.initSDK(
-                new OnConnListener(),
-                value(methodCall, "operationID"),
-                jsonValue(methodCall));
+        // Flutter Activity may restart after a long lock while this process
+        // (keep-alive FGS) is still alive. Double-init of the gomobile SDK
+        // native-crashes on arm64.
+        if (FlutterOpenimSdkPlugin.isInitialized) {
+            try {
+                Open_im_sdk.unInitSDK(String.valueOf(System.currentTimeMillis()));
+            } catch (Throwable ignored) {
+            }
+            FlutterOpenimSdkPlugin.isInitialized = false;
+        }
+        boolean initialized = false;
+        try {
+            initialized = Open_im_sdk.initSDK(
+                    new OnConnListener(),
+                    value(methodCall, "operationID"),
+                    jsonValue(methodCall));
+        } catch (Throwable t) {
+            android.util.Log.e("OpenIM", "initSDK failed", t);
+        }
         FlutterOpenimSdkPlugin.isInitialized = initialized;
         CommonUtil.runMainThreadReturn(result, initialized);
     }
 
     public void unInitSDK(MethodCall methodCall, MethodChannel.Result result) {
-        Open_im_sdk.unInitSDK(value(methodCall, "operationID"));
+        try {
+            Open_im_sdk.unInitSDK(value(methodCall, "operationID"));
+        } catch (Throwable ignored) {
+        } finally {
+            FlutterOpenimSdkPlugin.isInitialized = false;
+        }
+        CommonUtil.runMainThreadReturn(result, null);
     }
 
     public void login(MethodCall methodCall, MethodChannel.Result result) {

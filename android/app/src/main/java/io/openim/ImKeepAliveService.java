@@ -111,6 +111,18 @@ public class ImKeepAliveService extends Service {
     }
 
     @Override
+    public void onTimeout(int startId, int fgsType) {
+        Log.w(TAG, "foreground timeout type=" + fgsType);
+        try {
+            stopPoke();
+            releaseLocks();
+            stopForeground(true);
+        } catch (Throwable ignored) {
+        }
+        stopSelf();
+    }
+
+    @Override
     public void onDestroy() {
         stopPoke();
         releaseLocks();
