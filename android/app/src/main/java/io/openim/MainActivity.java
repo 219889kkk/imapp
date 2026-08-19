@@ -31,21 +31,26 @@ import java.util.Map;
 import io.flutter.embedding.android.FlutterFragmentActivity;
 import io.flutter.embedding.android.RenderMode;
 import io.flutter.embedding.engine.FlutterEngine;
+import io.flutter.embedding.engine.FlutterEngineCache;
+import io.flutter.embedding.engine.dart.DartExecutor;
 import io.flutter.plugin.common.MethodChannel;
+import io.flutter.plugins.GeneratedPluginRegistrant;
 
 public class MainActivity extends FlutterFragmentActivity {
     private static final String VOIP_CHANNEL = "top.hangxun.app/voip";
+    private static final String ENGINE_ID = "hangxun_engine";
     private static final String PREFS = "hangxun";
     private static final String PREF_LOGIN = "hasLoginSession";
-    /** Drop the Flutter view before OEM GPU reset; IM keep-alive stays. */
-    private static final long DISCARD_UI_AFTER_MS = 45_000L;
-    /** Fallback if SCREEN_OFF never arrives (home / recents for a long time). */
-    private static final long STALE_AFTER_MS = 60_000L;
+    /**
+     * After this long stopped, the stale GPU surface will crash on resume.
+     * Restart the Activity transparently so it gets a new surface.
+     * The engine/dart is kept alive in FlutterEngineCache — IM WS stays connected.
+     */
+    private static final long STALE_SURFACE_MS = 4 * 60 * 1000L;
 
     private static WeakReference<MainActivity> current;
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
-    private final Runnable discardUiRunnable = this::discardStoppedUiNow;
     private long stoppedAtElapsed;
     private boolean abandonThisInstance;
     private boolean callUiActive;
@@ -117,20 +122,37 @@ public class MainActivity extends FlutterFragmentActivity {
         return data != null && String.valueOf(data).toLowerCase(Locale.US).contains("call");
     }
 
+    /**
+     * Keep the Dart/engine alive in cache so the IM WebSocket stays connected
+     * after the Activity is gone (lock, home, recents).
+     * The Activity will be recreated on next tap; the engine is reused.
+     */
+    @Override
+    public FlutterEngine provideFlutterEngine(@NonNull android.content.Context context) {
+        FlutterEngineCache cache = FlutterEngineCache.getInstance();
+        FlutterEngine engine = cache.get(ENGINE_ID);
+        if (engine == null) {
+            engine = new FlutterEngine(context.getApplicationContext());
+            GeneratedPluginRegistrant.registerWith(engine);
+            engine.getDartExecutor().executeDartEntrypoint(
+                    DartExecutor.DartEntrypoint.createDefault());
+            cache.put(ENGINE_ID, engine);
+        }
+        return engine;
+    }
+
+    /**
+     * Never destroy the cached engine when the Activity is destroyed.
+     * The engine keeps the Dart isolate + IM WebSocket alive.
+     */
     @Override
     public boolean shouldDestroyEngineWithHost() {
-        return true;
+        return false;
     }
 
     @Override
     public boolean shouldAttachEngineToActivity() {
         return !abandonThisInstance;
-    }
-
-    @Override
-    protected void onStart() {
-        cancelDiscardUi();
-        super.onStart();
     }
 
     @Override
@@ -148,73 +170,14 @@ public class MainActivity extends FlutterFragmentActivity {
         if (hasLoginSession()) {
             ImKeepAliveService.start(getApplicationContext());
         }
-        scheduleDiscardUi();
-    }
-
-    @Override
-    public void onTrimMemory(int level) {
-        super.onTrimMemory(level);
-        if (level >= TRIM_MEMORY_COMPLETE || level == TRIM_MEMORY_RUNNING_CRITICAL) {
-            discardStoppedUiNow();
-        } else if (level >= TRIM_MEMORY_UI_HIDDEN) {
-            scheduleDiscardUi();
-        }
     }
 
     @Override
     protected void onDestroy() {
-        cancelDiscardUi();
         if (current != null && current.get() == this) {
             current.clear();
         }
         super.onDestroy();
-    }
-
-    private void scheduleDiscardUi() {
-        mainHandler.removeCallbacks(discardUiRunnable);
-        if (abandonThisInstance || isFinishing() || isCallActive()) return;
-        mainHandler.postDelayed(discardUiRunnable, DISCARD_UI_AFTER_MS);
-    }
-
-    private void cancelDiscardUi() {
-        mainHandler.removeCallbacks(discardUiRunnable);
-    }
-
-    /** Tear down Flutter while it is still valid. Next tap creates a new engine. */
-    private void discardStoppedUiNow() {
-        if (abandonThisInstance || isFinishing()) return;
-        if (isUiStarted() || isCallActive()) return;
-        abandonThisInstance = true;
-        try {
-            finish();
-        } catch (Throwable ignored) {
-        }
-    }
-
-    private boolean isUiStarted() {
-        try {
-            return getLifecycle().getCurrentState().isAtLeast(Lifecycle.State.STARTED);
-        } catch (Throwable t) {
-            return false;
-        }
-    }
-
-    @SuppressWarnings("deprecation")
-    private boolean isCallActive() {
-        if (callUiActive) return true;
-        if (isCallIntent(getIntent())) return true;
-        try {
-            ActivityManager am = (ActivityManager) getSystemService(ACTIVITY_SERVICE);
-            if (am == null) return false;
-            for (ActivityManager.RunningServiceInfo info : am.getRunningServices(32)) {
-                String n = info.service != null ? info.service.getClassName() : "";
-                if (n.contains("IsolateHolderService") || n.contains("CallService")) {
-                    return true;
-                }
-            }
-        } catch (Throwable ignored) {
-        }
-        return false;
     }
 
     @Override
@@ -222,8 +185,9 @@ public class MainActivity extends FlutterFragmentActivity {
         long gone = stoppedAtElapsed <= 0
                 ? 0
                 : SystemClock.elapsedRealtime() - stoppedAtElapsed;
-        if (gone >= STALE_AFTER_MS && !isFinishing()) {
-            // Skip attaching the stale FlutterView, then cold-start a new Activity.
+        if (gone >= STALE_SURFACE_MS && !isFinishing() && !isCallActive()) {
+            // The GPU surface is likely stale. Restart the Activity so Flutter
+            // gets a fresh surface — but the cached engine stays alive (WS connected).
             abandonThisInstance = true;
             Intent intent = new Intent(this, MainActivity.class);
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
@@ -243,6 +207,24 @@ public class MainActivity extends FlutterFragmentActivity {
             return;
         }
         super.onRestart();
+    }
+
+    @SuppressWarnings("deprecation")
+    private boolean isCallActive() {
+        if (callUiActive) return true;
+        if (isCallIntent(getIntent())) return true;
+        try {
+            ActivityManager am = (ActivityManager) getSystemService(ACTIVITY_SERVICE);
+            if (am == null) return false;
+            for (ActivityManager.RunningServiceInfo info : am.getRunningServices(32)) {
+                String n = info.service != null ? info.service.getClassName() : "";
+                if (n.contains("IsolateHolderService") || n.contains("CallService")) {
+                    return true;
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return false;
     }
 
     private boolean hasLoginSession() {
