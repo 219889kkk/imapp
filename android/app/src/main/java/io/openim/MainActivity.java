@@ -70,16 +70,6 @@ public class MainActivity extends FlutterFragmentActivity {
         return RenderMode.texture;
     }
 
-    public static void onScreenOff() {
-        MainActivity a = peek();
-        if (a != null) a.scheduleDiscardUi();
-    }
-
-    public static void onScreenOn() {
-        MainActivity a = peek();
-        if (a != null && a.isUiStarted()) a.cancelDiscardUi();
-    }
-
     private static MainActivity peek() {
         return current == null ? null : current.get();
     }

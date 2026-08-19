@@ -141,12 +141,8 @@ public class ImKeepAliveService extends Service {
             public void onReceive(Context context, Intent intent) {
                 if (intent == null) return;
                 String action = intent.getAction();
-                if (Intent.ACTION_SCREEN_OFF.equals(action)) {
-                    MainActivity.onScreenOff();
-                } else if (Intent.ACTION_SCREEN_ON.equals(action)
-                        || Intent.ACTION_USER_PRESENT.equals(action)) {
-                    MainActivity.onScreenOn();
-                }
+                // Screen events handled by MainActivity.onStop/onStart lifecycle.
+                // No-op here — keep receiver registered to avoid re-registration cost.
             }
         };
         IntentFilter filter = new IntentFilter();
