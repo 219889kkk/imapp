@@ -38,7 +38,7 @@ import io.flutter.plugins.GeneratedPluginRegistrant;
 
 public class MainActivity extends FlutterFragmentActivity {
     private static final String VOIP_CHANNEL = "top.hangxun.app/voip";
-    private static final String ENGINE_ID = "hangxun_engine";
+    public static final String ENGINE_ID = "hangxun_engine";
     private static final String PREFS = "hangxun";
     private static final String PREF_LOGIN = "hasLoginSession";
     /**

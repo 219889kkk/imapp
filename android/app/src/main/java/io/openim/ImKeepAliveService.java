@@ -15,8 +15,13 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.IBinder;
+import android.os.Looper;
 import android.os.PowerManager;
 import android.util.Log;
+
+import io.flutter.embedding.engine.FlutterEngine;
+import io.flutter.embedding.engine.FlutterEngineCache;
+import io.flutter.plugin.common.MethodChannel;
 
 
 /**
@@ -45,6 +50,7 @@ public class ImKeepAliveService extends Service {
                 poke.setPackage(getPackageName());
                 sendBroadcast(poke);
                 acquireLocks();
+                wakeFlutter();
             } catch (Throwable t) {
                 Log.w(TAG, "im poke skipped", t);
             }
@@ -96,10 +102,19 @@ public class ImKeepAliveService extends Service {
             ensureChannel();
             Notification notification = buildNotification();
             if (Build.VERSION.SDK_INT >= 34) {
-                startForeground(
-                        NOTIF_ID,
-                        notification,
-                        ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
+                try {
+                    startForeground(
+                            NOTIF_ID,
+                            notification,
+                            ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                                    | ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING);
+                } catch (Throwable t) {
+                    Log.w(TAG, "remoteMessaging FGS type unavailable, dataSync only", t);
+                    startForeground(
+                            NOTIF_ID,
+                            notification,
+                            ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
+                }
             } else {
                 startForeground(NOTIF_ID, notification);
             }
@@ -203,7 +218,7 @@ public class ImKeepAliveService extends Service {
         NotificationChannel channel = new NotificationChannel(
                 CHANNEL_ID,
                 "航讯保持连接",
-                NotificationManager.IMPORTANCE_DEFAULT);
+                NotificationManager.IMPORTANCE_HIGH);
         channel.setDescription("锁屏来电需要保持连接");
         channel.setShowBadge(false);
         channel.enableVibration(false);
@@ -232,22 +247,52 @@ public class ImKeepAliveService extends Service {
                 .setContentIntent(content)
                 .setOngoing(true)
                 .setOnlyAlertOnce(true);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            builder.setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE);
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             builder.setVisibility(Notification.VISIBILITY_PUBLIC);
-            builder.setPriority(Notification.PRIORITY_DEFAULT);
+            builder.setPriority(Notification.PRIORITY_HIGH);
         }
         return builder.build();
     }
 
+    /**
+     * Flutter pauses Dart timers after onPause. Keep the isolate schedulable
+     * and nudge IM from Dart so incoming-call UI can still be shown.
+     */
+    private void wakeFlutter() {
+        try {
+            final FlutterEngine engine =
+                    FlutterEngineCache.getInstance().get(MainActivity.ENGINE_ID);
+            if (engine == null) return;
+            new Handler(Looper.getMainLooper()).post(() -> {
+                try {
+                    engine.getLifecycleChannel().appIsInactive();
+                } catch (Throwable ignored) {
+                }
+                try {
+                    new MethodChannel(
+                            engine.getDartExecutor().getBinaryMessenger(),
+                            "top.hangxun.app/voip")
+                            .invokeMethod("keepAliveTick", null);
+                } catch (Throwable ignored) {
+                }
+            });
+        } catch (Throwable ignored) {
+        }
+    }
+
     private void acquireLocks() {
         try {
-            if (wakeLock == null || !wakeLock.isHeld()) {
-                PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
-                if (pm != null) {
+            PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+            if (pm != null) {
+                if (wakeLock == null) {
                     wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "hangxun:im");
                     wakeLock.setReferenceCounted(false);
-                    wakeLock.acquire(6 * 60 * 60 * 1000L);
                 }
+                // Re-acquire each poke so OEM Doze cannot expire the lock.
+                wakeLock.acquire(3 * 60 * 1000L);
             }
         } catch (Throwable t) {
             Log.e(TAG, "wake lock failed", t);

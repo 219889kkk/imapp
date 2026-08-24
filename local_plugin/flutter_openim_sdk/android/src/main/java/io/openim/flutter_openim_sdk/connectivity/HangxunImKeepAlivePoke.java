@@ -11,17 +11,20 @@ import io.openim.flutter_openim_sdk.FlutterOpenimSdkPlugin;
 import open_im_sdk.Open_im_sdk;
 
 /**
- * HangXun Android has no Getui. On lock, tell OpenIM we are still
- * foreground so the websocket keeps delivering.
+ * HangXun Android has no Getui. On lock, keep the IM websocket delivering.
  *
- * Do not call networkStatusChanged on a timer — that reconnects the
- * socket and the conversation list flashes 「连接中」 then refreshes.
- * Do not repeat setAppBackgroundStatus(false) while the UI is visible:
- * each call wakes a full data sync.
+ * Do not call networkStatusChanged while the UI is visible — that reconnects
+ * and the conversation list flashes 「连接中」.
+ * While locked, NAT / Doze drop the socket after a few minutes unless we
+ * actually ping native OpenIM (the 20s broadcast used to no-op after the
+ * first setAppBackgroundStatus).
  */
 public final class HangxunImKeepAlivePoke {
     public static final String ACTION = "io.openim.hangxun.POKE_IM";
     private static final String TAG = "HangxunImKeepAlive";
+    private static final long HINT_INTERVAL_MS = 90_000L;
+    private static final long RECONNECT_INTERVAL_MS = 45_000L;
+    private static final int LOGIN_LOGGED = 3;
     private static final open_im_sdk_callback.Base CALLBACK = new open_im_sdk_callback.Base() {
         @Override
         public void onError(int i, String s) {
@@ -35,13 +38,15 @@ public final class HangxunImKeepAlivePoke {
 
     private static BroadcastReceiver receiver;
     private static int startedActivities;
-    private static boolean backgroundHintSent;
+    private static long lastHintMs;
+    private static long lastReconnectMs;
 
     private HangxunImKeepAlivePoke() {}
 
     public static void onActivityStarted() {
         startedActivities++;
-        backgroundHintSent = false;
+        lastHintMs = 0;
+        lastReconnectMs = 0;
     }
 
     public static void onActivityStopped() {
@@ -49,7 +54,7 @@ public final class HangxunImKeepAlivePoke {
             startedActivities--;
         }
         if (startedActivities == 0) {
-            keepForegroundHint();
+            keepForegroundHint(true);
         }
     }
 
@@ -58,23 +63,51 @@ public final class HangxunImKeepAlivePoke {
         if (startedActivities > 0) {
             return;
         }
-        keepForegroundHint();
+        keepForegroundHint(false);
+        maybeWakeSocket();
     }
 
-    private static void keepForegroundHint() {
+    private static void keepForegroundHint(boolean force) {
         if (!FlutterOpenimSdkPlugin.isInitialized) {
             return;
         }
-        if (backgroundHintSent) {
+        long now = System.currentTimeMillis();
+        if (!force && lastHintMs > 0 && now - lastHintMs < HINT_INTERVAL_MS) {
             return;
         }
-        backgroundHintSent = true;
+        lastHintMs = now;
         try {
-            String op = String.valueOf(System.currentTimeMillis());
+            String op = String.valueOf(now);
             Open_im_sdk.setAppBackgroundStatus(CALLBACK, op, false);
         } catch (Throwable t) {
             Log.e(TAG, "foreground hint failed", t);
-            backgroundHintSent = false;
+            lastHintMs = 0;
+        }
+    }
+
+    /**
+     * Ping / reconnect the IM websocket while locked. Safe here because the
+     * conversation UI is not on screen.
+     */
+    private static void maybeWakeSocket() {
+        if (!FlutterOpenimSdkPlugin.isInitialized) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        if (lastReconnectMs > 0 && now - lastReconnectMs < RECONNECT_INTERVAL_MS) {
+            return;
+        }
+        lastReconnectMs = now;
+        try {
+            String op = String.valueOf(now);
+            long status = Open_im_sdk.getLoginStatus(op);
+            if (status != LOGIN_LOGGED) {
+                Log.i(TAG, "login status " + status + ", waking socket");
+            }
+            Open_im_sdk.networkStatusChanged(CALLBACK, op);
+        } catch (Throwable t) {
+            Log.e(TAG, "socket wake failed", t);
+            lastReconnectMs = 0;
         }
     }
 

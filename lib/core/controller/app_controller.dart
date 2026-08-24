@@ -157,6 +157,13 @@ class AppController extends GetxController
   @override
   void onInit() async {
     WidgetsBinding.instance.addObserver(this);
+    _voipChannel.setMethodCallHandler((call) async {
+      if (call.method == 'keepAliveTick') {
+        unawaited(_nudgeImConnection());
+        return true;
+      }
+      return null;
+    });
     _syncStylesTheme();
     _initPlayer();
 
