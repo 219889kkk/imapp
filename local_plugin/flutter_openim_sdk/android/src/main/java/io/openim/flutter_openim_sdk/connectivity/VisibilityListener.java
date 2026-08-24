@@ -47,6 +47,7 @@ public class VisibilityListener implements Application.ActivityLifecycleCallback
     @Override
     public void onActivityStarted(@NonNull Activity activity) {
         Log.i("VisibilityListener", "onActivityStarted");
+        if (isNativeCallUi(activity)) return;
         HangxunImKeepAlivePoke.onActivityStarted();
     }
 
@@ -63,7 +64,12 @@ public class VisibilityListener implements Application.ActivityLifecycleCallback
     @Override
     public void onActivityStopped(@NonNull Activity activity) {
         Log.i("VisibilityListener", "onActivityStopped");
+        if (isNativeCallUi(activity)) return;
         HangxunImKeepAlivePoke.onActivityStopped();
+    }
+
+    private static boolean isNativeCallUi(Activity activity) {
+        return activity.getClass().getName().contains("IncomingCallActivity");
     }
 
     @Override

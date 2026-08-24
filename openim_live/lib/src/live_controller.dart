@@ -871,10 +871,34 @@ mixin OpenIMLive {
       _markCallKitAcceptClock(roomID);
       _armCallKitAcceptSettle(roomID);
     }
+    _activeCallSignaling = resolved;
     signalingSubject.add(CallEvent(CallState.connecting, resolved));
     unawaited(_promoteTalkingWhenMediaReady(resolved));
     CallAudioDebugLog.add('callkit', 'accept join roomID=$roomID');
     unawaited(_callKitAcceptAndJoin(resolved));
+    if (Platform.isAndroid) {
+      unawaited(_presentCallUiWhenOverlayReady(resolved));
+    }
+  }
+
+  /// Native lock-screen accept often runs before Get.overlayContext exists.
+  Future<void> _presentCallUiWhenOverlayReady(SignalingInfo signaling) async {
+    final roomID = signaling.invitation?.roomID?.trim() ?? '';
+    for (var i = 0; i < 40; i++) {
+      if (roomID.isNotEmpty && _isRoomEnded(roomID)) return;
+      final client = OpenIMLiveClient();
+      if (client.hasOverlay) {
+        _promoteOverlayToInCall(signaling);
+        return;
+      }
+      final ctx = Get.overlayContext;
+      if (ctx != null && ctx.mounted) {
+        _presentCallUi(signaling, fromHeadless: true);
+        if (OpenIMLiveClient().hasOverlay) return;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+    }
+    Logger.print('present call UI gave up waiting for overlay roomID=$roomID');
   }
 
   Future<void> _callKitAcceptAndJoin(SignalingInfo signaling) async {
@@ -1207,10 +1231,11 @@ mixin OpenIMLive {
   /// Foreground: attach in-app UI. Keep CallKit while joining/in-call so
   /// Safari/browser accept does not tear down the audio session.
   Future<void> _onIosForegroundResume() async {
-    if (!Platform.isIOS) return;
     final voip = VoipCallkitController.toOrNull;
-    await voip?.refreshInHangXunForeground();
-    await voip?.refreshEndedRoomsFromNative();
+    if (Platform.isIOS) {
+      await voip?.refreshInHangXunForeground();
+      await voip?.refreshEndedRoomsFromNative();
+    }
     final endedRoom = _activeCallSignaling?.invitation?.roomID?.trim() ??
         OpenIMLiveClient().currentRoomID?.trim() ??
         '';
@@ -1321,6 +1346,12 @@ mixin OpenIMLive {
       final callKitUp = voip?.ownsIncomingUi == true ||
           (pendingRoom.isNotEmpty && voip?.incomingRoomID == pendingRoom);
       if (!callKitUp) {
+        if (Platform.isAndroid) {
+          // Native IncomingCallActivity is not CallKit. Keep pending until
+          // accept/reject; never treat resume as a missed call.
+          _beCalledEvent = pending;
+          return;
+        }
         // CallKit already gone (timeout/miss). Do not replay in-app invite.
         CallAudioDebugLog.add(
             'fg', 'unanswered but CallKit gone — miss cleanup roomID=$pendingRoom');
@@ -1366,6 +1397,12 @@ mixin OpenIMLive {
       final leftoverKit = voip?.ownsIncomingUi == true ||
           (activeRoom.isNotEmpty && voip?.incomingRoomID == activeRoom);
       if (!leftoverKit) {
+        if (Platform.isAndroid) {
+          CallAudioDebugLog.add(
+              'fg', 'android leftover — wait overlay attach roomID=$activeRoom');
+          unawaited(_presentCallUiWhenOverlayReady(active));
+          return;
+        }
         CallAudioDebugLog.add(
             'fg', 'unanswered leftover CallKit gone — miss cleanup roomID=$activeRoom');
         unawaited(_notifyCallerInviteStopped(active));
@@ -1973,10 +2010,11 @@ mixin OpenIMLive {
 
     final mediaType = signaling.invitation?.mediaType;
     final sessionType = signaling.invitation?.sessionType;
-    final callType = mediaType == 'audio' ? CallType.audio : CallType.video;
-    final callObj = sessionType == ConversationType.single
-        ? CallObj.single
-        : CallObj.group;
+    final callType = mediaType == 'video' ? CallType.video : CallType.audio;
+    final callObj = sessionType == ConversationType.superGroup ||
+            sessionType == ConversationType.group
+        ? CallObj.group
+        : CallObj.single;
     final overlayContext = Get.overlayContext;
     final ringingPrejoin = _isRingingPrejoinOnly(roomKey);
     final mediaReady = client.hasMediaFor(roomID) && !ringingPrejoin;
@@ -2006,13 +2044,25 @@ mixin OpenIMLive {
       return;
     }
 
+    var inviter = signaling.invitation?.inviterUserID?.trim() ?? '';
+    if (inviter.isEmpty) {
+      inviter = signaling.userID?.trim() ?? '';
+    }
+    if (inviter.isEmpty) {
+      inviter = '来电';
+    }
+    final invitees = signaling.invitation?.inviteeUserIDList;
+    final inviteeList = (invitees != null && invitees.isNotEmpty)
+        ? invitees
+        : [OpenIM.iMManager.userID];
+
     OpenIMLiveClient().start(
       overlayContext,
       callEventSubject: signalingSubject,
       roomID: roomID,
-      inviteeUserIDList: signaling.invitation!.inviteeUserIDList!,
-      inviterUserID: signaling.invitation!.inviterUserID!,
-      groupID: signaling.invitation!.groupID,
+      inviteeUserIDList: inviteeList,
+      inviterUserID: inviter,
+      groupID: signaling.invitation?.groupID,
       callType: callType,
       callObj: callObj,
       initState: initState,

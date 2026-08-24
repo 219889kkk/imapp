@@ -274,6 +274,12 @@ public class MainActivity extends FlutterFragmentActivity {
                             ImKeepAliveService.stop(getApplicationContext());
                             result.success(true);
                             break;
+                        case "stopNativeIncoming":
+                            HangxunIncomingCall.cancel(
+                                    getApplicationContext(),
+                                    call.argument("roomID"));
+                            result.success(true);
+                            break;
                         case "setCallUiActive":
                             callUiActive = Boolean.TRUE.equals(call.argument("active"));
                             result.success(true);

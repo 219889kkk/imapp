@@ -869,45 +869,163 @@ class VoipCallkitController extends GetxService {
   /// RoomID currently shown in CallKit / full-screen incoming UI.
   String? _incomingRoomID;
 
+  /// Last native-ringer invite — accept payloads are often incomplete.
+  SignalingInfo? _nativeInvite;
+
   /// Native lock-screen ringer (Java) — Dart isolate may be frozen.
   Future<void> onNativeIncoming(Map<String, dynamic> args) async {
     if (!Platform.isAndroid) return;
     final action = '${args['action'] ?? ''}'.trim().toLowerCase();
-    final signaling = _signalingFromNative(args);
+    var signaling = _signalingFromNative(args);
     if (signaling == null) return;
     if (action == 'show' || action == 'showinapp') {
+      _nativeInvite = signaling;
       nativeOwnsIncoming = action == 'show';
       PackageBridge.onPushCallEvent?.call(signaling, 'invite');
       return;
     }
     nativeOwnsIncoming = false;
     if (action == 'accept') {
-      PackageBridge.onCallKitAccept?.call(signaling);
+      PackageBridge.onCallKitAccept?.call(_mergeNativeInvite(signaling));
       return;
     }
     if (action == 'reject') {
-      PackageBridge.onCallKitDecline?.call(signaling);
+      PackageBridge.onCallKitDecline?.call(_mergeNativeInvite(signaling));
       return;
     }
     PackageBridge.onVoipRemoteEnd?.call(
         signaling.invitation?.roomID, action);
   }
 
+  SignalingInfo _mergeNativeInvite(SignalingInfo incoming) {
+    final saved = _nativeInvite;
+    if (saved == null) return incoming;
+    final a = incoming.invitation?.roomID?.trim() ?? '';
+    final b = saved.invitation?.roomID?.trim() ?? '';
+    if (a.isEmpty || a != b) return incoming;
+    final inv = incoming.invitation;
+    final prev = saved.invitation;
+    final inviter = (inv?.inviterUserID?.trim().isNotEmpty == true)
+        ? inv!.inviterUserID
+        : prev?.inviterUserID;
+    return SignalingInfo(
+      userID: inviter ?? saved.userID,
+      invitation: InvitationInfo(
+        roomID: inv?.roomID ?? prev?.roomID,
+        inviterUserID: inviter,
+        inviteeUserIDList: (inv?.inviteeUserIDList?.isNotEmpty == true)
+            ? inv!.inviteeUserIDList
+            : prev?.inviteeUserIDList,
+        mediaType: (inv?.mediaType?.trim().isNotEmpty == true)
+            ? inv!.mediaType
+            : prev?.mediaType,
+        sessionType: inv?.sessionType ?? prev?.sessionType,
+        groupID: (inv?.groupID?.trim().isNotEmpty == true)
+            ? inv!.groupID
+            : prev?.groupID,
+        timeout: inv?.timeout ?? prev?.timeout,
+      ),
+    );
+  }
+
   SignalingInfo? _signalingFromNative(Map<String, dynamic> args) {
-    final roomID = '${args['roomID'] ?? ''}'.trim();
+    final fromRaw = _invitationFromRaw(args['raw']);
+    final roomID = '${args['roomID'] ?? fromRaw?.roomID ?? ''}'.trim();
     if (roomID.isEmpty) return null;
     final timeoutRaw = args['timeout'];
     final timeout = timeoutRaw is int
         ? timeoutRaw
-        : int.tryParse('$timeoutRaw') ?? 60;
+        : int.tryParse('$timeoutRaw') ?? fromRaw?.timeout ?? 60;
+    var inviter = '${args['inviterUserID'] ?? ''}'.trim();
+    if (inviter.isEmpty) {
+      inviter = fromRaw?.inviterUserID?.trim() ?? '';
+    }
+    final media = '${args['mediaType'] ?? fromRaw?.mediaType ?? 'audio'}';
     return SignalingInfo(
-      userID: '${args['inviterUserID'] ?? ''}',
+      userID: inviter,
       invitation: InvitationInfo(
         roomID: roomID,
-        inviterUserID: '${args['inviterUserID'] ?? ''}',
-        mediaType: '${args['mediaType'] ?? 'audio'}',
+        inviterUserID: inviter,
+        inviteeUserIDList:
+            _stringList(args['inviteeUserIDList']) ?? fromRaw?.inviteeUserIDList,
+        mediaType: media.isEmpty ? 'audio' : media,
+        sessionType: int.tryParse('${args['sessionType'] ?? fromRaw?.sessionType ?? 1}') ??
+            1,
+        groupID: '${args['groupID'] ?? fromRaw?.groupID ?? ''}',
         timeout: timeout < 30 ? 60 : timeout,
       ),
+    );
+  }
+
+  List<String>? _stringList(dynamic raw) {
+    if (raw is List) {
+      final out = raw.map((e) => '$e'.trim()).where((e) => e.isNotEmpty).toList();
+      return out.isEmpty ? null : out;
+    }
+    if (raw is String && raw.trim().startsWith('[')) {
+      try {
+        final decoded = jsonDecode(raw);
+        return _stringList(decoded);
+      } catch (_) {}
+    }
+    return null;
+  }
+
+  InvitationInfo? _invitationFromRaw(dynamic raw) {
+    if (raw == null) return null;
+    try {
+      dynamic decoded = raw;
+      if (raw is String && raw.trim().isNotEmpty) {
+        decoded = jsonDecode(raw);
+      }
+      if (decoded is! Map) return null;
+      final msg = Map<String, dynamic>.from(decoded);
+      dynamic payload = msg['customElem'];
+      String? dataStr;
+      if (payload is Map) {
+        final data = payload['data'];
+        if (data is Map) {
+          return _invitationFromPayload(Map<String, dynamic>.from(data));
+        }
+        dataStr = data?.toString();
+      }
+      dataStr ??= msg['content']?.toString();
+      if (dataStr != null && dataStr.trim().startsWith('{')) {
+        final p = jsonDecode(dataStr);
+        if (p is Map) {
+          return _invitationFromPayload(Map<String, dynamic>.from(p));
+        }
+      }
+      if (msg['data'] is Map) {
+        return _invitationFromPayload(Map<String, dynamic>.from(msg['data'] as Map));
+      }
+      if (msg.containsKey('roomID')) {
+        return _invitationFromPayload(msg);
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  InvitationInfo? _invitationFromPayload(Map<String, dynamic> inner) {
+    final invitationRaw = inner['data'];
+    final Map<String, dynamic> invMap;
+    if (invitationRaw is Map) {
+      invMap = Map<String, dynamic>.from(invitationRaw);
+    } else if (inner.containsKey('roomID')) {
+      invMap = inner;
+    } else {
+      return null;
+    }
+    final roomID = '${invMap['roomID'] ?? ''}'.trim();
+    if (roomID.isEmpty) return null;
+    return InvitationInfo(
+      roomID: roomID,
+      inviterUserID: '${invMap['inviterUserID'] ?? ''}',
+      inviteeUserIDList: _stringList(invMap['inviteeUserIDList']),
+      mediaType: '${invMap['mediaType'] ?? 'audio'}',
+      sessionType: int.tryParse('${invMap['sessionType'] ?? 1}') ?? 1,
+      groupID: invMap['groupID']?.toString(),
+      timeout: int.tryParse('${invMap['timeout'] ?? 60}') ?? 60,
     );
   }
 
@@ -1150,6 +1268,14 @@ class VoipCallkitController extends GetxService {
         await FlutterCallkitIncoming.endCall(roomID);
       } else {
         await FlutterCallkitIncoming.endAllCalls();
+      }
+      if (Platform.isAndroid) {
+        nativeOwnsIncoming = false;
+        try {
+          await _nativeChannel.invokeMethod('stopNativeIncoming', {
+            'roomID': roomID ?? '',
+          });
+        } catch (_) {}
       }
     } catch (e, s) {
       Logger.print('endCall failed: $e $s');

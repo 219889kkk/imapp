@@ -1,8 +1,10 @@
 package io.openim;
 
 import android.app.Activity;
+import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.os.Build;
@@ -24,18 +26,31 @@ import java.lang.ref.WeakReference;
  */
 public class IncomingCallActivity extends Activity {
     private static WeakReference<IncomingCallActivity> current;
+    private BroadcastReceiver dismissReceiver;
+
+    static IncomingCallActivity current() {
+        return current == null ? null : current.get();
+    }
 
     static void finishIfShowing() {
-        IncomingCallActivity a = current == null ? null : current.get();
-        if (a != null && !a.isFinishing()) {
-            a.finish();
-        }
+        IncomingCallActivity a = current();
+        if (a == null || a.isFinishing()) return;
+        a.runOnUiThread(() -> {
+            if (!a.isFinishing()) a.finish();
+        });
     }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         current = new WeakReference<>(this);
+        String roomID = getIntent() != null
+                ? getIntent().getStringExtra(HangxunIncomingCall.EXTRA_ROOM) : null;
+        if (!HangxunIncomingCall.shouldShow(roomID)) {
+            finish();
+            return;
+        }
+        registerDismissReceiver();
         showOverLockscreen();
         setContentView(buildUi(getIntent()));
     }
@@ -44,14 +59,60 @@ public class IncomingCallActivity extends Activity {
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
+        String roomID = intent != null
+                ? intent.getStringExtra(HangxunIncomingCall.EXTRA_ROOM) : null;
+        if (!HangxunIncomingCall.shouldShow(roomID)) {
+            finish();
+            return;
+        }
         setContentView(buildUi(intent));
     }
 
     @Override
+    protected void onResume() {
+        super.onResume();
+        String roomID = getIntent() != null
+                ? getIntent().getStringExtra(HangxunIncomingCall.EXTRA_ROOM) : null;
+        if (!HangxunIncomingCall.shouldShow(roomID)) {
+            finish();
+        }
+    }
+
+    @Override
     protected void onDestroy() {
+        unregisterDismissReceiver();
         if (current != null && current.get() == this) current.clear();
         stopVibrate();
         super.onDestroy();
+    }
+
+    private void registerDismissReceiver() {
+        if (dismissReceiver != null) return;
+        dismissReceiver = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                finish();
+            }
+        };
+        IntentFilter filter = new IntentFilter(HangxunIncomingCall.ACTION_DISMISS);
+        try {
+            if (Build.VERSION.SDK_INT >= 33) {
+                registerReceiver(dismissReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
+            } else {
+                registerReceiver(dismissReceiver, filter);
+            }
+        } catch (Throwable t) {
+            dismissReceiver = null;
+        }
+    }
+
+    private void unregisterDismissReceiver() {
+        if (dismissReceiver == null) return;
+        try {
+            unregisterReceiver(dismissReceiver);
+        } catch (Throwable ignored) {
+        }
+        dismissReceiver = null;
     }
 
     private void showOverLockscreen() {
@@ -125,8 +186,7 @@ public class IncomingCallActivity extends Activity {
         accept.setTextColor(Color.WHITE);
         accept.setBackgroundColor(0xFF43A047);
         accept.setOnClickListener(v -> {
-            HangxunIncomingCall.accept(getApplicationContext(), getIntent());
-            finish();
+            HangxunIncomingCall.accept(IncomingCallActivity.this, getIntent());
         });
         LinearLayout.LayoutParams lp2 =
                 new LinearLayout.LayoutParams(0, dp(52), 1f);
