@@ -13,17 +13,15 @@ import open_im_sdk.Open_im_sdk;
 /**
  * HangXun Android has no Getui. On lock, keep the IM websocket delivering.
  *
- * Do not call networkStatusChanged while the UI is visible — that reconnects
- * and the conversation list flashes 「连接中」.
- * While locked, NAT / Doze drop the socket after a few minutes unless we
- * actually ping native OpenIM (the 20s broadcast used to no-op after the
- * first setAppBackgroundStatus).
+ * The msggateway idle timeout is ~30–90s. Sending a WS frame every poke
+ * (setAppBackgroundStatus) is what actually keeps the connection; a 90s
+ * throttle here used to let the server drop the socket after ~1 minute.
  */
 public final class HangxunImKeepAlivePoke {
     public static final String ACTION = "io.openim.hangxun.POKE_IM";
     private static final String TAG = "HangxunImKeepAlive";
-    private static final long HINT_INTERVAL_MS = 90_000L;
-    private static final long RECONNECT_INTERVAL_MS = 45_000L;
+    private static final long HINT_INTERVAL_MS = 12_000L;
+    private static final long RECONNECT_INTERVAL_MS = 20_000L;
     private static final int LOGIN_LOGGED = 3;
     private static final open_im_sdk_callback.Base CALLBACK = new open_im_sdk_callback.Base() {
         @Override
@@ -78,6 +76,7 @@ public final class HangxunImKeepAlivePoke {
         lastHintMs = now;
         try {
             String op = String.valueOf(now);
+            // false = still "foreground" to the gateway so invites stay on WS.
             Open_im_sdk.setAppBackgroundStatus(CALLBACK, op, false);
         } catch (Throwable t) {
             Log.e(TAG, "foreground hint failed", t);
@@ -86,7 +85,7 @@ public final class HangxunImKeepAlivePoke {
     }
 
     /**
-     * Ping / reconnect the IM websocket while locked. Safe here because the
+     * Reconnect if the gateway already dropped us. Safe here because the
      * conversation UI is not on screen.
      */
     private static void maybeWakeSocket() {
@@ -94,17 +93,25 @@ public final class HangxunImKeepAlivePoke {
             return;
         }
         long now = System.currentTimeMillis();
-        if (lastReconnectMs > 0 && now - lastReconnectMs < RECONNECT_INTERVAL_MS) {
+        long status = LOGIN_LOGGED;
+        try {
+            status = Open_im_sdk.getLoginStatus(String.valueOf(now));
+        } catch (Throwable t) {
+            Log.e(TAG, "login status failed", t);
+            return;
+        }
+        boolean disconnected = status != LOGIN_LOGGED;
+        if (!disconnected
+                && lastReconnectMs > 0
+                && now - lastReconnectMs < RECONNECT_INTERVAL_MS) {
             return;
         }
         lastReconnectMs = now;
+        if (disconnected) {
+            Log.i(TAG, "login status " + status + ", waking socket");
+        }
         try {
-            String op = String.valueOf(now);
-            long status = Open_im_sdk.getLoginStatus(op);
-            if (status != LOGIN_LOGGED) {
-                Log.i(TAG, "login status " + status + ", waking socket");
-            }
-            Open_im_sdk.networkStatusChanged(CALLBACK, op);
+            Open_im_sdk.networkStatusChanged(CALLBACK, String.valueOf(now));
         } catch (Throwable t) {
             Log.e(TAG, "socket wake failed", t);
             lastReconnectMs = 0;

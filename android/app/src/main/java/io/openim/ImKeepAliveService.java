@@ -1,5 +1,6 @@
 package io.openim;
 
+import android.app.AlarmManager;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
@@ -17,6 +18,7 @@ import android.os.HandlerThread;
 import android.os.IBinder;
 import android.os.Looper;
 import android.os.PowerManager;
+import android.os.SystemClock;
 import android.util.Log;
 
 import io.flutter.embedding.engine.FlutterEngine;
@@ -28,6 +30,9 @@ import io.flutter.plugin.common.MethodChannel;
  * Always-on while logged in. HangXun Android has no Getui, so the IM
  * websocket only survives lock/Doze if this service is already running
  * before the screen turns off.
+ *
+ * Handler delays are deferred by OEM freeze after ~1 minute. Exact alarms
+ * plus a WS ping every tick keep the gateway from dropping the socket.
  */
 public class ImKeepAliveService extends Service {
     public static final String ACTION_START = "io.openim.KEEPALIVE_START";
@@ -35,7 +40,9 @@ public class ImKeepAliveService extends Service {
     private static final String TAG = "HangxunKeepAlive";
     private static final String CHANNEL_ID = "hangxun_im_keepalive";
     private static final int NOTIF_ID = 71002;
-    private static final long POKE_INTERVAL_MS = 20_000L;
+    private static final int ALARM_REQUEST = 71003;
+    private static final long POKE_INTERVAL_MS = 15_000L;
+    private static final long WAKELOCK_MS = 10 * 60 * 1000L;
 
     private PowerManager.WakeLock wakeLock;
     private WifiManager.WifiLock wifiLock;
@@ -45,15 +52,7 @@ public class ImKeepAliveService extends Service {
     private final Runnable pokeRunnable = new Runnable() {
         @Override
         public void run() {
-            try {
-                Intent poke = new Intent("io.openim.hangxun.POKE_IM");
-                poke.setPackage(getPackageName());
-                sendBroadcast(poke);
-                acquireLocks();
-                wakeFlutter();
-            } catch (Throwable t) {
-                Log.w(TAG, "im poke skipped", t);
-            }
+            pokeOnce();
             if (pokeHandler != null) {
                 pokeHandler.postDelayed(this, POKE_INTERVAL_MS);
             }
@@ -77,6 +76,7 @@ public class ImKeepAliveService extends Service {
 
     public static void stop(Context context) {
         if (context == null) return;
+        cancelAlarm(context);
         Intent intent = new Intent(context, ImKeepAliveService.class);
         intent.setAction(ACTION_STOP);
         try {
@@ -89,10 +89,71 @@ public class ImKeepAliveService extends Service {
         }
     }
 
+    /** Alarm / boot: ensure FGS is up and immediately ping IM. */
+    public static void onAlarm(Context context) {
+        if (context == null) return;
+        start(context);
+        sendPokeBroadcast(context);
+        scheduleAlarm(context);
+    }
+
+    static void scheduleAlarm(Context context) {
+        if (context == null) return;
+        try {
+            AlarmManager am = (AlarmManager) context.getSystemService(ALARM_SERVICE);
+            if (am == null) return;
+            PendingIntent pi = alarmPending(context);
+            long trigger = SystemClock.elapsedRealtime() + POKE_INTERVAL_MS;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                try {
+                    am.setExactAndAllowWhileIdle(
+                            AlarmManager.ELAPSED_REALTIME_WAKEUP, trigger, pi);
+                } catch (SecurityException se) {
+                    am.setAndAllowWhileIdle(
+                            AlarmManager.ELAPSED_REALTIME_WAKEUP, trigger, pi);
+                }
+            } else {
+                am.setExact(AlarmManager.ELAPSED_REALTIME_WAKEUP, trigger, pi);
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "schedule alarm failed", t);
+        }
+    }
+
+    static void cancelAlarm(Context context) {
+        if (context == null) return;
+        try {
+            AlarmManager am = (AlarmManager) context.getSystemService(ALARM_SERVICE);
+            if (am != null) am.cancel(alarmPending(context));
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private static PendingIntent alarmPending(Context context) {
+        Intent i = new Intent(context, ImKeepAliveReceiver.class);
+        i.setAction(ImKeepAliveReceiver.ACTION);
+        int flags = PendingIntent.FLAG_UPDATE_CURRENT;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            flags |= PendingIntent.FLAG_IMMUTABLE;
+        }
+        return PendingIntent.getBroadcast(context, ALARM_REQUEST, i, flags);
+    }
+
+    private static void sendPokeBroadcast(Context context) {
+        try {
+            Intent poke = new Intent("io.openim.hangxun.POKE_IM");
+            poke.setPackage(context.getPackageName());
+            context.sendBroadcast(poke);
+        } catch (Throwable t) {
+            Log.w(TAG, "im poke skipped", t);
+        }
+    }
+
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent != null && ACTION_STOP.equals(intent.getAction())) {
             stopPoke();
+            cancelAlarm(this);
             releaseLocks();
             stopForeground(true);
             stopSelf();
@@ -106,20 +167,24 @@ public class ImKeepAliveService extends Service {
                     startForeground(
                             NOTIF_ID,
                             notification,
-                            ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
-                                    | ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING);
+                            ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING);
                 } catch (Throwable t) {
-                    Log.w(TAG, "remoteMessaging FGS type unavailable, dataSync only", t);
-                    startForeground(
-                            NOTIF_ID,
-                            notification,
-                            ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
+                    Log.w(TAG, "remoteMessaging FGS type unavailable, dataSync", t);
+                    try {
+                        startForeground(
+                                NOTIF_ID,
+                                notification,
+                                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
+                    } catch (Throwable t2) {
+                        startForeground(NOTIF_ID, notification);
+                    }
                 }
             } else {
                 startForeground(NOTIF_ID, notification);
             }
             acquireLocks();
             startPoke();
+            scheduleAlarm(this);
             registerScreenReceiver();
         } catch (Throwable t) {
             Log.e(TAG, "foreground start failed", t);
@@ -131,22 +196,39 @@ public class ImKeepAliveService extends Service {
 
     @Override
     public void onTimeout(int startId, int fgsType) {
-        Log.w(TAG, "foreground timeout type=" + fgsType);
+        Log.w(TAG, "foreground timeout type=" + fgsType + ", restarting");
         try {
-            stopPoke();
-            releaseLocks();
-            stopForeground(true);
-        } catch (Throwable ignored) {
+            Notification notification = buildNotification();
+            startForeground(NOTIF_ID, notification);
+            acquireLocks();
+            scheduleAlarm(this);
+        } catch (Throwable t) {
+            Log.e(TAG, "foreground restart after timeout failed", t);
+            start(getApplicationContext());
         }
-        stopSelf();
     }
 
     @Override
     public void onDestroy() {
         unregisterScreenReceiver();
         stopPoke();
+        // Keep the alarm so Doze can restart us after an OEM kill.
+        if (hasLoginSession()) {
+            scheduleAlarm(this);
+        } else {
+            cancelAlarm(this);
+        }
         releaseLocks();
         super.onDestroy();
+    }
+
+    private boolean hasLoginSession() {
+        try {
+            return getSharedPreferences("hangxun", MODE_PRIVATE)
+                    .getBoolean("hasLoginSession", false);
+        } catch (Throwable t) {
+            return false;
+        }
     }
 
     private void registerScreenReceiver() {
@@ -156,8 +238,14 @@ public class ImKeepAliveService extends Service {
             public void onReceive(Context context, Intent intent) {
                 if (intent == null) return;
                 String action = intent.getAction();
-                // Screen events handled by MainActivity.onStop/onStart lifecycle.
-                // No-op here — keep receiver registered to avoid re-registration cost.
+                if (Intent.ACTION_SCREEN_OFF.equals(action)) {
+                    acquireLocks();
+                    pokeOnce();
+                    scheduleAlarm(ImKeepAliveService.this);
+                } else if (Intent.ACTION_SCREEN_ON.equals(action)
+                        || Intent.ACTION_USER_PRESENT.equals(action)) {
+                    pokeOnce();
+                }
             }
         };
         IntentFilter filter = new IntentFilter();
@@ -166,6 +254,7 @@ public class ImKeepAliveService extends Service {
         filter.addAction(Intent.ACTION_USER_PRESENT);
         try {
             if (Build.VERSION.SDK_INT >= 33) {
+                // SCREEN_OFF is a system broadcast — must be exported to receive it.
                 registerReceiver(screenReceiver, filter, Context.RECEIVER_EXPORTED);
             } else {
                 registerReceiver(screenReceiver, filter);
@@ -203,6 +292,17 @@ public class ImKeepAliveService extends Service {
         if (pokeThread != null) {
             pokeThread.quitSafely();
             pokeThread = null;
+        }
+    }
+
+    private void pokeOnce() {
+        try {
+            sendPokeBroadcast(this);
+            acquireLocks();
+            wakeFlutter();
+            scheduleAlarm(this);
+        } catch (Throwable t) {
+            Log.w(TAG, "im poke skipped", t);
         }
     }
 
@@ -260,6 +360,7 @@ public class ImKeepAliveService extends Service {
     /**
      * Flutter pauses Dart timers after onPause. Keep the isolate schedulable
      * and nudge IM from Dart so incoming-call UI can still be shown.
+     * Do not call appIsResumed — that redraws a destroyed GPU surface.
      */
     private void wakeFlutter() {
         try {
@@ -267,10 +368,6 @@ public class ImKeepAliveService extends Service {
                     FlutterEngineCache.getInstance().get(MainActivity.ENGINE_ID);
             if (engine == null) return;
             new Handler(Looper.getMainLooper()).post(() -> {
-                try {
-                    engine.getLifecycleChannel().appIsInactive();
-                } catch (Throwable ignored) {
-                }
                 try {
                     new MethodChannel(
                             engine.getDartExecutor().getBinaryMessenger(),
@@ -291,8 +388,7 @@ public class ImKeepAliveService extends Service {
                     wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "hangxun:im");
                     wakeLock.setReferenceCounted(false);
                 }
-                // Re-acquire each poke so OEM Doze cannot expire the lock.
-                wakeLock.acquire(3 * 60 * 1000L);
+                wakeLock.acquire(WAKELOCK_MS);
             }
         } catch (Throwable t) {
             Log.e(TAG, "wake lock failed", t);
@@ -301,8 +397,11 @@ public class ImKeepAliveService extends Service {
             if (wifiLock == null || !wifiLock.isHeld()) {
                 WifiManager wifi = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
                 if (wifi != null) {
-                    wifiLock = wifi.createWifiLock(
-                            WifiManager.WIFI_MODE_FULL_HIGH_PERF, "hangxun:im-wifi");
+                    int mode = WifiManager.WIFI_MODE_FULL_HIGH_PERF;
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        mode = WifiManager.WIFI_MODE_FULL_LOW_LATENCY;
+                    }
+                    wifiLock = wifi.createWifiLock(mode, "hangxun:im-wifi");
                     wifiLock.setReferenceCounted(false);
                     wifiLock.acquire();
                 }

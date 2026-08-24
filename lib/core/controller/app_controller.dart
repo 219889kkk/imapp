@@ -124,7 +124,7 @@ class AppController extends GetxController
   void _startImKeepAlivePing() {
     _imKeepAlivePing?.cancel();
     if (!Platform.isAndroid || !SessionGuard.shouldNotify) return;
-    _imKeepAlivePing = Timer.periodic(const Duration(seconds: 40), (_) {
+    _imKeepAlivePing = Timer.periodic(const Duration(seconds: 15), (_) {
       if (!isRunningBackground) return;
       unawaited(_nudgeImConnection());
     });

@@ -54,6 +54,7 @@
 
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
     <uses-permission android:name="android.permission.DISABLE_KEYGUARD" />
     <uses-permission android:name="android.permission.MANAGE_OWN_CALLS" />
@@ -179,12 +180,23 @@
             android:enabled="true"
             android:exported="false"/>
 
-        <!-- dataSync: keep IM websocket after lock. Android has no Getui wake-up. -->
+        <!-- remoteMessaging: keep IM websocket after lock. Android has no Getui. -->
         <service
             android:name="io.openim.ImKeepAliveService"
             android:exported="false"
-            android:foregroundServiceType="dataSync|remoteMessaging"
+            android:foregroundServiceType="remoteMessaging|dataSync"
             android:stopWithTask="false"
             tools:targetApi="q" />
+
+        <receiver
+            android:name="io.openim.ImKeepAliveReceiver"
+            android:exported="true"
+            android:enabled="true">
+            <intent-filter>
+                <action android:name="io.openim.KEEPALIVE_ALARM" />
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>
