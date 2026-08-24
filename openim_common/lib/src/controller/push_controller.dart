@@ -48,9 +48,13 @@ class PushController extends GetxService {
       // Alert (text) push is direct APNs. Starting Getui on iOS would
       // double-notify and stamp login-screen badges via CID.
       pushType = PushType.apns;
+    } else if (_hasGetuiCredentials) {
+      // Lock-screen incoming on Android cannot rely on FGS alone: OEM Doze
+      // freezes the IM websocket after a few minutes. Getui alias push is
+      // the wake-up path (same AppID as chat/openim-push).
+      pushType = PushType.getui;
+      Logger.print('PushController: Android pushType=getui');
     } else {
-      // HangXun has no Getui account. Android incoming after lock depends
-      // on the IM websocket + ImKeepAliveService, not vendor push.
       pushType = PushType.none;
       Logger.print('PushController: Android pushType=none (no Getui)');
     }
