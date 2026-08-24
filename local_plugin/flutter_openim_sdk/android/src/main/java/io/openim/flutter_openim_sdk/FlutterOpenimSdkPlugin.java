@@ -70,6 +70,20 @@ public class FlutterOpenimSdkPlugin implements FlutterPlugin, MethodCallHandler,
         HangxunImKeepAlivePoke.register(context);
     }
 
+    /** Native incoming-call UI must not wait for a paused Dart isolate. */
+    public static void dispatchRawMessage(String json) {
+        if (context == null || json == null || json.isEmpty()) return;
+        try {
+            android.content.Intent intent =
+                    new android.content.Intent("io.openim.hangxun.IM_RAW_MESSAGE");
+            intent.setPackage(context.getPackageName());
+            intent.putExtra("json", json);
+            context.sendBroadcast(intent);
+        } catch (Throwable t) {
+            Log.e("F-OpenIMSDK", "dispatchRawMessage failed", t);
+        }
+    }
+
     @Override
     public void onMethodCall(@NonNull MethodCall call, @NonNull Result result) {
         parse(call, result);

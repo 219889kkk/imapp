@@ -62,6 +62,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
 
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
 
@@ -180,13 +181,35 @@
             android:enabled="true"
             android:exported="false"/>
 
-        <!-- remoteMessaging: keep IM websocket after lock. Android has no Getui. -->
+        <!-- mediaPlayback: OEM freeze ignores dataSync FGS after ~2 minutes. -->
         <service
             android:name="io.openim.ImKeepAliveService"
             android:exported="false"
-            android:foregroundServiceType="remoteMessaging|dataSync"
+            android:foregroundServiceType="mediaPlayback|remoteMessaging|dataSync"
             android:stopWithTask="false"
             tools:targetApi="q" />
+
+        <activity
+            android:name="io.openim.IncomingCallActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:launchMode="singleInstance"
+            android:showOnLockScreen="true"
+            android:showWhenLocked="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen"
+            android:turnScreenOn="true" />
+
+        <receiver
+            android:name="io.openim.HangxunIncomingCall$HangxunIncomingCallReceiver"
+            android:exported="false"
+            android:enabled="true">
+            <intent-filter>
+                <action android:name="io.openim.hangxun.IM_RAW_MESSAGE" />
+                <action android:name="io.openim.hangxun.CALL_ACCEPT" />
+                <action android:name="io.openim.hangxun.CALL_REJECT" />
+            </intent-filter>
+        </receiver>
 
         <receiver
             android:name="io.openim.ImKeepAliveReceiver"

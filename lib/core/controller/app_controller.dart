@@ -162,6 +162,18 @@ class AppController extends GetxController
         unawaited(_nudgeImConnection());
         return true;
       }
+      if (call.method == 'nativeIncomingCall') {
+        final raw = call.arguments;
+        if (raw is Map) {
+          unawaited(
+            VoipCallkitController.toOrNull?.onNativeIncoming(
+                  Map<String, dynamic>.from(raw),
+                ) ??
+                Future.value(),
+          );
+        }
+        return true;
+      }
       return null;
     });
     _syncStylesTheme();
@@ -229,7 +241,10 @@ class AppController extends GetxController
   Future<void> syncNativeLoginHint(bool active) async {
     if (!Platform.isIOS && !Platform.isAndroid) return;
     try {
-      await _voipChannel.invokeMethod('setLoginSessionHint', {'active': active});
+      await _voipChannel.invokeMethod('setLoginSessionHint', {
+        'active': active,
+        'userID': DataSp.userID ?? '',
+      });
     } catch (e, s) {
       Logger.print('syncNativeLoginHint failed: $e $s');
     }

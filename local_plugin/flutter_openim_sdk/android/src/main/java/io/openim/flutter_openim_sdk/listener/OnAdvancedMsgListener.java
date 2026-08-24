@@ -4,6 +4,7 @@ import android.util.ArrayMap;
 
 import java.util.Map;
 
+import io.openim.flutter_openim_sdk.FlutterOpenimSdkPlugin;
 import io.openim.flutter_openim_sdk.util.CommonUtil;
 
 public class OnAdvancedMsgListener implements open_im_sdk_callback.OnAdvancedMsgListener {
@@ -39,6 +40,7 @@ public class OnAdvancedMsgListener implements open_im_sdk_callback.OnAdvancedMsg
 
     @Override
     public void onRecvNewMessage(String s) {
+        FlutterOpenimSdkPlugin.dispatchRawMessage(s);
         final Map<String, String> values = new ArrayMap<>();
         values.put("id", id);
         values.put("message", s);
@@ -47,6 +49,7 @@ public class OnAdvancedMsgListener implements open_im_sdk_callback.OnAdvancedMsg
 
     @Override
     public void onRecvOfflineNewMessage(String s) {
+        FlutterOpenimSdkPlugin.dispatchRawMessage(s);
         final Map<String, String> values = new ArrayMap<>();
         values.put("id", id);
         values.put("message", s);
@@ -55,6 +58,7 @@ public class OnAdvancedMsgListener implements open_im_sdk_callback.OnAdvancedMsg
 
     @Override
     public void onRecvOnlineOnlyMessage(String s) {
+        FlutterOpenimSdkPlugin.dispatchRawMessage(s);
         final Map<String, String> values = new ArrayMap<>();
         values.put("id", id);
         values.put("message", s);

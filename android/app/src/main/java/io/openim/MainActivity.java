@@ -221,10 +221,16 @@ public class MainActivity extends FlutterFragmentActivity {
         return getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(PREF_LOGIN, false);
     }
 
-    private void setLoginSession(boolean active) {
+    private void setLoginSession(boolean active, String userID) {
         SharedPreferences.Editor ed =
                 getSharedPreferences(PREFS, MODE_PRIVATE).edit();
         ed.putBoolean(PREF_LOGIN, active);
+        if (userID != null) {
+            ed.putString("userID", userID);
+        }
+        if (!active) {
+            ed.remove("userID");
+        }
         ed.apply();
         if (active) {
             ImKeepAliveService.start(getApplicationContext());
@@ -256,7 +262,8 @@ public class MainActivity extends FlutterFragmentActivity {
                             break;
                         case "setLoginSessionHint":
                             boolean active = Boolean.TRUE.equals(call.argument("active"));
-                            setLoginSession(active);
+                            String userID = call.argument("userID");
+                            setLoginSession(active, userID);
                             result.success(true);
                             break;
                         case "startImKeepAlive":

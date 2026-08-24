@@ -41,6 +41,10 @@ public final class HangxunImKeepAlivePoke {
 
     private HangxunImKeepAlivePoke() {}
 
+    public static boolean isAppVisible() {
+        return startedActivities > 0;
+    }
+
     public static void onActivityStarted() {
         startedActivities++;
         lastHintMs = 0;

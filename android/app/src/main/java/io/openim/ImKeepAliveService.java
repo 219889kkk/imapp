@@ -11,6 +11,9 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.ServiceInfo;
+import android.media.AudioAttributes;
+import android.media.AudioFormat;
+import android.media.AudioTrack;
 import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.os.Handler;
@@ -49,6 +52,9 @@ public class ImKeepAliveService extends Service {
     private HandlerThread pokeThread;
     private Handler pokeHandler;
     private BroadcastReceiver screenReceiver;
+    private Thread toneThread;
+    private volatile boolean toneRunning;
+    private AudioTrack toneTrack;
     private final Runnable pokeRunnable = new Runnable() {
         @Override
         public void run() {
@@ -153,6 +159,7 @@ public class ImKeepAliveService extends Service {
     public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent != null && ACTION_STOP.equals(intent.getAction())) {
             stopPoke();
+            stopHeartbeatTone();
             cancelAlarm(this);
             releaseLocks();
             stopForeground(true);
@@ -163,18 +170,17 @@ public class ImKeepAliveService extends Service {
             ensureChannel();
             Notification notification = buildNotification();
             if (Build.VERSION.SDK_INT >= 34) {
+                int types = ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+                        | ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING;
                 try {
-                    startForeground(
-                            NOTIF_ID,
-                            notification,
-                            ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING);
+                    startForeground(NOTIF_ID, notification, types);
                 } catch (Throwable t) {
-                    Log.w(TAG, "remoteMessaging FGS type unavailable, dataSync", t);
+                    Log.w(TAG, "mediaPlayback FGS type unavailable", t);
                     try {
                         startForeground(
                                 NOTIF_ID,
                                 notification,
-                                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
+                                ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING);
                     } catch (Throwable t2) {
                         startForeground(NOTIF_ID, notification);
                     }
@@ -184,6 +190,7 @@ public class ImKeepAliveService extends Service {
             }
             acquireLocks();
             startPoke();
+            startHeartbeatTone();
             scheduleAlarm(this);
             registerScreenReceiver();
         } catch (Throwable t) {
@@ -212,6 +219,7 @@ public class ImKeepAliveService extends Service {
     public void onDestroy() {
         unregisterScreenReceiver();
         stopPoke();
+        stopHeartbeatTone();
         // Keep the alarm so Doze can restart us after an OEM kill.
         if (hasLoginSession()) {
             scheduleAlarm(this);
@@ -422,5 +430,85 @@ public class ImKeepAliveService extends Service {
         } catch (Throwable ignored) {
         }
         wifiLock = null;
+    }
+
+    /**
+     * Inaudible 19 kHz tone so OEM process freeze treats us as media playback,
+     * not a fake dataSync keep-alive.
+     */
+    private void startHeartbeatTone() {
+        if (toneRunning) return;
+        toneRunning = true;
+        toneThread = new Thread(() -> {
+            AudioTrack track = null;
+            try {
+                int sampleRate = 44100;
+                int min = AudioTrack.getMinBufferSize(
+                        sampleRate,
+                        AudioFormat.CHANNEL_OUT_MONO,
+                        AudioFormat.ENCODING_PCM_16BIT);
+                if (min <= 0) min = sampleRate / 5;
+                AudioAttributes attrs = new AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                        .build();
+                AudioFormat fmt = new AudioFormat.Builder()
+                        .setSampleRate(sampleRate)
+                        .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                        .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                        .build();
+                track = new AudioTrack.Builder()
+                        .setAudioAttributes(attrs)
+                        .setAudioFormat(fmt)
+                        .setBufferSizeInBytes(min)
+                        .setTransferMode(AudioTrack.MODE_STREAM)
+                        .build();
+                toneTrack = track;
+                track.setVolume(0.02f);
+                track.play();
+                short[] buf = new short[min / 2];
+                double step = 2.0 * Math.PI * 19000.0 / sampleRate;
+                double phase = 0;
+                while (toneRunning) {
+                    for (int i = 0; i < buf.length; i++) {
+                        buf[i] = (short) (Math.sin(phase) * 400);
+                        phase += step;
+                    }
+                    int written = track.write(buf, 0, buf.length);
+                    if (written < 0) break;
+                }
+            } catch (Throwable t) {
+                Log.w(TAG, "heartbeat tone failed", t);
+            } finally {
+                try {
+                    if (track != null) {
+                        track.stop();
+                        track.release();
+                    }
+                } catch (Throwable ignored) {
+                }
+                if (toneTrack == track) toneTrack = null;
+            }
+        }, "hangxun-tone");
+        toneThread.start();
+    }
+
+    private void stopHeartbeatTone() {
+        toneRunning = false;
+        try {
+            if (toneTrack != null) {
+                toneTrack.stop();
+                toneTrack.release();
+            }
+        } catch (Throwable ignored) {
+        }
+        toneTrack = null;
+        if (toneThread != null) {
+            try {
+                toneThread.interrupt();
+            } catch (Throwable ignored) {
+            }
+            toneThread = null;
+        }
     }
 }

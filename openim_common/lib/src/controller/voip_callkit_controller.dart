@@ -59,7 +59,11 @@ class VoipCallkitController extends GetxService {
   String? get voipToken => _voipToken;
 
   bool get ownsIncomingUi =>
-      (Platform.isIOS || Platform.isAndroid) && callKitActive.value;
+      (Platform.isIOS || Platform.isAndroid) &&
+      (callKitActive.value || nativeOwnsIncoming);
+
+  /// Native IncomingCallActivity is ringing — skip a second CallKit banner.
+  bool nativeOwnsIncoming = false;
 
   String? get incomingRoomID => _incomingRoomID;
 
@@ -865,11 +869,59 @@ class VoipCallkitController extends GetxService {
   /// RoomID currently shown in CallKit / full-screen incoming UI.
   String? _incomingRoomID;
 
+  /// Native lock-screen ringer (Java) — Dart isolate may be frozen.
+  Future<void> onNativeIncoming(Map<String, dynamic> args) async {
+    if (!Platform.isAndroid) return;
+    final action = '${args['action'] ?? ''}'.trim().toLowerCase();
+    final signaling = _signalingFromNative(args);
+    if (signaling == null) return;
+    if (action == 'show' || action == 'showinapp') {
+      nativeOwnsIncoming = action == 'show';
+      PackageBridge.onPushCallEvent?.call(signaling, 'invite');
+      return;
+    }
+    nativeOwnsIncoming = false;
+    if (action == 'accept') {
+      PackageBridge.onCallKitAccept?.call(signaling);
+      return;
+    }
+    if (action == 'reject') {
+      PackageBridge.onCallKitDecline?.call(signaling);
+      return;
+    }
+    PackageBridge.onVoipRemoteEnd?.call(
+        signaling.invitation?.roomID, action);
+  }
+
+  SignalingInfo? _signalingFromNative(Map<String, dynamic> args) {
+    final roomID = '${args['roomID'] ?? ''}'.trim();
+    if (roomID.isEmpty) return null;
+    final timeoutRaw = args['timeout'];
+    final timeout = timeoutRaw is int
+        ? timeoutRaw
+        : int.tryParse('$timeoutRaw') ?? 60;
+    return SignalingInfo(
+      userID: '${args['inviterUserID'] ?? ''}',
+      invitation: InvitationInfo(
+        roomID: roomID,
+        inviterUserID: '${args['inviterUserID'] ?? ''}',
+        mediaType: '${args['mediaType'] ?? 'audio'}',
+        timeout: timeout < 30 ? 60 : timeout,
+      ),
+    );
+  }
+
   /// Show system-style incoming call (iOS CallKit / Android full-screen).
   Future<void> showIncoming(SignalingInfo info, {String? nameCaller}) async {
     if (!Platform.isIOS && !Platform.isAndroid) return;
     if (PackageBridge.rtcBridge?.hasCallOverlay == true) {
       Logger.print('showIncoming skipped: in-app overlay already visible');
+      return;
+    }
+    if (Platform.isAndroid && nativeOwnsIncoming) {
+      final id = info.invitation?.roomID;
+      noteIncomingPresented(id);
+      Logger.print('showIncoming skipped: native ringer owns $id');
       return;
     }
     if (PackageBridge.isCallRoomEnded?.call(info.invitation?.roomID) == true) {
