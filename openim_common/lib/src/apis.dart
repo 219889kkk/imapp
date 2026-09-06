@@ -703,11 +703,15 @@ class Apis {
         list = data['users'] as List;
       }
       if (list == null) return [];
-      return list
+      final results = list
           .whereType<Map>()
           .map((e) =>
               OnlineStatus.fromJson(Map<String, dynamic>.from(e)))
           .toList();
+      for (final status in results) {
+        LastOnlineCache.putFromServer(status.userID, status.lastOnlineTime);
+      }
+      return results;
     } catch (e, s) {
       Logger.print('getUsersOnlineStatus error: e:$e s:$s');
       return [];

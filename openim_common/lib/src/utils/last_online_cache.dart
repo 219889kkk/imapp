@@ -26,6 +26,14 @@ class LastOnlineCache {
     put(userID, DateTime.now().millisecondsSinceEpoch);
   }
 
+  /// Seed from server; overwrites stale local values from subscribe snapshots.
+  static Future<bool>? putFromServer(String? userID, int? ms) {
+    if (userID == null || userID.isEmpty || ms == null || ms <= 0) {
+      return null;
+    }
+    return put(userID, ms);
+  }
+
   static String? format(String userID) {
     final ms = get(userID);
     if (ms == null) return null;

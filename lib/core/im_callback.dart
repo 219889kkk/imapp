@@ -168,9 +168,17 @@ mixin IMCallback {
     selfInfoUpdatedSubject.addSafely(u);
   }
 
+  final Map<String, bool> _userOnlineState = {};
+
   void userStausChanged(UserStatusInfo u) {
-    if (u.userID != null && (u.status == null || u.status == 0)) {
-      LastOnlineCache.markOfflineNow(u.userID!);
+    final id = u.userID;
+    if (id != null && id.isNotEmpty) {
+      final isOnline = u.status == 1;
+      final wasOnline = _userOnlineState[id] ?? false;
+      if (wasOnline && !isOnline) {
+        LastOnlineCache.markOfflineNow(id);
+      }
+      _userOnlineState[id] = isOnline;
     }
     userStatusChangedSubject.addSafely(u);
   }

@@ -195,18 +195,22 @@ class ChatLogic extends SuperController {
       }
     });
 
+    var isOnline = false;
     try {
       final list =
           await OpenIM.iMManager.userManager.subscribeUsersStatus([userID!]);
       final info = list.firstWhereOrNull((e) => e.userID == userID);
       if (info != null) {
-        _updateOnlineStatusDesc(info.status == 1);
-        return;
+        isOnline = info.status == 1;
       }
     } catch (_) {}
 
     final list = await Apis.getUsersOnlineStatus(userIDList: [userID!]);
-    _updateOnlineStatusDesc(list.firstOrNull?.isOnline == true);
+    final status = list.firstOrNull;
+    if (status != null) {
+      isOnline = status.isOnline;
+    }
+    _updateOnlineStatusDesc(isOnline);
   }
 
   void _updateOnlineStatusDesc(bool isOnline) {

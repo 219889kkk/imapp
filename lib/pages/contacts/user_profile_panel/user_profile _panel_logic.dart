@@ -140,19 +140,21 @@ class UserProfilePanelLogic extends GetxController {
       }
     });
 
+    var isOnline = false;
     try {
       final list =
           await OpenIM.iMManager.userManager.subscribeUsersStatus([userID]);
       final info = list.firstWhereOrNull((e) => e.userID == userID);
       if (info != null) {
-        _applyUserStatus(info.status == 1, userID);
-        return;
+        isOnline = info.status == 1;
       }
     } catch (_) {}
 
     final list = await Apis.getUsersOnlineStatus(userIDList: [userID]);
     final status = list.firstOrNull;
-    final isOnline = status?.isOnline == true;
+    if (status != null) {
+      isOnline = status.isOnline;
+    }
     final platformDesc = (status?.detailPlatformStatus ?? [])
         .where((e) => e.status?.toLowerCase() == 'online')
         .map((e) => e.platform ?? '')

@@ -5,8 +5,15 @@ class OnlineStatus {
   /// Normalized: "online" / "offline"
   String? status;
   List<DetailPlatformStatus>? detailPlatformStatus;
+  /// Server last online timestamp (ms since epoch), 0 if unknown.
+  int? lastOnlineTime;
 
-  OnlineStatus({this.userID, this.status, this.detailPlatformStatus});
+  OnlineStatus({
+    this.userID,
+    this.status,
+    this.detailPlatformStatus,
+    this.lastOnlineTime,
+  });
 
   bool get isOnline => status?.toLowerCase() == 'online';
 
@@ -20,6 +27,12 @@ class OnlineStatus {
           Map<String, dynamic>.from(v),
         ));
       });
+    }
+    final rawLastOnline = json['lastOnlineTime'];
+    if (rawLastOnline is num) {
+      lastOnlineTime = rawLastOnline.toInt();
+    } else if (rawLastOnline != null) {
+      lastOnlineTime = int.tryParse(rawLastOnline.toString());
     }
   }
 
