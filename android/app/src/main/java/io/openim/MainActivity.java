@@ -20,8 +20,6 @@ import android.content.SharedPreferences;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.core.content.IntentCompat;
-import androidx.core.content.PackageManagerCompat;
-import androidx.core.content.UnusedAppRestrictionsConstants;
 import androidx.lifecycle.Lifecycle;
 
 import java.lang.ref.WeakReference;
@@ -57,8 +55,6 @@ public class MainActivity extends FlutterFragmentActivity {
     private long stoppedAtElapsed;
     private boolean abandonThisInstance;
     private boolean callUiActive;
-    private int unusedAppRestrictionStatus = UnusedAppRestrictionsConstants.ERROR;
-    private boolean unusedAppStatusReady;
 
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
@@ -66,13 +62,6 @@ public class MainActivity extends FlutterFragmentActivity {
         // Restoring a frozen Flutter fragment after a long lock crashes on arm64.
         super.onCreate(null);
         applyLockScreenPolicy(getIntent());
-        refreshUnusedAppRestrictionStatus();
-    }
-
-    @Override
-    protected void onResume() {
-        super.onResume();
-        refreshUnusedAppRestrictionStatus();
     }
 
     @Override
@@ -438,16 +427,6 @@ public class MainActivity extends FlutterFragmentActivity {
     // true = still restricted AND this phone actually has that toggle.
     private boolean unusedAppRestrictionsEnabled() {
         if (!hasUnusedAppRestrictionUi()) return false;
-        switch (unusedAppRestrictionStatus) {
-            case UnusedAppRestrictionsConstants.API_30:
-            case UnusedAppRestrictionsConstants.API_30_BACKPORT:
-            case UnusedAppRestrictionsConstants.API_31:
-                return true;
-            case UnusedAppRestrictionsConstants.DISABLED:
-                return false;
-            default:
-                break;
-        }
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return false;
         try {
             return !getPackageManager().isAutoRevokeWhitelisted();
@@ -458,12 +437,6 @@ public class MainActivity extends FlutterFragmentActivity {
 
     private boolean hasUnusedAppRestrictionUi() {
         if (deviceOmitsUnusedAppToggle()) return false;
-        if (unusedAppStatusReady) {
-            if (unusedAppRestrictionStatus == UnusedAppRestrictionsConstants.FEATURE_NOT_AVAILABLE
-                    || unusedAppRestrictionStatus == UnusedAppRestrictionsConstants.ERROR) {
-                return false;
-            }
-        }
         return createUnusedAppRestrictionsIntent() != null;
     }
 
@@ -478,29 +451,6 @@ public class MainActivity extends FlutterFragmentActivity {
                 + (Build.PRODUCT == null ? "" : Build.PRODUCT) + " "
                 + (Build.DISPLAY == null ? "" : Build.DISPLAY)).toLowerCase(Locale.US);
         return containsAny(id, "14c", "2409brn2", "gale");
-    }
-
-    private void refreshUnusedAppRestrictionStatus() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
-            unusedAppRestrictionStatus = UnusedAppRestrictionsConstants.FEATURE_NOT_AVAILABLE;
-            unusedAppStatusReady = true;
-            return;
-        }
-        try {
-            PackageManagerCompat.getUnusedAppRestrictionsStatus(this)
-                    .addOnCompleteListener(task -> {
-                        if (task.isSuccessful() && task.getResult() != null) {
-                            unusedAppRestrictionStatus = task.getResult();
-                        } else {
-                            unusedAppRestrictionStatus =
-                                    UnusedAppRestrictionsConstants.FEATURE_NOT_AVAILABLE;
-                        }
-                        unusedAppStatusReady = true;
-                    });
-        } catch (Throwable t) {
-            unusedAppRestrictionStatus = UnusedAppRestrictionsConstants.FEATURE_NOT_AVAILABLE;
-            unusedAppStatusReady = true;
-        }
     }
 
     @Nullable
