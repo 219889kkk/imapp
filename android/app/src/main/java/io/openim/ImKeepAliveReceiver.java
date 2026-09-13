@@ -18,7 +18,9 @@ public class ImKeepAliveReceiver extends BroadcastReceiver {
         if (ACTION.equals(action)
                 || Intent.ACTION_BOOT_COMPLETED.equals(action)
                 || Intent.ACTION_MY_PACKAGE_REPLACED.equals(action)) {
-            ImKeepAliveService.onAlarm(context.getApplicationContext());
+            if (ImKeepAliveService.hasLoginSession(context)) {
+                ImKeepAliveService.onAlarm(context.getApplicationContext());
+            }
         }
     }
 }

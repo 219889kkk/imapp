@@ -221,5 +221,12 @@
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>
+
+        <!-- Getui is unused on Android (pushType=none) but the AAR still
+             auto-starts on vivo / OriginOS and can kill the process at launch. -->
+        <service android:name="com.igexin.sdk.PushService" tools:node="remove" />
+        <service android:name="com.getui.gtc.GtcService" tools:node="remove" />
+        <receiver android:name="com.igexin.sdk.PushReceiver" tools:node="remove" />
+        <provider android:name="com.igexin.sdk.PushProvider" tools:node="remove" />
     </application>
 </manifest>

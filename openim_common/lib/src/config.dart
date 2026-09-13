@@ -25,7 +25,6 @@ class Config {
       // and delayed CallKit prejoin until after the user already answered.
       unawaited(ServerEndpointSelector.ensureBestEndpoint());
       await Hive.initFlutter(path);
-      MediaKit.ensureInitialized();
       HttpUtil.init();
     } catch (_) {}
 
@@ -45,6 +44,18 @@ class Config {
   static late String _appName;
 
   static late String cachePath;
+
+  static bool _mediaKitReady = false;
+
+  /// Load media_kit native libs only when a video is opened.
+  /// Doing this at process start crashes some OriginOS / Android 15 devices.
+  static void ensureMediaKit() {
+    if (_mediaKitReady) return;
+    try {
+      MediaKit.ensureInitialized();
+      _mediaKitReady = true;
+    } catch (_) {}
+  }
 
   static void updateSystemUiOverlayStyle() {
     final iconBrightness = Styles.isDark ? Brightness.light : Brightness.dark;

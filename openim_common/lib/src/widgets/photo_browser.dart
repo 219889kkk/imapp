@@ -421,6 +421,7 @@ class _VideoPlayerViewState extends State<VideoPlayerView> {
   @override
   void initState() {
     super.initState();
+    Config.ensureMediaKit();
     player.stream.playing.listen((event) {
       if (event && _showCover) {
         setState(() {

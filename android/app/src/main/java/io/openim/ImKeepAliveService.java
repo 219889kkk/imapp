@@ -98,9 +98,20 @@ public class ImKeepAliveService extends Service {
     /** Alarm / boot: ensure FGS is up and immediately ping IM. */
     public static void onAlarm(Context context) {
         if (context == null) return;
+        if (!hasLoginSession(context)) return;
         start(context);
         sendPokeBroadcast(context);
         scheduleAlarm(context);
+    }
+
+    static boolean hasLoginSession(Context context) {
+        if (context == null) return false;
+        try {
+            return context.getSharedPreferences("hangxun", Context.MODE_PRIVATE)
+                    .getBoolean("hasLoginSession", false);
+        } catch (Throwable t) {
+            return false;
+        }
     }
 
     static void scheduleAlarm(Context context) {
@@ -231,12 +242,7 @@ public class ImKeepAliveService extends Service {
     }
 
     private boolean hasLoginSession() {
-        try {
-            return getSharedPreferences("hangxun", MODE_PRIVATE)
-                    .getBoolean("hasLoginSession", false);
-        } catch (Throwable t) {
-            return false;
-        }
+        return hasLoginSession(this);
     }
 
     private void registerScreenReceiver() {
