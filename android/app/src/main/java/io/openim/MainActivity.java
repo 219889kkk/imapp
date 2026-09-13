@@ -19,6 +19,9 @@ import android.content.SharedPreferences;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.core.content.IntentCompat;
+import androidx.core.content.PackageManagerCompat;
+import androidx.core.content.UnusedAppRestrictionsConstants;
 import androidx.lifecycle.Lifecycle;
 
 import java.lang.ref.WeakReference;
@@ -54,6 +57,8 @@ public class MainActivity extends FlutterFragmentActivity {
     private long stoppedAtElapsed;
     private boolean abandonThisInstance;
     private boolean callUiActive;
+    private int unusedAppRestrictionStatus = UnusedAppRestrictionsConstants.ERROR;
+    private boolean unusedAppStatusReady;
 
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
@@ -61,6 +66,13 @@ public class MainActivity extends FlutterFragmentActivity {
         // Restoring a frozen Flutter fragment after a long lock crashes on arm64.
         super.onCreate(null);
         applyLockScreenPolicy(getIntent());
+        refreshUnusedAppRestrictionStatus();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        refreshUnusedAppRestrictionStatus();
     }
 
     @Override
@@ -304,10 +316,12 @@ public class MainActivity extends FlutterFragmentActivity {
         String family = oemFamily();
         List<Intent> autoIntents = oemAutostartIntents();
         boolean hasAutostart = !autoIntents.isEmpty() && hasResolvable(autoIntents);
-        boolean hasHibernation = hasResolvable(hibernationIntents());
+        boolean hasHibernation = hasUnusedAppRestrictionUi();
         boolean hibernationOn = hasHibernation && unusedAppRestrictionsEnabled();
         Map<String, Object> out = new HashMap<>();
         out.put("family", family);
+        out.put("model", Build.MODEL == null ? "" : Build.MODEL);
+        out.put("device", Build.DEVICE == null ? "" : Build.DEVICE);
         out.put("hasAutostart", hasAutostart);
         out.put("hasHibernation", hasHibernation);
         out.put("hibernationOn", hibernationOn);
@@ -421,19 +435,94 @@ public class MainActivity extends FlutterFragmentActivity {
     }
 
     // Android 12+ "Pause app activity if unused" / auto-reset permissions.
-    // true = still restricted, user should turn it off for incoming calls.
+    // true = still restricted AND this phone actually has that toggle.
     private boolean unusedAppRestrictionsEnabled() {
+        if (!hasUnusedAppRestrictionUi()) return false;
+        switch (unusedAppRestrictionStatus) {
+            case UnusedAppRestrictionsConstants.API_30:
+            case UnusedAppRestrictionsConstants.API_30_BACKPORT:
+            case UnusedAppRestrictionsConstants.API_31:
+                return true;
+            case UnusedAppRestrictionsConstants.DISABLED:
+                return false;
+            default:
+                break;
+        }
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return false;
         try {
-            PackageManager pm = getPackageManager();
-            // Whitelisted = exempt from unused-app pause / auto-revoke.
-            return !pm.isAutoRevokeWhitelisted();
+            return !getPackageManager().isAutoRevokeWhitelisted();
         } catch (Throwable t) {
-            return Build.VERSION.SDK_INT >= Build.VERSION_CODES.S;
+            return false;
         }
     }
 
+    private boolean hasUnusedAppRestrictionUi() {
+        if (deviceOmitsUnusedAppToggle()) return false;
+        if (unusedAppStatusReady) {
+            if (unusedAppRestrictionStatus == UnusedAppRestrictionsConstants.FEATURE_NOT_AVAILABLE
+                    || unusedAppRestrictionStatus == UnusedAppRestrictionsConstants.ERROR) {
+                return false;
+            }
+        }
+        return createUnusedAppRestrictionsIntent() != null;
+    }
+
+    /**
+     * Entry HyperOS (Redmi 14C / gale) has 省电策略, not 「暂停闲置应用的活动」.
+     * Prompting the latter sends users to a page with no such switch.
+     */
+    private boolean deviceOmitsUnusedAppToggle() {
+        if (!"xiaomi".equals(oemFamily())) return false;
+        String id = ((Build.MODEL == null ? "" : Build.MODEL) + " "
+                + (Build.DEVICE == null ? "" : Build.DEVICE) + " "
+                + (Build.PRODUCT == null ? "" : Build.PRODUCT) + " "
+                + (Build.DISPLAY == null ? "" : Build.DISPLAY)).toLowerCase(Locale.US);
+        return containsAny(id, "14c", "2409brn2", "gale");
+    }
+
+    private void refreshUnusedAppRestrictionStatus() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            unusedAppRestrictionStatus = UnusedAppRestrictionsConstants.FEATURE_NOT_AVAILABLE;
+            unusedAppStatusReady = true;
+            return;
+        }
+        try {
+            PackageManagerCompat.getUnusedAppRestrictionsStatus(this)
+                    .addOnCompleteListener(task -> {
+                        if (task.isSuccessful() && task.getResult() != null) {
+                            unusedAppRestrictionStatus = task.getResult();
+                        } else {
+                            unusedAppRestrictionStatus =
+                                    UnusedAppRestrictionsConstants.FEATURE_NOT_AVAILABLE;
+                        }
+                        unusedAppStatusReady = true;
+                    });
+        } catch (Throwable t) {
+            unusedAppRestrictionStatus = UnusedAppRestrictionsConstants.FEATURE_NOT_AVAILABLE;
+            unusedAppStatusReady = true;
+        }
+    }
+
+    @Nullable
+    private Intent createUnusedAppRestrictionsIntent() {
+        try {
+            Intent intent = IntentCompat.createManageUnusedAppRestrictionsIntent(
+                    this, getPackageName());
+            if (intent != null && intent.resolveActivity(getPackageManager()) != null) {
+                return intent;
+            }
+        } catch (Throwable ignored) {
+        }
+        return null;
+    }
+
     private boolean openUnusedAppSettings() {
+        Intent dedicated = createUnusedAppRestrictionsIntent();
+        if (dedicated != null) {
+            List<Intent> only = new ArrayList<>();
+            only.add(dedicated);
+            if (startFirstResolvable(only)) return true;
+        }
         return startFirstResolvable(hibernationIntents());
     }
 
